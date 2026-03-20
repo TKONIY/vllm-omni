@@ -67,7 +67,7 @@ PR1: Reduce Redundant Broadcast          PR2: StepCache          PR3: Multi-Turn
 | REST session API | `POST /v1/world/sessions`, `DELETE /v1/world/sessions/{id}` | PR5 |
 | Handler decomposition | Separate protocol / embodiment / model concerns | PR5 |
 | KV cache externalization | Diffusion block manager, multi-session on same GPU | PR4 |
-| TeaCache extractor | Step-level caching via TeaCache framework | PR4 |
+| TeaCache extractor | Additional **transformer-level** caching that stacks on top of StepCache. StepCache (PR2) already covers DreamZero's `should_run_model` (step-level skip, no extractor needed). TeaCache extractor adds a second layer: when StepCache decides not to skip, TeaCache can still skip transformer blocks via residual reuse. Requires writing an extractor to split `CausalWanModel.forward` into preprocess / modulated_input / blocks / postprocess. | PR4 |
 | Multi-embodiment | AgiBot, other robots | PR5 |
 
 ---
