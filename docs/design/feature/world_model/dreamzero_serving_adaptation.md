@@ -265,7 +265,7 @@ DreamZero uses roboarena protocol (msgpack, custom keys). vllm-omni should offer
 
 **Recommendation:** Support both via two WebSocket endpoints:
 - `/v1/world/stream` — vllm-omni native (JSON protocol, like TTS stream)
-- `/v1/world/roboarena` — roboarena compat (msgpack protocol, for `test_client_AR.py`)
+- `/v1/world/openpi` — roboarena compat (msgpack protocol, for `test_client_AR.py`)
 
 Both delegate to the same underlying handler.
 
@@ -357,7 +357,7 @@ Server → Client:
     {"type": "error", "message": "..."}
 ```
 
-### Proposed Protocol: `/v1/world/roboarena`
+### Proposed Protocol: `/v1/world/openpi`
 
 Exact roboarena protocol (msgpack over WebSocket) for `test_client_AR.py` compatibility:
 
@@ -375,7 +375,7 @@ Server → Client: msgpack(action array or "reset successful")
                             ┌──────────────────────────┐
                             │     WebSocket Layer       │
                             │                          │
-test_client_AR ──msgpack──→ │  /v1/world/roboarena     │
+test_client_AR ──msgpack──→ │  /v1/world/openpi     │
                             │    RoboarenaProtocol     │
                             │         │                │
 new clients ────JSON─────→  │  /v1/world/stream        │

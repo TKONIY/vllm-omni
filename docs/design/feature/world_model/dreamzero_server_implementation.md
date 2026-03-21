@@ -1,6 +1,8 @@
-# DreamZero Server Implementation in vllm-omni
+# DreamZero Server Implementation in vllm-omni (PR7: OpenPI WebSocket)
 
-Detailed design for the server-side implementation. Each point requires discussion and confirmation.
+Detailed design for the OpenPI-compatible WebSocket serving layer. Serial request-response loop matching DreamZero and OpenPI's original behavior. Compatible with `test_client_AR.py`, OpenPI `WebsocketClientPolicy`, and `DreamZeroJointPosClient`.
+
+For LeRobot gRPC serving, see `PR4_lerobot_grpc_api.md`. For async pipeline, see `PR5_async_pipeline.md`.
 
 ---
 
@@ -8,7 +10,7 @@ Detailed design for the server-side implementation. Each point requires discussi
 
 ```
 vllm_omni/entrypoints/openai/
-├── api_server.py                → @router.websocket("/v1/world/roboarena")
+├── api_server.py                → @router.websocket("/v1/world/openpi")
 │                                  → handler.handle_session(websocket)
 │
 ├── serving_world_stream.py      → OmniWorldStreamHandler
@@ -47,7 +49,7 @@ Naming rationale:
 
 | Endpoint | Protocol | Client | Purpose |
 |----------|----------|--------|---------|
-| `/v1/world/roboarena` | msgpack (roboarena compat) | `test_client_AR.py`, robot eval infra | Backward compat |
+| `/v1/world/openpi` | msgpack (roboarena compat) | `test_client_AR.py`, robot eval infra | Backward compat |
 | `/v1/world/stream` | JSON (vllm-omni native) | New integrations | Future standard |
 
 Additionally, REST endpoints for session management:
@@ -58,7 +60,7 @@ Additionally, REST endpoints for session management:
 | `/v1/world/sessions/{id}` | DELETE | Destroy session, trigger video save |
 
 - **Status:** DECIDED
-- **Decision:** MVP: `/v1/world/roboarena` only (msgpack WebSocket, roboarena compat). P1: add `/v1/world/stream` (JSON native). REST session endpoints deferred to P1.
+- **Decision:** MVP: `/v1/world/openpi` only (msgpack WebSocket, roboarena compat). P1: add `/v1/world/stream` (JSON native). REST session endpoints deferred to P1.
 
 ### Point 2: Server Loop & Request Handling
 
@@ -324,7 +326,7 @@ torchrun --nproc_per_node=8 socket_test_optimized_AR.py --port 8000
 vllm serve <model> --omni --port 8091
 → existing vllm-omni startup
 → detect world model → create DreamZeroPipeline
-→ register /v1/world/roboarena WebSocket endpoint
+→ register /v1/world/openpi WebSocket endpoint
 → serve
 ```
 
@@ -340,7 +342,7 @@ python -m vllm_omni.entrypoints.openai.serving_world_stream \
   vllm serve <model> --omni
     → registry looks up "DreamZeroPipeline" (or "VLA")
     → DiffusersPipelineLoader creates pipeline + loads weights
-    → api_server registers /v1/world/roboarena WebSocket route
+    → api_server registers /v1/world/openpi WebSocket route
     → OmniWorldStreamHandler(engine) created
     → serve
   ```
@@ -354,7 +356,7 @@ Discuss each point, then mark decision. Implementation order follows decisions.
 
 | Point | Topic | Status |
 |-------|-------|--------|
-| 1 | API Endpoints | DECIDED — MVP: `/v1/world/roboarena` only |
+| 1 | API Endpoints | DECIDED — MVP: `/v1/world/openpi` only |
 | 2 | Server Loop & Request Handling | DECIDED — through DiffusionEngine, state in extra_args |
 | 3 | Session State — CPU Side | DECIDED — base `WorldSessionState` + `DreamZeroSessionState` derived, `WorldSessionStore` in `session_manager.py` |
 | 4 | Session State — GPU Side (KV Cache) | DECIDED — model-internal, reset via `extra_args["reset"]` flag through engine.step |

@@ -248,7 +248,7 @@ Merge DreamZero's `PolicyServerConfig` with OpenPI's metadata dict:
 ### Compatibility Layers
 
 ```
-test_client_AR.py (DreamZero)     → /v1/world/roboarena  → RoboarenaProtocolAdapter
+test_client_AR.py (DreamZero)     → /v1/world/openpi  → RoboarenaProtocolAdapter
 openpi WebsocketClientPolicy      → /v1/world/openpi     → OpenPIProtocolAdapter (same msgpack!)
 lerobot RobotClient               → /v1/world/grpc       → gRPCAdapter (future)
 new clients                       → /v1/world/stream      → NativeProtocolAdapter (JSON)
@@ -268,12 +268,14 @@ A single WebSocket handler can serve both by detecting which fields are present.
 
 ---
 
-## Recommendation
+## Recommendation (updated)
 
-**MVP:** Single `/v1/world/roboarena` endpoint (already decided) — serves DreamZero and is OpenPI-compatible with minimal adaptation.
+**PR7:** `/v1/world/openpi` — WebSocket + msgpack, serial request-response. Compatible with DreamZero `test_client_AR.py` and OpenPI `WebsocketClientPolicy`.
 
-**P1:** Add `/v1/world/stream` with JSON protocol. Add OpenPI compatibility (detect OpenPI client by absence of `endpoint` field).
+**PR4:** LeRobot gRPC `AsyncInference` service — decoupled obs/action. Compatible with LeRobot `RobotClient` (12+ robots, 6 sim envs).
 
-**P2:** Add gRPC adapter for LeRobot compatibility. Or contribute a WebSocket client to LeRobot upstream.
+**PR5:** Async pipeline — server-driven speculative execution using predicted video frames. Builds on PR4's gRPC. World model exclusive (DreamZero).
 
-**Long-term:** The unified API is essentially **OpenPI's protocol + DreamZero's session management + vllm-omni's engine integration**. The observation/action schemas are already compatible across DreamZero and OpenPI.
+**Future:** `/v1/world/stream` (JSON native protocol).
+
+**Architecture:** All serving protocols share `OmniServingWorld` (business layer) + `WorldSessionStore` + `DiffusionEngine.step()`. Only protocol encode/decode and loop semantics differ.
