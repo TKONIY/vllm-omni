@@ -170,9 +170,7 @@ class CFGParallelMixin(metaclass=ABCMeta):
             def combine_cfg_noise(self, positive_noise_pred, negative_noise_pred, scale, normalize):
                 (video_pos, audio_pos) = positive_noise_pred
                 (video_neg, audio_neg) = negative_noise_pred
-                (video_combined,) = super().combine_cfg_noise(
-                    (video_pos,), (video_neg,), scale, normalize,
-                )
+                video_combined = super().combine_cfg_noise(video_pos, video_neg, scale, normalize)
                 return (video_combined, audio_pos)  # audio: positive only, no CFG
 
         Args:
