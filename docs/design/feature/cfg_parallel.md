@@ -199,9 +199,9 @@ class VideoAudioScheduler:
         self.video_scheduler = video_scheduler
         self.audio_scheduler = audio_scheduler
 
-    def step(self, noise_pred, t, latents, return_dict=False):
-        video_out = self.video_scheduler.step(noise_pred[0], t[0], latents[0], return_dict=False)[0]
-        audio_out = self.audio_scheduler.step(noise_pred[1], t[1], latents[1], return_dict=False)[0]
+    def step(self, noise_pred, t, latents, return_dict=False, generator=None):
+        video_out = self.video_scheduler.step(noise_pred[0], t[0], latents[0], return_dict=False, generator=generator)[0]
+        audio_out = self.audio_scheduler.step(noise_pred[1], t[1], latents[1], return_dict=False, generator=generator)[0]
         return ((video_out, audio_out),)
 
 class MyVideoAudioPipeline(nn.Module, CFGParallelMixin):
@@ -227,9 +227,12 @@ class MyVideoAudioPipeline(nn.Module, CFGParallelMixin):
             video_latents, audio_latents = self.scheduler_step_maybe_with_cfg(
                 (video_pred, audio_pred), (t_v, t_a),
                 (video_latents, audio_latents), do_true_cfg=do_true_cfg,
+                generator=generator,
             )
         return video_latents, audio_latents
 ```
+
+> **Note:** If you use a non-deterministic scheduler, e.g., DDPM, please set `self.scheduler_step_maybe_with_cfg(..., generator=torch.Generator(device).manual_seed(seed))` explicitly to control the randomness of scheduler step among ranks.
 
 ---
 
