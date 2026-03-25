@@ -157,6 +157,11 @@ _DIFFUSION_MODELS = {
         "pipeline_hunyuan_video_1_5_i2v",
         "HunyuanVideo15I2VPipeline",
     ),
+    "DreamZeroPipeline": (
+        "dreamzero",
+        "pipeline_dreamzero",
+        "DreamZeroPipeline",
+    ),
 }
 
 

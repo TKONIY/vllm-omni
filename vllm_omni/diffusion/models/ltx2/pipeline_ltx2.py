@@ -656,12 +656,8 @@ class LTX2Pipeline(nn.Module, CFGParallelMixin):
             audio_combined = self.cfg_normalize_function(audio_pos, audio_combined)
 
         if self._guidance_rescale and self._guidance_rescale > 0:
-            video_combined = rescale_noise_cfg(
-                video_combined, video_pos, guidance_rescale=self._guidance_rescale
-            )
-            audio_combined = rescale_noise_cfg(
-                audio_combined, audio_pos, guidance_rescale=self._guidance_rescale
-            )
+            video_combined = rescale_noise_cfg(video_combined, video_pos, guidance_rescale=self._guidance_rescale)
+            audio_combined = rescale_noise_cfg(audio_combined, audio_pos, guidance_rescale=self._guidance_rescale)
 
         return (video_combined, audio_combined)
 
