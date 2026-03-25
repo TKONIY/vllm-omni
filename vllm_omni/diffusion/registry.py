@@ -183,6 +183,11 @@ _DIFFUSION_MODELS = {
         "pipeline_omnivoice",
         "OmniVoicePipeline",
     ),
+    "DreamZeroPipeline": (
+        "dreamzero",
+        "pipeline_dreamzero",
+        "DreamZeroPipeline",
+    ),
 }
 
 

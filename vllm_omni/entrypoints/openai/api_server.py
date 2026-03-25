@@ -1188,6 +1188,27 @@ async def realtime_websocket(websocket: WebSocket):
     await connection.handle_connection()
 
 
+@router.websocket("/v1/world/openpi")
+async def world_openpi(websocket: WebSocket):
+    """WebSocket endpoint for DreamZero world model inference (OpenPI-style).
+
+    Uses msgpack binary frames for observation/action exchange.
+    See serving_world_stream.py for protocol details.
+    """
+    handler = getattr(websocket.app.state, "openai_world_stream", None)
+    if handler is None:
+        await websocket.accept()
+        await websocket.send_json(
+            {
+                "type": "error",
+                "message": "World model is not available",
+            }
+        )
+        await websocket.close()
+        return
+    await handler.handle_session(websocket)
+
+
 # Health and Model endpoints for diffusion mode
 
 
