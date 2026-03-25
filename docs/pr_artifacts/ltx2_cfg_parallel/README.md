@@ -9,9 +9,10 @@ Original GIF assets:
 Updated MP4 assets with a more presentation-friendly prompt:
 - Prompt: `At sunrise, a glowing paper lantern boat drifts through a narrow canal between mossy stone walls, soft fog above the water, the camera slowly gliding forward as golden reflections shimmer across the ripples, cinematic, realistic, highly detailed.`
 - Negative prompt: `worst quality, blurry, jittery motion, distorted, oversaturated, artifacts`
-- Parameters: `256x256`, `17` frames, `6` inference steps, `guidance_scale=4.0`, `frame_rate=24`, `seed=42`, `cfg_parallel_size=2`
+- Parameters: `256x256`, `145` frames, `6` inference steps, `guidance_scale=4.0`, `frame_rate=24`, `seed=42`, `cfg_parallel_size=2`
 - `../ltx2_cfg_parallel_video/preref.mp4`: preref baseline output
 - `../ltx2_cfg_parallel_video/refactor.mp4`: refactored LTX2 output
 - `../ltx2_cfg_parallel_video/old_vs_new.mp4`: side-by-side comparison video
-- `MD5(/tmp/ltx2_preref_pretty.mp4) = 4a04b80d0729c452eb12f55b32209506`
-- `MD5(/tmp/ltx2_refactor_pretty.mp4) = 4a04b80d0729c452eb12f55b32209506`
+- Duration: `6.041667s`
+- `MD5(/tmp/ltx2_preref_6s.mp4) = 08e606b9c522fee4b6f30cee8b77db40`
+- `MD5(/tmp/ltx2_refactor_6s.mp4) = 08e606b9c522fee4b6f30cee8b77db40`
