@@ -13,6 +13,7 @@ Updated MP4 assets with a more presentation-friendly prompt:
 - `../ltx2_cfg_parallel_video/preref.mp4`: preref baseline output
 - `../ltx2_cfg_parallel_video/refactor.mp4`: refactored LTX2 output
 - `../ltx2_cfg_parallel_video/old_vs_new.mp4`: side-by-side comparison video
+- `../ltx2_cfg_parallel_video/old_vs_new_6s_hq.gif`: high-quality side-by-side GIF for PR embedding
 - Duration: `6.041667s`
 - `MD5(/tmp/ltx2_preref_6s.mp4) = 08e606b9c522fee4b6f30cee8b77db40`
 - `MD5(/tmp/ltx2_refactor_6s.mp4) = 08e606b9c522fee4b6f30cee8b77db40`
