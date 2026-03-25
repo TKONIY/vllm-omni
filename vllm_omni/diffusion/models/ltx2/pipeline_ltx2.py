@@ -26,8 +26,6 @@ from vllm.model_executor.models.utils import AutoWeightsLoader
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.cfg_parallel import CFGParallelMixin
 from vllm_omni.diffusion.distributed.parallel_state import (
-    get_cfg_group,
-    get_classifier_free_guidance_rank,
     get_classifier_free_guidance_world_size,
 )
 from vllm_omni.diffusion.distributed.utils import get_local_device
@@ -112,6 +110,19 @@ def calculate_shift(
     b = base_shift - m * base_seq_len
     mu = image_seq_len * m + b
     return mu
+
+
+class VideoAudioScheduler:
+    """Composite scheduler dispatching to video and audio schedulers."""
+
+    def __init__(self, video_scheduler, audio_scheduler):
+        self.video_scheduler = video_scheduler
+        self.audio_scheduler = audio_scheduler
+
+    def step(self, noise_pred, t, latents, return_dict=False):
+        video_out = self.video_scheduler.step(noise_pred[0], t[0], latents[0], return_dict=False)[0]
+        audio_out = self.audio_scheduler.step(noise_pred[1], t[1], latents[1], return_dict=False)[0]
+        return ((video_out, audio_out),)
 
 
 class LTX2Pipeline(nn.Module, CFGParallelMixin):
@@ -622,138 +633,53 @@ class LTX2Pipeline(nn.Module, CFGParallelMixin):
             return cache_context(context_name)
         return nullcontext()
 
-    def _predict_noise_av(self, **kwargs) -> tuple[torch.Tensor, torch.Tensor]:
+    def predict_noise(self, **kwargs):
         with self._transformer_cache_context("cond_uncond"):
             noise_pred_video, noise_pred_audio = self.transformer(**kwargs)
-        return noise_pred_video, noise_pred_audio
-
-    def predict_noise_av_maybe_with_cfg(
-        self,
-        do_true_cfg: bool,
-        true_cfg_scale: float,
-        positive_kwargs: dict[str, Any],
-        negative_kwargs: dict[str, Any] | None,
-        guidance_rescale: float = 0.0,
-        cfg_normalize: bool = False,
-    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        if do_true_cfg:
-            cfg_parallel_ready = get_classifier_free_guidance_world_size() > 1
-
-            if cfg_parallel_ready:
-                cfg_group = get_cfg_group()
-                cfg_rank = get_classifier_free_guidance_rank()
-
-                if cfg_rank == 0:
-                    noise_pred_video, noise_pred_audio = self._predict_noise_av(**positive_kwargs)
-                else:
-                    noise_pred_video, noise_pred_audio = self._predict_noise_av(**negative_kwargs)
-
-                noise_pred_video = noise_pred_video.float()
-                noise_pred_audio = noise_pred_audio.float()
-
-                gathered_video = cfg_group.all_gather(noise_pred_video, separate_tensors=True)
-                gathered_audio = cfg_group.all_gather(noise_pred_audio, separate_tensors=True)
-
-                if cfg_rank == 0:
-                    noise_pred_video_text = gathered_video[0]
-                    noise_pred_video_uncond = gathered_video[1]
-                    noise_pred_audio_text = gathered_audio[0]
-                    noise_pred_audio_uncond = gathered_audio[1]
-
-                    noise_pred_video = self.combine_cfg_noise(
-                        noise_pred_video_text,
-                        noise_pred_video_uncond,
-                        true_cfg_scale,
-                        cfg_normalize,
-                    )
-                    noise_pred_audio = self.combine_cfg_noise(
-                        noise_pred_audio_text,
-                        noise_pred_audio_uncond,
-                        true_cfg_scale,
-                        cfg_normalize,
-                    )
-
-                    if guidance_rescale > 0:
-                        noise_pred_video = rescale_noise_cfg(
-                            noise_pred_video,
-                            noise_pred_video_text,
-                            guidance_rescale=guidance_rescale,
-                        )
-                        noise_pred_audio = rescale_noise_cfg(
-                            noise_pred_audio,
-                            noise_pred_audio_text,
-                            guidance_rescale=guidance_rescale,
-                        )
-                    return noise_pred_video, noise_pred_audio
-                return None, None
-
-            noise_pred_video_text, noise_pred_audio_text = self._predict_noise_av(**positive_kwargs)
-            noise_pred_video_uncond, noise_pred_audio_uncond = self._predict_noise_av(**negative_kwargs)
-
-            noise_pred_video_text = noise_pred_video_text.float()
-            noise_pred_audio_text = noise_pred_audio_text.float()
-            noise_pred_video_uncond = noise_pred_video_uncond.float()
-            noise_pred_audio_uncond = noise_pred_audio_uncond.float()
-
-            noise_pred_video = self.combine_cfg_noise(
-                noise_pred_video_text,
-                noise_pred_video_uncond,
-                true_cfg_scale,
-                cfg_normalize,
-            )
-            noise_pred_audio = self.combine_cfg_noise(
-                noise_pred_audio_text,
-                noise_pred_audio_uncond,
-                true_cfg_scale,
-                cfg_normalize,
-            )
-
-            if guidance_rescale > 0:
-                noise_pred_video = rescale_noise_cfg(
-                    noise_pred_video,
-                    noise_pred_video_text,
-                    guidance_rescale=guidance_rescale,
-                )
-                noise_pred_audio = rescale_noise_cfg(
-                    noise_pred_audio,
-                    noise_pred_audio_text,
-                    guidance_rescale=guidance_rescale,
-                )
-
-            return noise_pred_video, noise_pred_audio
-
-        noise_pred_video, noise_pred_audio = self._predict_noise_av(**positive_kwargs)
         return noise_pred_video.float(), noise_pred_audio.float()
 
-    def _scheduler_step_video_audio_maybe_with_cfg(
+    def combine_cfg_noise(
         self,
-        noise_pred_video: torch.Tensor | None,
-        noise_pred_audio: torch.Tensor | None,
-        t: torch.Tensor,
-        latents: torch.Tensor,
-        audio_latents: torch.Tensor,
-        audio_scheduler: FlowMatchEulerDiscreteScheduler,
+        positive_noise_pred: torch.Tensor | tuple[torch.Tensor, ...],
+        negative_noise_pred: torch.Tensor | tuple[torch.Tensor, ...],
+        true_cfg_scale: float,
+        cfg_normalize: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, ...]:
+        (video_pos, audio_pos) = positive_noise_pred
+        (video_neg, audio_neg) = negative_noise_pred
+
+        video_combined = video_neg + true_cfg_scale * (video_pos - video_neg)
+        audio_combined = audio_neg + true_cfg_scale * (audio_pos - audio_neg)
+
+        if cfg_normalize:
+            video_combined = self.cfg_normalize_function(video_pos, video_combined)
+            audio_combined = self.cfg_normalize_function(audio_pos, audio_combined)
+
+        if self._guidance_rescale and self._guidance_rescale > 0:
+            video_combined = rescale_noise_cfg(
+                video_combined, video_pos, guidance_rescale=self._guidance_rescale
+            )
+            audio_combined = rescale_noise_cfg(
+                audio_combined, audio_pos, guidance_rescale=self._guidance_rescale
+            )
+
+        return (video_combined, audio_combined)
+
+    def _synchronize_cfg_parallel_step_output(
+        self,
+        latents: tuple[torch.Tensor, torch.Tensor],
         do_true_cfg: bool,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        cfg_parallel_ready = self._is_cfg_parallel_enabled(do_true_cfg)
+        latents = tuple(tensor.contiguous() for tensor in latents)
+        if not self._is_cfg_parallel_enabled(do_true_cfg):
+            return latents
 
-        if cfg_parallel_ready:
-            cfg_group = get_cfg_group()
-            cfg_rank = get_classifier_free_guidance_rank()
-
-            if cfg_rank == 0:
-                latents = self.scheduler.step(noise_pred_video, t, latents, return_dict=False)[0]
-                audio_latents = audio_scheduler.step(noise_pred_audio, t, audio_latents, return_dict=False)[0]
-
-            latents = latents.contiguous()
-            audio_latents = audio_latents.contiguous()
-            cfg_group.broadcast(latents, src=0)
-            cfg_group.broadcast(audio_latents, src=0)
-            return latents, audio_latents
-
-        latents = self.scheduler.step(noise_pred_video, t, latents, return_dict=False)[0]
-        audio_latents = audio_scheduler.step(noise_pred_audio, t, audio_latents, return_dict=False)[0]
-        return latents, audio_latents
+        device = next((tensor.device for tensor in latents if tensor.is_cuda), None)
+        if device is not None:
+            # LTX2 needs a post-step current-stream boundary to preserve
+            # the pre-refactor CFG-parallel numerical trajectory.
+            torch.cuda.current_stream(device).synchronize()
+        return latents
 
     @torch.no_grad()
     def forward(
@@ -969,6 +895,7 @@ class LTX2Pipeline(nn.Module, CFGParallelMixin):
             self.scheduler.config.get("max_shift", 2.05),
         )
         audio_scheduler = copy.deepcopy(self.scheduler)
+        video_audio_scheduler = VideoAudioScheduler(self.scheduler, audio_scheduler)
         _ = retrieve_timesteps(
             audio_scheduler,
             num_inference_steps,
@@ -1043,22 +970,23 @@ class LTX2Pipeline(nn.Module, CFGParallelMixin):
                     "return_dict": False,
                 }
 
-                noise_pred_video, noise_pred_audio = self.predict_noise_av_maybe_with_cfg(
+                noise_pred_video, noise_pred_audio = self.predict_noise_maybe_with_cfg(
                     do_true_cfg=True,
                     true_cfg_scale=guidance_scale,
                     positive_kwargs=positive_kwargs,
                     negative_kwargs=negative_kwargs,
-                    guidance_rescale=guidance_rescale,
                     cfg_normalize=False,
                 )
 
-                latents, audio_latents = self._scheduler_step_video_audio_maybe_with_cfg(
-                    noise_pred_video,
-                    noise_pred_audio,
-                    t,
-                    latents,
-                    audio_latents,
-                    audio_scheduler,
+                latents, audio_latents = self.scheduler_step_maybe_with_cfg(
+                    (noise_pred_video, noise_pred_audio),
+                    (t, t),
+                    (latents, audio_latents),
+                    do_true_cfg=True,
+                    per_request_scheduler=video_audio_scheduler,
+                )
+                latents, audio_latents = self._synchronize_cfg_parallel_step_output(
+                    (latents, audio_latents),
                     do_true_cfg=True,
                 )
             else:
