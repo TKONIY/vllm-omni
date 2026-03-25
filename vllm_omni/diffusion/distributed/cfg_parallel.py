@@ -279,6 +279,7 @@ class CFGParallelMixin(metaclass=ABCMeta):
         t: torch.Tensor | tuple[torch.Tensor, ...],
         latents: torch.Tensor | tuple[torch.Tensor, ...],
         per_request_scheduler: Any | None = None,
+        generator: torch.Generator | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, ...]:
         """
         Step the scheduler.
@@ -297,6 +298,10 @@ class CFGParallelMixin(metaclass=ABCMeta):
                 may keep scheduler state in its own runner-managed state
                 object. Request-level execution should usually leave this
                 as ``None`` and continue using ``self.scheduler``.
+            generator: Optional torch Generator for reproducible sampling.
+                When using CFG parallel, both ranks should receive generators
+                initialized with the same seed so that non-deterministic
+                schedulers (e.g., DDPM) produce identical results.
 
         Returns:
             Updated latents after scheduler step
@@ -306,7 +311,7 @@ class CFGParallelMixin(metaclass=ABCMeta):
             raise ValueError("No scheduler is available. Set self.scheduler or pass per_request_scheduler.")
         if not callable(getattr(sched, "step", None)):
             raise TypeError("per_request_scheduler must provide a callable step(...) method.")
-        return sched.step(noise_pred, t, latents, return_dict=False)[0]
+        return sched.step(noise_pred, t, latents, return_dict=False, generator=generator)[0]
 
     def scheduler_step_maybe_with_cfg(
         self,
@@ -315,6 +320,7 @@ class CFGParallelMixin(metaclass=ABCMeta):
         latents: torch.Tensor | tuple[torch.Tensor, ...],
         do_true_cfg: bool,
         per_request_scheduler: Any | None = None,
+        generator: torch.Generator | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, ...]:
         """
         Step the scheduler with automatic CFG parallel handling.
@@ -333,6 +339,10 @@ class CFGParallelMixin(metaclass=ABCMeta):
                 needed by step-wise execution, where scheduler state may be
                 stored per request. Request-level execution should normally
                 leave this as ``None``.
+            generator: Optional torch Generator for reproducible sampling.
+                When using CFG parallel, both ranks should receive generators
+                initialized with the same seed so that non-deterministic
+                schedulers (e.g., DDPM) produce identical results.
 
         Returns:
             Updated latents (identical across all CFG ranks)
@@ -342,4 +352,5 @@ class CFGParallelMixin(metaclass=ABCMeta):
             t,
             latents,
             per_request_scheduler=per_request_scheduler,
+            generator=generator,
         )
