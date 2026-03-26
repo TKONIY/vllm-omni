@@ -627,9 +627,7 @@ class LTX2Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin):
         generator: torch.Generator | list[torch.Generator] | None = None,
         latents: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, int, int]:
-        duration_s = num_frames / frame_rate
-        latents_per_second = float(sampling_rate) / float(hop_length) / float(self.audio_vae_temporal_compression_ratio)
-        original_latent_length = round(duration_s * latents_per_second)
+        original_latent_length = audio_latent_length
         padded_latent_length = original_latent_length
 
         # TODO: confirm whether this logic is correct
@@ -738,8 +736,6 @@ class LTX2Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin):
         latents = tuple(tensor.contiguous() for tensor in latents)
         device = next((tensor.device for tensor in latents if tensor.is_cuda), None)
         if device is not None:
-            # LTX2 needs a post-step current-stream boundary to preserve
-            # the pre-refactor CFG-parallel numerical trajectory.
             torch.cuda.current_stream(device).synchronize()
         return latents
 
@@ -1019,10 +1015,8 @@ class LTX2Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin):
         audio_coords = self.transformer.audio_rope.prepare_audio_coords(
             audio_latents.shape[0], padded_audio_num_frames, audio_latents.device
         )
-        # Duplicate the positional ids as well if using CFG
-        if self.do_classifier_free_guidance and not cfg_parallel_ready:
-            video_coords = video_coords.repeat((2,) + (1,) * (video_coords.ndim - 1))  # Repeat twice in batch dim
-            audio_coords = audio_coords.repeat((2,) + (1,) * (audio_coords.ndim - 1))
+        # No coord duplication needed: mixin handles CFG via separate forward calls,
+        # not batch=2. Each forward gets batch=1 coords directly.
 
         with self.progress_bar(total=len(timesteps)) as pbar:
             for i, t in enumerate(timesteps):
@@ -1054,13 +1048,17 @@ class LTX2Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin):
                     "attention_kwargs": attention_kwargs,
                     "return_dict": False,
                 }
-                negative_kwargs = {
-                    **positive_kwargs,
-                    "encoder_hidden_states": negative_connector_prompt_embeds,
-                    "audio_encoder_hidden_states": negative_connector_audio_prompt_embeds,
-                    "encoder_attention_mask": negative_connector_attention_mask,
-                    "audio_encoder_attention_mask": negative_connector_attention_mask,
-                } if do_true_cfg else None
+                negative_kwargs = (
+                    {
+                        **positive_kwargs,
+                        "encoder_hidden_states": negative_connector_prompt_embeds,
+                        "audio_encoder_hidden_states": negative_connector_audio_prompt_embeds,
+                        "encoder_attention_mask": negative_connector_attention_mask,
+                        "audio_encoder_attention_mask": negative_connector_attention_mask,
+                    }
+                    if do_true_cfg
+                    else None
+                )
 
                 noise_pred_video, noise_pred_audio = self.predict_noise_maybe_with_cfg(
                     do_true_cfg=do_true_cfg,

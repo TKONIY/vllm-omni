@@ -13,9 +13,7 @@ def _make_pipeline(sequence_parallel_size: int = 1) -> LTX2Pipeline:
     torch.nn.Module.__init__(pipeline)
     pipeline.audio_vae_temporal_compression_ratio = 4
     pipeline.audio_vae_mel_compression_ratio = 4
-    pipeline.od_config = SimpleNamespace(
-        parallel_config=SimpleNamespace(sequence_parallel_size=sequence_parallel_size)
-    )
+    pipeline.od_config = SimpleNamespace(parallel_config=SimpleNamespace(sequence_parallel_size=sequence_parallel_size))
     return pipeline
 
 
@@ -27,10 +25,7 @@ def test_prepare_audio_latents_pads_packed_sequence_dim_for_provided_latents():
         batch_size=1,
         num_channels_latents=2,
         num_mel_bins=8,
-        num_frames=10,
-        frame_rate=2.0,
-        sampling_rate=8,
-        hop_length=1,
+        audio_latent_length=10,
         dtype=torch.float32,
         device=torch.device("cpu"),
         latents=latents,
