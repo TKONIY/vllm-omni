@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 from diffusers import FlowMatchEulerDiscreteScheduler
 from diffusers.pipelines.ltx2.utils import DISTILLED_SIGMA_VALUES, STAGE_2_DISTILLED_SIGMA_VALUES
-from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import rescale_noise_cfg, retrieve_timesteps
+from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import retrieve_timesteps
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_img2img import retrieve_latents
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.video_processor import VideoProcessor
@@ -58,10 +58,16 @@ class _I2VVideoAudioScheduler:
 
     def step(self, noise_pred, t, latents, return_dict=False, generator=None):
         video_out = self._pipeline._step_video_latents_i2v(
-            noise_pred[0], latents[0], t[0],
-            self._latent_num_frames, self._latent_height, self._latent_width,
+            noise_pred[0],
+            latents[0],
+            t[0],
+            self._latent_num_frames,
+            self._latent_height,
+            self._latent_width,
         )
-        audio_out = self.audio_scheduler.step(noise_pred[1], t[1], latents[1], return_dict=False, generator=generator)[0]
+        audio_out = self.audio_scheduler.step(noise_pred[1], t[1], latents[1], return_dict=False, generator=generator)[
+            0
+        ]
         return ((video_out, audio_out),)
 
 
@@ -520,7 +526,6 @@ class LTX2ImageToVideoPipeline(LTX2Pipeline):
             latents,
         )
 
-
         duration_s = num_frames / frame_rate
         audio_latents_per_second = (
             self.audio_sampling_rate / self.audio_hop_length / float(self.audio_vae_temporal_compression_ratio)
@@ -600,10 +605,7 @@ class LTX2ImageToVideoPipeline(LTX2Pipeline):
             latent_height=latent_height,
             latent_width=latent_width,
         )
-        # Duplicate the positional ids as well if using CFG
-        if self.do_classifier_free_guidance and not cfg_parallel_ready:
-            video_coords = video_coords.repeat((2,) + (1,) * (video_coords.ndim - 1))  # Repeat twice in batch dim
-            audio_coords = audio_coords.repeat((2,) + (1,) * (audio_coords.ndim - 1))
+        # No coord duplication needed: mixin handles CFG via separate forward calls.
 
         with self.progress_bar(total=len(timesteps)) as pbar:
             for i, t in enumerate(timesteps):
@@ -637,13 +639,17 @@ class LTX2ImageToVideoPipeline(LTX2Pipeline):
                     "attention_kwargs": attention_kwargs,
                     "return_dict": False,
                 }
-                negative_kwargs = {
-                    **positive_kwargs,
-                    "encoder_hidden_states": negative_connector_prompt_embeds,
-                    "audio_encoder_hidden_states": negative_connector_audio_prompt_embeds,
-                    "encoder_attention_mask": negative_connector_attention_mask,
-                    "audio_encoder_attention_mask": negative_connector_attention_mask,
-                } if do_true_cfg else None
+                negative_kwargs = (
+                    {
+                        **positive_kwargs,
+                        "encoder_hidden_states": negative_connector_prompt_embeds,
+                        "audio_encoder_hidden_states": negative_connector_audio_prompt_embeds,
+                        "encoder_attention_mask": negative_connector_attention_mask,
+                        "audio_encoder_attention_mask": negative_connector_attention_mask,
+                    }
+                    if do_true_cfg
+                    else None
+                )
 
                 noise_pred_video, noise_pred_audio = self.predict_noise_maybe_with_cfg(
                     do_true_cfg=do_true_cfg,
