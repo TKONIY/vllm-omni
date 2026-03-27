@@ -101,13 +101,11 @@ class CFGParallelMixin(metaclass=ABCMeta):
                 negative_noise_pred = tuple(g[1] for g in gathered)
 
                 # All ranks compute combine (deterministic, same result)
-                return _unwrap(
-                    self.combine_cfg_noise(
-                        positive_noise_pred,
-                        negative_noise_pred,
-                        true_cfg_scale,
-                        cfg_normalize,
-                    )
+                return self.combine_cfg_noise(
+                    positive_noise_pred,
+                    negative_noise_pred,
+                    true_cfg_scale,
+                    cfg_normalize,
                 )
             else:
                 # Sequential CFG: compute both positive and negative
@@ -118,13 +116,11 @@ class CFGParallelMixin(metaclass=ABCMeta):
                     positive_noise_pred = _slice_pred(positive_noise_pred, output_slice)
                     negative_noise_pred = _slice_pred(negative_noise_pred, output_slice)
 
-                return _unwrap(
-                    self.combine_cfg_noise(
-                        positive_noise_pred,
-                        negative_noise_pred,
-                        true_cfg_scale,
-                        cfg_normalize,
-                    )
+                return self.combine_cfg_noise(
+                    positive_noise_pred,
+                    negative_noise_pred,
+                    true_cfg_scale,
+                    cfg_normalize,
                 )
         else:
             # No CFG: only compute positive/conditional prediction
@@ -311,7 +307,10 @@ class CFGParallelMixin(metaclass=ABCMeta):
             raise ValueError("No scheduler is available. Set self.scheduler or pass per_request_scheduler.")
         if not callable(getattr(sched, "step", None)):
             raise TypeError("per_request_scheduler must provide a callable step(...) method.")
-        return sched.step(noise_pred, t, latents, return_dict=False, generator=generator)[0]
+        step_kwargs = dict(return_dict=False)
+        if generator is not None:
+            step_kwargs["generator"] = generator
+        return sched.step(noise_pred, t, latents, **step_kwargs)[0]
 
     def scheduler_step_maybe_with_cfg(
         self,
