@@ -140,23 +140,18 @@ def causal_rope_action_apply(
 
 
 # ── Normalization ───────────────────────────────────────────────────
-# Source: wan2_1_submodule.py WanRMSNorm / WanLayerNorm
+# Reuse wan2_2's DistributedRMSNorm (supports TP, no vllm config needed)
+# Source: wan2_1_submodule.py L162-178 (WanRMSNorm)
+#         wan2_2_transformer.py L65-95 (DistributedRMSNorm — TP-aware version)
 
-
-class WanRMSNorm(nn.Module):
-    """Source: wan2_1_submodule.py WanRMSNorm"""
-
-    def __init__(self, dim: int, eps: float = 1e-5) -> None:
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(dim))
-        self.eps = eps
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError
+from vllm.model_executor.layers.layernorm import RMSNorm as WanRMSNorm  # noqa: E402
+# Source: wan2_1_submodule.py L162-178 (WanRMSNorm)
+# Using vllm's RMSNorm which supports TP and custom kernels.
+# Requires VllmConfig context (auto-set during serving, use set_current_vllm_config in tests).
 
 
 class WanLayerNorm(nn.LayerNorm):
-    """Source: wan2_1_submodule.py WanLayerNorm"""
+    """Source: wan2_1_submodule.py L181-184"""
 
     def __init__(self, dim: int, eps: float = 1e-6, elementwise_affine: bool = False) -> None:
         super().__init__(dim, eps=eps, elementwise_affine=elementwise_affine)
