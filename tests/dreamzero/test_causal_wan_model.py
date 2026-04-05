@@ -12,6 +12,7 @@ Run: PYTHONPATH=. python tests/dreamzero/test_causal_wan_model.py
 import sys
 import os
 
+import pytest
 import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../third_party/dreamzero"))
@@ -243,61 +244,47 @@ def test_rope_precision():
 # ── Test 6: WanRMSNorm precision ────────────────────────────────────
 
 def test_rmsnorm_precision():
-    from vllm.config import DeviceConfig, VllmConfig, set_current_vllm_config
-    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import WanRMSNorm as VllmNorm
+    """RMSNorm precision — uses pytest default_vllm_config fixture."""
+    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import RMSNorm
     from groot.vla.model.dreamzero.modules.wan2_1_submodule import WanRMSNorm as DzNorm
 
-    with set_current_vllm_config(VllmConfig(device_config=DeviceConfig(device="cpu"))):
-        for dim in [64, 128, 5120]:
-            vl = VllmNorm(dim, eps=1e-5)
-            dz = DzNorm(dim, eps=1e-5)
-            vl.weight.data.copy_(dz.weight.data)
-            x = torch.randn(2, 10, dim)
-            diff = (vl(x) - dz(x)).abs().max().item()
-            assert diff < 1e-5, f"WanRMSNorm dim={dim}: {diff}"
-            print(f"  WanRMSNorm dim={dim}: OK ({diff:.2e})")
-    print("✅ WanRMSNorm: PASS")
+    for dim in [64, 128, 5120]:
+        vl = RMSNorm(dim, eps=1e-5)
+        dz = DzNorm(dim, eps=1e-5)
+        vl.weight.data.copy_(dz.weight.data)
+        x = torch.randn(2, 10, dim)
+        diff = (vl(x) - dz(x)).abs().max().item()
+        assert diff < 1e-5, f"RMSNorm dim={dim}: {diff}"
 
-
-# ── Test 7: MLPProj precision ────────────────────────────────────────
 
 def test_mlpproj_precision():
-    from vllm.config import DeviceConfig, VllmConfig, set_current_vllm_config
+    """MLPProj (ColumnParallel+RowParallel) vs DreamZero (nn.Sequential).
+    Uses default_weight_loader for correct parallel weight copy.
+    """
+    from vllm.model_executor.model_loader.weight_utils import default_weight_loader
     from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import MLPProj as VllmMLP
     from groot.vla.model.dreamzero.modules.wan2_1_submodule import MLPProj as DzMLP
 
-    with set_current_vllm_config(VllmConfig(device_config=DeviceConfig(device="cpu"))):
-        vl = VllmMLP(1280, 5120)
-        dz = DzMLP(1280, 5120)
-        dz.load_state_dict(vl.state_dict())
+    vl = VllmMLP(1280, 5120)
+    dz = DzMLP(1280, 5120)
 
-        x = torch.randn(1, 257, 1280)
-        diff = (vl(x) - dz(x)).abs().max().item()
-        assert diff < 1e-5, f"MLPProj: {diff}"
-        print(f"  MLPProj: OK ({diff:.2e})")
-    print("✅ MLPProj: PASS")
+    # Copy weights: dz.proj = Sequential(LN[0], Linear[1], GELU[2], Linear[3], LN[4])
+    # norm1 ← proj[0], fc1 ← proj[1], fc2 ← proj[3], norm2 ← proj[4]
+    default_weight_loader(vl.norm1.weight, dz.proj[0].weight.data)
+    default_weight_loader(vl.norm1.bias, dz.proj[0].bias.data)
+    default_weight_loader(vl.fc1.weight, dz.proj[1].weight.data)
+    default_weight_loader(vl.fc1.bias, dz.proj[1].bias.data)
+    default_weight_loader(vl.fc2.weight, dz.proj[3].weight.data)
+    default_weight_loader(vl.fc2.bias, dz.proj[3].bias.data)
+    default_weight_loader(vl.norm2.weight, dz.proj[4].weight.data)
+    default_weight_loader(vl.norm2.bias, dz.proj[4].bias.data)
+
+    x = torch.randn(1, 257, 1280)
+    diff = (vl(x) - dz(x)).abs().max().item()
+    assert diff < 1e-5, f"MLPProj: {diff}"
 
 
 if __name__ == "__main__":
-    print("=== CausalWanModel Tests ===\n")
-
-    # Shape tests (no GPU / dreamzero needed)
-    # test_init()          # CausalWanModel.__init__ not yet implemented
-    # test_prefill()       # depends on __init__
-    # test_inference_with_action()
-    # test_kv_cache_growth()
-
-    # Precision alignment (needs dreamzero)
-    try:
-        import groot  # noqa: F401
-        has_dreamzero = True
-    except ImportError:
-        has_dreamzero = False
-        print("\n⚠️  dreamzero not available, skipping precision tests")
-
-    if has_dreamzero:
-        test_rope_precision()
-        test_rmsnorm_precision()
-        test_mlpproj_precision()
-
-    print("\n=== ALL TESTS PASSED ===")
+    # Use pytest to run: cd dreamzero && pytest /path/to/test_causal_wan_model.py -v
+    print("Run with pytest (provides default_vllm_config fixture):")
+    print("  pytest tests/dreamzero/test_causal_wan_model.py -v")

@@ -23,6 +23,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from vllm.model_executor.layers.activation import NewGELU
+from vllm.model_executor.layers.layernorm import LayerNorm
+from vllm.model_executor.layers.linear import (
+    ColumnParallelLinear,
+    QKVParallelLinear,
+    RowParallelLinear,
+)
+
 from vllm_omni.diffusion.models.dreamzero.modeling.action_encoder import (
     CategorySpecificMLP,
     MultiEmbodimentActionEncoder,
@@ -144,10 +152,9 @@ def causal_rope_action_apply(
 # Source: wan2_1_submodule.py L162-178 (WanRMSNorm)
 #         wan2_2_transformer.py L65-95 (DistributedRMSNorm — TP-aware version)
 
-from vllm.model_executor.layers.layernorm import RMSNorm as WanRMSNorm  # noqa: E402
-# Source: wan2_1_submodule.py L162-178 (WanRMSNorm)
-# Using vllm's RMSNorm which supports TP and custom kernels.
-# Requires VllmConfig context (auto-set during serving, use set_current_vllm_config in tests).
+from vllm.model_executor.layers.layernorm import RMSNorm  # noqa: E402
+# Replaces DreamZero's WanRMSNorm (wan2_1_submodule.py L162-178)
+# vllm RMSNorm: TP support + CUDA kernels. Needs VllmConfig context.
 
 
 class WanLayerNorm(nn.LayerNorm):
@@ -163,20 +170,28 @@ class WanLayerNorm(nn.LayerNorm):
 class MLPProj(nn.Module):
     """CLIP feature projection for i2v.
     Source: wan2_1_submodule.py L565-577
+    Uses ColumnParallelLinear + RowParallelLinear (Qwen3_VisionMLP pattern).
     """
 
     def __init__(self, in_dim: int, out_dim: int) -> None:
         super().__init__()
-        self.proj = nn.Sequential(                                   # L570-573
-            nn.LayerNorm(in_dim),
-            nn.Linear(in_dim, in_dim),
-            nn.GELU(),
-            nn.Linear(in_dim, out_dim),
-            nn.LayerNorm(out_dim),
+        self.norm1 = nn.LayerNorm(in_dim)                           # L571
+        self.fc1 = ColumnParallelLinear(                             # L571 nn.Linear(in_dim, in_dim)
+            in_dim, in_dim, bias=True, return_bias=False,
         )
+        self.act = nn.GELU()                                         # L572
+        self.fc2 = RowParallelLinear(                                # L572 nn.Linear(in_dim, out_dim)
+            in_dim, out_dim, bias=True, return_bias=False,
+        )
+        self.norm2 = nn.LayerNorm(out_dim)                           # L573
 
     def forward(self, image_embeds: torch.Tensor) -> torch.Tensor:
-        return self.proj(image_embeds)                               # L576
+        x = self.norm1(image_embeds)                                 # L576
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.fc2(x)
+        x = self.norm2(x)
+        return x
 
 
 # ── Cross-Attention ─────────────────────────────────────────────────
