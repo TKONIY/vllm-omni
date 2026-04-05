@@ -14,6 +14,12 @@ def _make_pipeline(sequence_parallel_size: int = 1) -> LTX2Pipeline:
     pipeline.audio_vae_temporal_compression_ratio = 4
     pipeline.audio_vae_mel_compression_ratio = 4
     pipeline.od_config = SimpleNamespace(parallel_config=SimpleNamespace(sequence_parallel_size=sequence_parallel_size))
+    # Mock audio_vae with identity normalization (mean=0, std=1) so
+    # _normalize_audio_latents is a no-op and test values are preserved.
+    pipeline.audio_vae = SimpleNamespace(
+        latents_mean=torch.tensor(0.0),
+        latents_std=torch.tensor(1.0),
+    )
     return pipeline
 
 

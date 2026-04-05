@@ -630,20 +630,23 @@ class LTX2Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin):
         original_latent_length = audio_latent_length
         padded_latent_length = original_latent_length
 
-        # TODO: confirm whether this logic is correct
         latent_mel_bins = num_mel_bins // self.audio_vae_mel_compression_ratio
-        packed_hidden_size = num_channels_latents * latent_mel_bins
 
         sp_size = getattr(self.od_config.parallel_config, "sequence_parallel_size", 1)
         if sp_size > 1:
             padded_latent_length += (sp_size - (original_latent_length % sp_size)) % sp_size
 
         if latents is not None:
-            if latents.ndim != 3 or latents.shape[2] != packed_hidden_size:
+            if latents.ndim == 4:
+                # latents are of shape [B, C, L, M], need to be packed
+                latents = self._pack_audio_latents(latents)
+            if latents.ndim != 3:
                 raise ValueError(
-                    "Provided `audio_latents` must be packed with shape "
-                    f"(batch, num_audio_frames, {packed_hidden_size}), but got {tuple(latents.shape)}."
+                    f"Provided `latents` tensor has shape {latents.shape}, but the expected shape is "
+                    "[batch_size, num_seq, num_features] or [batch_size, num_channels, audio_length, mel_bins]."
                 )
+            latents = self._normalize_audio_latents(latents, self.audio_vae.latents_mean, self.audio_vae.latents_std)
+            latents = self._create_noised_state(latents, noise_scale, generator)
 
             if latents.shape[1] not in {original_latent_length, padded_latent_length}:
                 raise ValueError(
@@ -733,6 +736,9 @@ class LTX2Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin):
         if not (do_true_cfg and get_classifier_free_guidance_world_size() > 1):
             return latents
 
+        # Without this sync, CUDA async execution causes non-deterministic
+        # numerical drift across denoising steps in CFG parallel mode,
+        # producing different video outputs across runs.
         latents = tuple(tensor.contiguous() for tensor in latents)
         device = next((tensor.device for tensor in latents if tensor.is_cuda), None)
         if device is not None:
