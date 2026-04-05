@@ -31,6 +31,7 @@ from vllm.model_executor.layers.linear import (
     RowParallelLinear,
 )
 
+from vllm_omni.diffusion.attention.layer import Attention
 from vllm_omni.diffusion.models.dreamzero.modeling.action_encoder import (
     CategorySpecificMLP,
     MultiEmbodimentActionEncoder,
@@ -202,6 +203,7 @@ class MLPProj(nn.Module):
 class WanT2VCrossAttention(nn.Module):
     """Text-to-video cross-attention.
     Source: wan2_1_submodule.py L243-278
+    Uses vllm-omni Attention for FlashAttn backend.
     """
 
     def __init__(self, dim: int, num_heads: int, window_size=(-1, -1),
@@ -217,6 +219,8 @@ class WanT2VCrossAttention(nn.Module):
         self.o = nn.Linear(dim, dim)                                 # L208
         self.norm_q = RMSNorm(dim, eps=eps) if qk_norm else nn.Identity()  # L209
         self.norm_k = RMSNorm(dim, eps=eps) if qk_norm else nn.Identity()  # L210
+        self.attn = Attention(num_heads, self.head_dim, causal=False,
+                              softmax_scale=self.head_dim ** -0.5)
 
     def forward(self, x: torch.Tensor, context: torch.Tensor,
                 crossattn_cache: dict | None = None) -> torch.Tensor:
@@ -236,9 +240,7 @@ class WanT2VCrossAttention(nn.Module):
         else:
             k = self.norm_k(self.k(context)).view(b, -1, n, d)       # L269
             v = self.v(context).view(b, -1, n, d)                    # L270
-        x = F.scaled_dot_product_attention(                          # L273 (flash_attention)
-            q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
-        ).transpose(1, 2)
+        x = self.attn(q, k, v)                                      # L273
         x = x.flatten(2)                                             # L276
         x = self.o(x)                                                # L277
         return x
@@ -247,6 +249,7 @@ class WanT2VCrossAttention(nn.Module):
 class WanI2VCrossAttention(nn.Module):
     """Image-to-video cross-attention (splits first 257 image tokens).
     Source: wan2_1_submodule.py L308-362
+    Uses vllm-omni Attention for FlashAttn backend.
     """
 
     def __init__(self, dim: int, num_heads: int, window_size=(-1, -1),
@@ -265,6 +268,8 @@ class WanI2VCrossAttention(nn.Module):
         self.k_img = nn.Linear(dim, dim)                             # L318
         self.v_img = nn.Linear(dim, dim)                             # L319
         self.norm_k_img = RMSNorm(dim, eps=eps) if qk_norm else nn.Identity()  # L321
+        self.attn = Attention(num_heads, self.head_dim, causal=False,
+                              softmax_scale=self.head_dim ** -0.5)
 
     def forward(self, x: torch.Tensor, context: torch.Tensor,
                 crossattn_cache: dict | None = None) -> torch.Tensor:
@@ -286,14 +291,10 @@ class WanI2VCrossAttention(nn.Module):
         else:
             k = self.norm_k(self.k(context)).view(b, -1, n, d)       # L348
             v = self.v(context).view(b, -1, n, d)                    # L349
-        x = F.scaled_dot_product_attention(                          # L350
-            q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
-        ).transpose(1, 2)
+        x = self.attn(q, k, v)                                      # L350
         k_img = self.norm_k_img(self.k_img(context_img)).view(b, -1, n, d)  # L352
         v_img = self.v_img(context_img).view(b, -1, n, d)           # L353
-        img_x = F.scaled_dot_product_attention(                      # L354
-            q.transpose(1, 2), k_img.transpose(1, 2), v_img.transpose(1, 2)
-        ).transpose(1, 2)
+        img_x = self.attn(q, k_img, v_img)                          # L354
         x = x.flatten(2)                                             # L357
         img_x = img_x.flatten(2)                                     # L358
         x = x + img_x                                                # L359
@@ -351,6 +352,8 @@ class CausalWanSelfAttention(nn.Module):
         self.o = nn.Linear(dim, dim)
         self.norm_q = RMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
         self.norm_k = RMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
+        self.attn = Attention(num_heads, self.head_dim, causal=False,
+                              softmax_scale=self.head_dim ** -0.5)
 
     def forward(
         self,
@@ -426,9 +429,7 @@ class CausalWanSelfAttention(nn.Module):
                 k_cat = new_k
                 v_cat = new_v
 
-            x = F.scaled_dot_product_attention(                      # L1067-1073
-                q_cat.transpose(1, 2), k_cat.transpose(1, 2), v_cat.transpose(1, 2)
-            ).transpose(1, 2)
+            x = self.attn(q_cat, k_cat, v_cat)                        # L1067-1073
             updated_kv_cache = torch.stack([new_k, new_v], dim=0)    # L1078
 
         # output                                                     # L1082-1083

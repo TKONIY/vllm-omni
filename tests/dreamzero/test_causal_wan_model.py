@@ -15,6 +15,7 @@ import os
 
 import pytest
 import torch
+import torch.nn.functional as F
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../third_party/dreamzero"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../dreamzero"))
@@ -328,7 +329,215 @@ def test_causal_head_precision():
     assert diff < 1e-5, f"CausalHead: {diff}"
 
 
+# ── Helper: load DreamZero classes via exec ──────────────────────────
+
+def _load_dz_source():
+    """Read DreamZero source file, return lines."""
+    import pathlib
+    for base in [
+        os.path.join(os.path.dirname(__file__), "../../third_party/dreamzero"),
+        os.path.join(os.path.dirname(__file__), "../../../dreamzero"),
+    ]:
+        p = pathlib.Path(base, "groot/vla/model/dreamzero/modules/wan_video_dit_action_casual_chunk.py").resolve()
+        if p.exists():
+            return p.read_text().split("\n")
+    raise FileNotFoundError("DreamZero source not found")
+
+
+def _exec_dz_classes(start_class: str, end_marker: str, extra_ns: dict | None = None):
+    """Extract and exec class definitions from DreamZero source."""
+    lines = _load_dz_source()
+    start = next(i for i, l in enumerate(lines) if start_class in l)
+    end = next(i for i, l in enumerate(lines) if i > start + 1 and end_marker in l)
+    snippet = "\n".join(lines[start:end])
+    from groot.vla.model.dreamzero.modules.wan2_1_submodule import (
+        WanRMSNorm, WanLayerNorm, rope_action_apply_polar, sinusoidal_embedding_1d,
+    )
+    from groot.vla.model.dreamzero.modules.wan_video_dit_action_casual_chunk import (
+        causal_rope_action_apply_polar,
+    )
+    from groot.vla.model.n1_5.modules.action_encoder import SinusoidalPositionalEncoding, swish
+    from groot.vla.model.dreamzero.modules.wan2_1_attention import AttentionModule
+    ns = {
+        "torch": torch, "nn": torch.nn, "F": torch.nn.functional, "math": math,
+        "WanRMSNorm": WanRMSNorm, "WanLayerNorm": WanLayerNorm,
+        "rope_action_apply": rope_action_apply_polar,
+        "causal_rope_action_apply": causal_rope_action_apply_polar,
+        "sinusoidal_embedding_1d": sinusoidal_embedding_1d,
+        "SinusoidalPositionalEncoding": SinusoidalPositionalEncoding,
+        "swish": swish, "AttentionModule": AttentionModule,
+    }
+    if extra_ns:
+        ns.update(extra_ns)
+    exec(snippet, ns)
+    return ns
+
+
+# ── Monkey-patch DreamZero's flash_attention to use SDPA ─────────────
+# This ensures both sides use the same kernel for fair precision comparison.
+
+def _sdpa_flash_attention(q, k, v, k_lens=None, window_size=(-1, -1)):
+    """Drop-in replacement for DreamZero's flash_attention using SDPA."""
+    return F.scaled_dot_product_attention(
+        q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+    ).transpose(1, 2)
+
+
+@pytest.fixture(autouse=True)
+def _patch_flash_attention():
+    """Patch DreamZero's flash_attention to SDPA for all GPU precision tests."""
+    import groot.vla.model.dreamzero.modules.wan2_1_submodule as submod
+    original = getattr(submod, "flash_attention", None)
+    submod.flash_attention = _sdpa_flash_attention
+    yield
+    if original is not None:
+        submod.flash_attention = original
+
+
+# ── Test 9: WanT2VCrossAttention precision ───────────────────────────
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU required")
+def test_t2v_cross_attn_precision():
+    from vllm.model_executor.model_loader.weight_utils import default_weight_loader
+    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import WanT2VCrossAttention as VllmCA
+    from groot.vla.model.dreamzero.modules.wan2_1_submodule import WanT2VCrossAttention as DzCA
+
+    dim, num_heads = 64, 4
+    device = "cuda"
+    vl = VllmCA(dim, num_heads, qk_norm=True, eps=1e-6).to(device).bfloat16()
+    dz = DzCA(dim, num_heads, (-1, -1), True, 1e-6).to(device).bfloat16()
+
+    for (vn, vp), (dn, dp) in zip(vl.named_parameters(), dz.named_parameters()):
+        default_weight_loader(dp, vp.data)
+
+    x = torch.randn(1, 8, dim, device=device, dtype=torch.bfloat16)
+    context = torch.randn(1, 16, dim, device=device, dtype=torch.bfloat16)
+    diff = (vl(x, context) - dz(x, context, context_lens=None)).abs().max().item()
+    assert diff == 0, f"WanT2VCrossAttention: {diff}"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU required")
+def test_i2v_cross_attn_precision():
+    from vllm.model_executor.model_loader.weight_utils import default_weight_loader
+    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import WanI2VCrossAttention as VllmCA
+    from groot.vla.model.dreamzero.modules.wan2_1_submodule import WanI2VCrossAttention as DzCA
+
+    dim, num_heads = 64, 4
+    device = "cuda"
+    vl = VllmCA(dim, num_heads, qk_norm=True, eps=1e-6).to(device).bfloat16()
+    dz = DzCA(dim, num_heads, (-1, -1), True, 1e-6).to(device).bfloat16()
+
+    for (vn, vp), (dn, dp) in zip(vl.named_parameters(), dz.named_parameters()):
+        default_weight_loader(dp, vp.data)
+
+    x = torch.randn(1, 8, dim, device=device, dtype=torch.bfloat16)
+    context = torch.randn(1, 257 + 16, dim, device=device, dtype=torch.bfloat16)
+    diff = (vl(x, context) - dz(x, context)).abs().max().item()
+    assert diff == 0, f"WanI2VCrossAttention: {diff}"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU required")
+def test_self_attn_precision():
+    from vllm.model_executor.model_loader.weight_utils import default_weight_loader
+    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import (
+        CausalWanSelfAttention as VllmSA, rope_params,
+    )
+    ns = _exec_dz_classes("class CausalWanSelfAttention", "class CausalWanAttentionBlock")
+    DzSA = ns["CausalWanSelfAttention"]
+
+    dim, num_heads, frame_seqlen = 64, 4, 4
+    head_dim = dim // num_heads
+    device = "cuda"
+    vl = VllmSA(dim, num_heads, frame_seqlen, num_action_per_block=4, num_state_per_block=1).to(device).bfloat16()
+    dz = DzSA(dim, num_heads, frame_seqlen, num_action_per_block=4, num_state_per_block=1).to(device).bfloat16()
+
+    for (vn, vp), (dn, dp) in zip(vl.named_parameters(), dz.named_parameters()):
+        default_weight_loader(dp, vp.data)
+
+    B = 1
+    kv_cache = torch.zeros(2, B, 0, num_heads, head_dim, device=device, dtype=torch.bfloat16)
+    freqs = rope_params(1024, head_dim)[:frame_seqlen].view(-1, 1, head_dim // 2).to(device)
+    freqs_a = rope_params(10240, head_dim).to(device)
+    freqs_s = rope_params(1024, head_dim).to(device)
+
+    x = torch.randn(B, frame_seqlen, dim, device=device, dtype=torch.bfloat16)
+    vl_out, vl_kv = vl(x, freqs, freqs_a, freqs_s, None, kv_cache, current_start_frame=0)
+    dz_out, dz_kv = dz(x, freqs, freqs_a, freqs_s, None, kv_cache, current_start_frame=0)
+    diff = (vl_out.float() - dz_out.float()).abs().max().item()
+    assert diff == 0, f"CausalWanSelfAttention: {diff}"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU required")
+def test_attention_block_forward():
+    """CausalWanAttentionBlock — shape + KV cache update on GPU."""
+    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import (
+        CausalWanAttentionBlock as VllmBlock, rope_params,
+    )
+
+    dim, ffn_dim, num_heads, frame_seqlen = 64, 128, 4, 4
+    head_dim = dim // num_heads
+    device = "cuda"
+    block = VllmBlock("t2v_cross_attn", dim, ffn_dim, num_heads, frame_seqlen,
+                       num_action_per_block=4, num_state_per_block=1).to(device).bfloat16()
+
+    B = 1
+    kv_cache = torch.zeros(2, B, 0, num_heads, head_dim, device=device, dtype=torch.bfloat16)
+    freqs = rope_params(1024, head_dim)[:frame_seqlen].view(-1, 1, head_dim // 2).to(device)
+    freqs_a = rope_params(10240, head_dim).to(device)
+    freqs_s = rope_params(1024, head_dim).to(device)
+
+    x = torch.randn(B, frame_seqlen, dim, device=device, dtype=torch.bfloat16)
+    e = torch.randn(B, frame_seqlen, 6, dim, device=device, dtype=torch.bfloat16)
+    context = torch.randn(B, 16, dim, device=device, dtype=torch.bfloat16)
+
+    out, updated_kv = block(x, e, freqs, freqs_a, freqs_s, context,
+                            kv_cache=kv_cache, current_start_frame=0)
+    assert out.shape == (B, frame_seqlen, dim)
+    assert updated_kv is not None
+    assert updated_kv.shape[2] > 0  # KV cache grew
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU required")
+def test_full_model_gpu():
+    """Full model forward on GPU: tiny config, 2 AR steps."""
+    model = _make_tiny_model().cuda().float()
+    B, num_heads, head_dim = 1, 4, 16
+    device = "cuda"
+    dtype = torch.float32
+    kv_cache = [torch.zeros(2, B, 0, num_heads, head_dim, device=device, dtype=dtype) for _ in range(2)]
+    crossattn_cache = [{"is_init": False, "k": None, "v": None} for _ in range(2)]
+
+    # Step 1: prefill
+    with torch.no_grad():
+        v1, a1, kv1 = model(
+            x=torch.randn(B, 4, 1, 4, 4, device=device, dtype=dtype),
+            timestep=torch.tensor([[0]], device=device),
+            context=torch.randn(B, 16, 64, device=device, dtype=dtype),
+            seq_len=4, kv_cache=kv_cache, crossattn_cache=crossattn_cache,
+            current_start_frame=0, y=None, clip_feature=None,
+        )
+    assert v1.shape[0] == B
+    for i, kv in enumerate(kv1):
+        kv_cache[i] = kv.clone()
+
+    # Step 2: with action
+    with torch.no_grad():
+        v2, a2, kv2 = model(
+            x=torch.randn(B, 4, 1, 4, 4, device=device, dtype=dtype),
+            timestep=torch.tensor([[500]], device=device),
+            context=torch.randn(B, 16, 64, device=device, dtype=dtype),
+            seq_len=4, kv_cache=kv_cache, crossattn_cache=crossattn_cache,
+            current_start_frame=1,
+            action=torch.randn(B, 4, 8, device=device, dtype=dtype),
+            timestep_action=torch.tensor([[500]*4], device=device),
+            state=torch.randn(B, 1, 64, device=device, dtype=dtype),
+            embodiment_id=torch.tensor([0], device=device),
+            y=None, clip_feature=None,
+        )
+    assert v2.shape[0] == B
+    assert a2 is not None
+    assert a2.shape == (B, 4, 8)
+
+
 if __name__ == "__main__":
-    # Use pytest to run: cd dreamzero && pytest /path/to/test_causal_wan_model.py -v
-    print("Run with pytest (provides default_vllm_config fixture):")
-    print("  pytest tests/dreamzero/test_causal_wan_model.py -v")
+    print("Run with pytest: pytest tests/dreamzero/test_causal_wan_model.py -v")
