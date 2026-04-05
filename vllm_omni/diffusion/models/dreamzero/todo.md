@@ -38,19 +38,16 @@
 
 | 组件 | 复用 vllm 算子 | 对应 DreamZero 原始 | 精度测试结果 | 测试位置 |
 |------|--------------|-------------------|------------|---------|
-| `CausalWanSelfAttention.__init__` | `QKVParallelLinear` + `RowParallelLinear` + `RMSNorm` + `Attention(causal)` | `wan_video_dit...py` L188-224 | 待测 | 待写 |
-| `CausalWanSelfAttention.forward` (KV cache path) | `Attention` | `wan_video_dit...py` L1008-1084 | 待测 | 待写 |
-| `WanT2VCrossAttention` | `QKVParallelLinear` + `RowParallelLinear` + `Attention` | `wan2_1_submodule.py` L243-306 | 待测 | 待写 |
-| `WanI2VCrossAttention` | 同上 | `wan2_1_submodule.py` L308-362 | 待测 | 待写 |
-| `CausalWanAttentionBlock.__init__` | 组合 self-attn + cross-attn + ffn (`ColumnParallelLinear` + `RowParallelLinear`) | `wan_video_dit...py` L1087-1141 | 待测 | 待写 |
-| `CausalWanAttentionBlock.forward` | — | `wan_video_dit...py` L1142-1187 | 待测 | 待写 |
-| `CausalHead.__init__` | `nn.Linear` (跑一次不 TP) | `wan_video_dit...py` L1190-1205 | 待测 | 待写 |
-| `CausalHead.forward` | — | `wan_video_dit...py` L1207-1215 | 待测 | 待写 |
-| `CausalWanModel.__init__` | `Conv3dLayer` + 组装所有组件 | `wan_video_dit...py` L1230-1387 | 待测 | `tests/dreamzero/test_causal_wan_model.py::test_init` |
-| `CausalWanModel._create_freqs` | — | `wan_video_dit...py` L2151-2174 | 待测 | 待写 |
-| `CausalWanModel.unpatchify` | — | `wan_video_dit...py` L2127-2149 | 待测 | 待写 |
-| `CausalWanModel._forward_blocks` | — | `wan_video_dit...py` L1691-1779 | 待测 | 待写 |
-| `CausalWanModel._forward_inference` | — | `wan_video_dit...py` L1863-1950 | 待测 | `tests/dreamzero/test_causal_wan_model.py::test_prefill` / `test_inference_with_action` / `test_kv_cache_growth` |
+| `CausalWanSelfAttention` | `RMSNorm` + `F.scaled_dot_product_attention` | `wan_video_dit...py` L188-1084 | shape PASS | `test_init` / `test_prefill` / `test_inference_with_action` |
+| `WanT2VCrossAttention` | `RMSNorm` + `F.sdpa` | `wan2_1_submodule.py` L243-278 | shape PASS | `test_init` |
+| `WanI2VCrossAttention` | `RMSNorm` + `F.sdpa` | `wan2_1_submodule.py` L308-362 | shape PASS | `test_init` |
+| `CausalWanAttentionBlock` | 组合 self+cross+FFN | `wan_video_dit...py` L1087-1190 | shape PASS | `test_init` |
+| `CausalHead` | `nn.Linear` | `wan_video_dit...py` L1190-1215 | bit-identical | `test_causal_head_precision` |
+| `CausalWanModel.__init__` | `nn.Conv3d` + 组装 | `wan_video_dit...py` L1230-1387 | shape PASS | `test_init` |
+| `_create_freqs` | — | `wan_video_dit...py` L2151-2174 | shape PASS | `test_prefill` |
+| `unpatchify` | — | `wan_video_dit...py` L2127-2149 | shape PASS | `test_prefill` |
+| `_forward_blocks` | — | `wan_video_dit...py` L1691-1779 | shape PASS | `test_prefill` |
+| `_forward_inference` | — | `wan_video_dit...py` L1863-1950 | shape PASS (KV cache growth [4,8,12]) | `test_prefill` / `test_inference_with_action` / `test_kv_cache_growth` |
 
 ## 其他待实现文件
 
