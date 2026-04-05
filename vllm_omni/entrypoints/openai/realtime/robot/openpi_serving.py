@@ -3,9 +3,8 @@
 
 """Serving layer for robot policy inference via /v1/realtime/robot/openpi.
 
-Mirrors OpenAIServingRealtime: holds engine reference, provides inference
-abstraction. Engine-agnostic — works with DiffusionEngine, LLM EngineClient,
-or any object implementing step(request).
+Flow: raw obs → transform (dataset key mapping) → unified obs → engine → actions
+Transform is stateless and selected per-request via obs["embodiment"].
 """
 
 from __future__ import annotations
@@ -14,42 +13,86 @@ import asyncio
 from typing import Any
 
 import numpy as np
+import torch
 from vllm.logger import init_logger
+
+from vllm_omni.entrypoints.openai.realtime.robot.transform.base import (
+    RobotPolicyTransform,
+    get_transform,
+)
 
 logger = init_logger(__name__)
 
+# Default embodiment when not specified in obs
+DEFAULT_EMBODIMENT = "roboarena"
+
 
 class ServingRealtimeRobotOpenPI:
-    """Robot policy serving layer (mirrors OpenAIServingRealtime).
+    """Robot policy serving layer for OpenPI protocol.
 
-    Holds the engine reference, builds requests from observations,
-    and extracts actions from results. Engine-agnostic: works with
-    DiffusionEngine or LLM EngineClient.
+    Stateless transform routes by obs["embodiment"].
+    Model-specific state (frame buffer, KV cache) lives in pipeline.
     """
 
     def __init__(
         self,
         engine_client: Any,
         model_name: str | None = None,
+        default_embodiment: str = DEFAULT_EMBODIMENT,
     ) -> None:
         self.engine_client = engine_client
         self.model_name = model_name
+        self.default_embodiment = default_embodiment
+        self._current_session_id: str | None = None
+        self._call_count = 0
+
+        # Ensure default transforms are registered
+        self._ensure_transforms_loaded()
+
+    @staticmethod
+    def _ensure_transforms_loaded() -> None:
+        """Import transform modules to trigger register_transform calls."""
+        import vllm_omni.entrypoints.openai.realtime.robot.transform.droid  # noqa: F401
+        import vllm_omni.entrypoints.openai.realtime.robot.transform.roboarena  # noqa: F401
 
     def reset(self, obs: dict) -> None:
-        """Handle reset. Override for engine-specific cleanup."""
-        pass
+        """Reset session state."""
+        self._call_count = 0
 
-    async def infer(self, obs: dict, session_state: Any = None) -> np.ndarray:
-        """Run inference: observation dict -> action ndarray."""
-        request = self._build_request(obs, session_state)
+    async def infer(self, obs: dict) -> np.ndarray:
+        """raw obs → transform → engine → actions."""
+        # Session tracking
+        session_id = obs.get("session_id")
+        if session_id is not None and session_id != self._current_session_id:
+            if self._current_session_id is not None:
+                logger.info("Session changed %s → %s",
+                            self._current_session_id, session_id)
+                self.reset({})
+            self._current_session_id = session_id
+
+        self._call_count += 1
+
+        # Transform: dataset format → unified format
+        transform = self._get_transform(obs)
+        unified_obs = transform.transform_input(obs)
+
+        # Build request, run inference
+        request = self._build_request(unified_obs, obs)
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, self.engine_client.step, request)
-        return self._extract_actions(result)
 
-    def _build_request(self, obs: dict, session_state: Any = None) -> Any:
-        """Convert OpenPI observation dict to engine request.
+        # Extract actions (via transform or default)
+        return self._extract_actions(result, transform)
 
-        Override for different engine types. Default builds OmniDiffusionRequest.
+    def _get_transform(self, obs: dict) -> RobotPolicyTransform:
+        """Select transform by obs['embodiment'] or default."""
+        embodiment = obs.get("embodiment", self.default_embodiment)
+        return get_transform(embodiment)
+
+    def _build_request(self, unified_obs: dict, raw_obs: dict) -> Any:
+        """Build engine request from unified obs.
+
+        Override for non-DiffusionEngine types.
         """
         from vllm_omni.diffusion.diffusion_engine import DiffusionEngine
         from vllm_omni.diffusion.request import OmniDiffusionRequest
@@ -61,44 +104,30 @@ class ServingRealtimeRobotOpenPI:
             f"Override _build_request() for other engine types."
         )
 
-        prompt = obs.get("prompt", "")
-        session_id = obs.get("session_id", "default")
-        needs_reset = session_state.needs_reset if session_state else True
-
         extra_args = {
-            "reset": needs_reset,
-            "session_id": session_id,
-            "images": {
-                "exterior_image_1_left": obs.get("observation/exterior_image_0_left"),
-                "exterior_image_2_left": obs.get("observation/exterior_image_1_left"),
-                "wrist_image_left": obs.get("observation/wrist_image_left"),
-            },
-            "state": {
-                "joint_position": obs.get("observation/joint_position"),
-                "gripper_position": obs.get("observation/gripper_position"),
-            },
+            "reset": self._call_count <= 1,
+            "session_id": self._current_session_id or "default",
+            "unified_obs": unified_obs,
         }
 
+        prompt = unified_obs.get("prompt", "")
         sampling_params = OmniDiffusionSamplingParams(extra_args=extra_args)
         return OmniDiffusionRequest(
             prompts=[prompt],
             sampling_params=sampling_params,
-            request_ids=[f"robot-{session_id}"],
+            request_ids=[f"robot-{self._current_session_id or 'default'}"],
         )
 
-    def _extract_actions(self, result: Any) -> np.ndarray:
-        """Extract action ndarray from engine result."""
+    def _extract_actions(
+        self, result: Any, transform: RobotPolicyTransform
+    ) -> np.ndarray:
+        """Extract actions from engine result."""
         if hasattr(result, "__iter__"):
             result = list(result)
             if result:
                 result = result[0]
 
-        if hasattr(result, "custom_output"):
-            actions = result.custom_output.get("actions")
-            if actions is not None:
-                if hasattr(actions, "numpy"):
-                    return actions.numpy()
-                return np.asarray(actions)
-
-        logger.warning("No actions in result, returning zeros")
-        return np.zeros((24, 8), dtype=np.float32)
+        actions = transform.transform_output(result)
+        if isinstance(actions, torch.Tensor):
+            return actions.cpu().float().numpy()
+        return np.asarray(actions, dtype=np.float32)
