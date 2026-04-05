@@ -162,17 +162,21 @@ class WanLayerNorm(nn.LayerNorm):
 
 class MLPProj(nn.Module):
     """CLIP feature projection for i2v.
-    Source: wan_video_dit_action_casual_chunk.py (referenced at L1381)
+    Source: wan2_1_submodule.py L565-577
     """
 
     def __init__(self, in_dim: int, out_dim: int) -> None:
         super().__init__()
-        self.linear1 = nn.Linear(in_dim, out_dim)
-        self.linear2 = nn.Linear(out_dim, out_dim)
-        self.norm = WanLayerNorm(out_dim)
+        self.proj = nn.Sequential(                                   # L570-573
+            nn.LayerNorm(in_dim),
+            nn.Linear(in_dim, in_dim),
+            nn.GELU(),
+            nn.Linear(in_dim, out_dim),
+            nn.LayerNorm(out_dim),
+        )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError
+    def forward(self, image_embeds: torch.Tensor) -> torch.Tensor:
+        return self.proj(image_embeds)                               # L576
 
 
 # ── Cross-Attention ─────────────────────────────────────────────────
