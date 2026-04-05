@@ -9,6 +9,7 @@ Precision alignment tests need dreamzero conda env.
 Run: PYTHONPATH=. python tests/dreamzero/test_causal_wan_model.py
 """
 
+import math
 import sys
 import os
 
@@ -282,6 +283,49 @@ def test_mlpproj_precision():
     x = torch.randn(1, 257, 1280)
     diff = (vl(x) - dz(x)).abs().max().item()
     assert diff < 1e-5, f"MLPProj: {diff}"
+
+
+# ── Test 8: CausalHead precision ─────────────────────────────────────
+
+def test_causal_head_precision():
+    """CausalHead precision — uses default_weight_loader for weight copy."""
+    from vllm.model_executor.model_loader.weight_utils import default_weight_loader
+    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import CausalHead as VllmHead
+
+    # Load DreamZero's CausalHead via exec (avoid flash_attn import chain)
+    import pathlib
+    src = pathlib.Path(os.path.join(
+        os.path.dirname(__file__), "../../third_party/dreamzero",
+        "groot/vla/model/dreamzero/modules/wan_video_dit_action_casual_chunk.py"
+    )).resolve()
+    if not src.exists():
+        src = pathlib.Path(os.path.join(
+            os.path.dirname(__file__), "../../../dreamzero",
+            "groot/vla/model/dreamzero/modules/wan_video_dit_action_casual_chunk.py"
+        )).resolve()
+    lines = src.read_text().split("\n")
+    # CausalHead is L1190-1215, but needs WanLayerNorm (defined in wan2_1_submodule)
+    from groot.vla.model.dreamzero.modules.wan2_1_submodule import WanLayerNorm
+    start = next(i for i, l in enumerate(lines) if "class CausalHead" in l)
+    end = next(i for i, l in enumerate(lines) if i > start and l.startswith("class "))
+    snippet = "\n".join(lines[start:end])
+    ns = {"torch": torch, "nn": torch.nn, "math": math, "WanLayerNorm": WanLayerNorm}
+    exec(snippet, ns)
+    DzHead = ns["CausalHead"]
+
+    dim, out_dim, patch_size = 64, 4, (1, 2, 2)
+    vl = VllmHead(dim, out_dim, patch_size)
+    dz = DzHead(dim, out_dim, patch_size)
+
+    # Copy weights (norm has elementwise_affine=False, no weight/bias to copy)
+    default_weight_loader(dz.head.weight, vl.head.weight.data)
+    default_weight_loader(dz.head.bias, vl.head.bias.data)
+    dz.modulation.data.copy_(vl.modulation.data)
+
+    x = torch.randn(1, 8, dim)
+    e = torch.randn(1, 8, 1, dim)  # [B, F, 1, C]
+    diff = (vl(x, e) - dz(x, e)).abs().max().item()
+    assert diff < 1e-5, f"CausalHead: {diff}"
 
 
 if __name__ == "__main__":

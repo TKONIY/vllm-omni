@@ -334,14 +334,33 @@ class CausalWanAttentionBlock(nn.Module):
 class CausalHead(nn.Module):
     """Output norm + linear with 2-param modulation.
     Source: wan_video_dit_action_casual_chunk.py L1190-1215
+    Runs once per step (not TP-critical), uses nn.Linear.
     """
 
     def __init__(self, dim: int, out_dim: int, patch_size: tuple, eps: float = 1e-6) -> None:
         super().__init__()
-        raise NotImplementedError
+        self.dim = dim                                               # L1194
+        self.out_dim = out_dim                                       # L1195
+        self.patch_size = patch_size                                 # L1196
+        out_channels = math.prod(patch_size) * out_dim               # L1200
+        self.norm = WanLayerNorm(dim, eps)                           # L1201
+        self.head = nn.Linear(dim, out_channels)                     # L1202
+        self.modulation = nn.Parameter(                              # L1205
+            torch.randn(1, 2, dim) / dim**0.5
+        )
 
     def forward(self, x: torch.Tensor, e: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError
+        """
+        Args:
+            x: [B, L1, C]
+            e: [B, F, 1, C]     (time embedding, unsqueezed)
+        Source: wan_video_dit_action_casual_chunk.py L1207-1215
+        """
+        e = (self.modulation.unsqueeze(1) + e).chunk(2, dim=2)       # L1213
+        x = self.head(                                               # L1214
+            self.norm(x) * (1 + e[1].squeeze(2)) + e[0].squeeze(2)
+        )
+        return x
 
 
 # ── Main Model ──────────────────────────────────────────────────────
