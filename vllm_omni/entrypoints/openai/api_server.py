@@ -60,6 +60,7 @@ from vllm.entrypoints.openai.speech_to_text.serving import (
     OpenAIServingTranscription,
     OpenAIServingTranslation,
 )
+from vllm_omni.entrypoints.openai.realtime.robot.openpi_serving import ServingRealtimeRobotOpenPI
 from vllm.entrypoints.openai.utils import validate_json_request
 from vllm.entrypoints.pooling.classify.serving import ServingClassification
 from vllm.entrypoints.pooling.embed.serving import ServingEmbedding as OpenAIServingEmbedding
@@ -829,6 +830,13 @@ async def omni_init_app_state(
         stage_configs=state.stage_configs,
     )
 
+    # Robot policy serving (for /v1/realtime/robot/openpi)
+    # Works with both diffusion engine and LLM engine client.
+    state.openai_serving_realtime_robot = ServingRealtimeRobotOpenPI(
+        engine_client=engine_client,
+        model_name=served_model_names[0] if served_model_names else None,
+    )
+
     state.enable_server_load_tracking = args.enable_server_load_tracking
     state.server_load_metrics = 0
 
@@ -1205,6 +1213,30 @@ async def realtime_websocket(websocket: WebSocket):
         await websocket.close()
         return
     connection = RealtimeConnection(websocket, serving)
+    await connection.handle_connection()
+
+
+@router.websocket("/v1/realtime/robot/openpi")
+async def realtime_robot_openpi(websocket: WebSocket):
+    """WebSocket endpoint for robot policy inference (OpenPI protocol).
+
+    Binary frames: msgpack observation/action (DreamZero/OpenPI compatible).
+    Text frames: JSON control events (session.update, etc.).
+    See realtime.robot.openpi_connection.py for protocol details.
+    """
+    from vllm_omni.entrypoints.openai.realtime.robot.openpi_connection import (
+        RobotRealtimeConnection,
+    )
+
+    serving = getattr(websocket.app.state, "openai_serving_realtime_robot", None)
+    if serving is None:
+        await websocket.accept()
+        await websocket.send_json(
+            {"type": "error", "error": "Robot policy not available", "code": "unsupported"}
+        )
+        await websocket.close()
+        return
+    connection = RobotRealtimeConnection(websocket, serving)
     await connection.handle_connection()
 
 
