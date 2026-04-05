@@ -9,9 +9,9 @@
 | `rope_apply` | `modeling/causal_wan_model.py` | 0.00e+00 bit-identical | 同上 |
 | `rope_action_apply` | `modeling/causal_wan_model.py` | 0.00e+00 bit-identical | 同上 |
 | `causal_rope_action_apply` | `modeling/causal_wan_model.py` | 0.00e+00 bit-identical | 同上 |
-| `WanRMSNorm` | `modeling/causal_wan_model.py` (import vllm RMSNorm) | 0.00e+00 bit-identical (dim=64,128,5120) | inline 测试 (需 VllmConfig context) |
+| `WanRMSNorm` | `modeling/causal_wan_model.py` (import vllm RMSNorm) | 0.00e+00 bit-identical (dim=64,128,5120) | `tests/dreamzero/test_causal_wan_model.py::test_rmsnorm_precision` L245 |
 | `WanLayerNorm` | `modeling/causal_wan_model.py` | — (nn.LayerNorm 封装) | — |
-| `MLPProj` | `modeling/causal_wan_model.py` | 0.00e+00 bit-identical | inline 测试 (需 VllmConfig context) |
+| `MLPProj` | `modeling/causal_wan_model.py` | 0.00e+00 bit-identical | `tests/dreamzero/test_causal_wan_model.py::test_mlpproj_precision` L267 |
 | `SinusoidalPositionalEncoding` | `modeling/action_encoder.py` | 0.00e+00 bit-identical (dim=64,128,256,5120) | `tests/dreamzero/test_action_encoder.py::test_sinusoidal_positional_encoding` |
 | `CategorySpecificLinear` | `modeling/action_encoder.py` | 0.00e+00 bit-identical | `tests/dreamzero/test_action_encoder.py::test_category_specific_linear` |
 | `CategorySpecificMLP` | `modeling/action_encoder.py` | 0.00e+00 bit-identical | `tests/dreamzero/test_action_encoder.py::test_category_specific_mlp` |
