@@ -1,32 +1,38 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-"""Tests for CausalWanModel.
+"""GPU precision tests for DreamZero CausalWanModel.
 
-Shape tests run without GPU or dreamzero.
-Precision alignment tests need dreamzero conda env.
-
-Run: PYTHONPATH=. python tests/dreamzero/test_causal_wan_model.py
+Run:
+    PYTHONPATH=. /home/yangshen/miniconda3/envs/dreamzero/bin/python -m pytest         tests/dreamzero/test_causal_wan_model.py -v -s
 """
 
-import math
-import sys
 import os
+import sys
 
 import pytest
 import torch
 import torch.nn.functional as F
+from vllm.model_executor.model_loader.weight_utils import default_weight_loader
+
+os.environ.setdefault("ATTENTION_BACKEND", "torch")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../third_party/dreamzero"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../dreamzero"))
 
+pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU required")
 
-# ── Tiny model config for shape tests ──────────────────────────────
+DEVICE = torch.device("cuda")
+DTYPE = torch.float32
+ATOL = 1e-5
+RTOL = 1e-5
+FULL_MODEL_ATOL = 2e-4
+FULL_MODEL_RTOL = 2e-4
 
 TINY_CFG = dict(
     model_type="t2v",
     patch_size=(1, 2, 2),
-    frame_seqlen=4,       # (4/2)*(4/2) = 4 tokens per frame
+    frame_seqlen=4,
     text_len=16,
     in_dim=4,
     dim=64,
@@ -47,497 +53,457 @@ TINY_CFG = dict(
 )
 
 
-def _make_tiny_model():
+def _assert_close(name: str, actual: torch.Tensor, expected: torch.Tensor, *, atol: float = ATOL, rtol: float = RTOL) -> None:
+    actual = actual.detach().float()
+    expected = expected.detach().float()
+    max_diff = (actual - expected).abs().max().item()
+    assert torch.allclose(actual, expected, atol=atol, rtol=rtol), (
+        f"{name}: max_diff={max_diff:.3e}, atol={atol}, rtol={rtol}"
+    )
+    print(f"{name}: max_diff={max_diff:.3e}")
+
+
+def _load_vllm_param(param: torch.nn.Parameter, loaded_weight: torch.Tensor) -> None:
+    weight_loader = getattr(param, "weight_loader", default_weight_loader)
+    weight_loader(param, loaded_weight)
+
+
+
+def _sync_module(vllm_module: torch.nn.Module, dreamzero_module: torch.nn.Module) -> None:
+    vllm_params = dict(vllm_module.named_parameters())
+    dreamzero_params = dict(dreamzero_module.named_parameters())
+
+    missing = sorted(set(dreamzero_params) - set(vllm_params))
+    extra = sorted(set(vllm_params) - set(dreamzero_params))
+    assert not missing, f"Missing params in vllm module: {missing}"
+    assert not extra, f"Unexpected params in vllm module: {extra}"
+
+    for name, dz_param in dreamzero_params.items():
+        _load_vllm_param(vllm_params[name], dz_param.detach())
+
+
+
+def _make_vllm_model():
     from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import CausalWanModel
-    model = CausalWanModel(**TINY_CFG)
+
+    model = CausalWanModel(**TINY_CFG).to(device=DEVICE, dtype=DTYPE)
     model.eval()
     return model
 
 
-def _make_empty_kv(num_layers, batch_size, num_heads, head_dim):
-    return [torch.zeros(2, batch_size, 0, num_heads, head_dim) for _ in range(num_layers)]
+
+def _make_dreamzero_model():
+    from groot.vla.model.dreamzero.modules.wan_video_dit_action_casual_chunk import CausalWanModel
+
+    model = CausalWanModel(**TINY_CFG).to(device=DEVICE, dtype=DTYPE)
+    model.eval()
+    return model
 
 
-# ── Test 1: model init ─────────────────────────────────────────────
 
-def test_init():
-    model = _make_tiny_model()
-    n_params = sum(p.numel() for p in model.parameters())
-    print(f"  Tiny model: {n_params:,} params, {len(model.blocks)} blocks")
-    assert len(model.blocks) == 2
-    print("✅ Init: PASS")
+def _make_empty_kv(num_layers: int, batch_size: int, num_heads: int, head_dim: int) -> list[torch.Tensor]:
+    return [
+        torch.zeros(2, batch_size, 0, num_heads, head_dim, device=DEVICE, dtype=DTYPE)
+        for _ in range(num_layers)
+    ]
 
 
-# ── Test 2: prefill (no action, current_start_frame=0) ─────────────
 
-def test_prefill():
-    model = _make_tiny_model()
-    B, num_heads, head_dim = 1, 4, 16
-    kv_cache = _make_empty_kv(2, B, num_heads, head_dim)
-    crossattn_cache = [torch.zeros(2, B, 16, num_heads, head_dim) for _ in range(2)]
-
-    # x: [B, C_in=4, T=1, H=4, W=4]
-    x = torch.randn(B, 4, 1, 4, 4)
-    timestep = torch.tensor([[0]])
-    context = torch.randn(B, 16, 64)
-
-    with torch.no_grad():
-        video_pred, action_pred, updated_kv = model(
-            x=x, timestep=timestep, context=context, seq_len=4,
-            kv_cache=kv_cache, crossattn_cache=crossattn_cache,
-            current_start_frame=0,
-            action=None, timestep_action=None,
-            state=None, embodiment_id=None,
-            y=None, clip_feature=None,
-        )
-
-    assert video_pred is not None
-    new_seq = updated_kv[0].shape[2]
-    assert new_seq > 0, f"KV cache should grow, got {new_seq}"
-    print(f"  Prefill: video={video_pred.shape}, KV 0→{new_seq}")
-    print("✅ Prefill: PASS")
-
-
-# ── Test 3: inference with action (current_start_frame=1) ───────────
-
-def test_inference_with_action():
-    model = _make_tiny_model()
-    B, num_heads, head_dim = 1, 4, 16
-
-    # Prefill first
-    kv_cache = _make_empty_kv(2, B, num_heads, head_dim)
-    crossattn_cache = [torch.zeros(2, B, 16, num_heads, head_dim) for _ in range(2)]
-
-    with torch.no_grad():
-        _, _, updated_kv = model(
-            x=torch.randn(B, 4, 1, 4, 4), timestep=torch.tensor([[0]]),
-            context=torch.randn(B, 16, 64), seq_len=4,
-            kv_cache=kv_cache, crossattn_cache=crossattn_cache,
-            current_start_frame=0,
-            action=None, timestep_action=None,
-            state=None, embodiment_id=None,
-            y=None, clip_feature=None,
-        )
-    for i, kv in enumerate(updated_kv):
-        kv_cache[i] = kv.clone()
-
-    # Now inference with action
-    with torch.no_grad():
-        video_pred, action_pred, _ = model(
-            x=torch.randn(B, 4, 1, 4, 4), timestep=torch.tensor([[500]]),
-            context=torch.randn(B, 16, 64), seq_len=4,
-            kv_cache=kv_cache, crossattn_cache=crossattn_cache,
-            current_start_frame=1,
-            action=torch.randn(B, 4, 8),
-            timestep_action=torch.tensor([[500] * 4]),
-            state=torch.randn(B, 1, 64),
-            embodiment_id=torch.tensor([0]),
-            y=None, clip_feature=None,
-        )
-
-    assert video_pred is not None
-    assert action_pred is not None
-    print(f"  Inference: video={video_pred.shape}, action={action_pred.shape}")
-    print("✅ Inference with action: PASS")
-
-
-# ── Test 4: KV cache grows across AR steps ──────────────────────────
-
-def test_kv_cache_growth():
-    model = _make_tiny_model()
-    B, num_heads, head_dim = 1, 4, 16
-    kv_cache = _make_empty_kv(2, B, num_heads, head_dim)
-    crossattn_cache = [torch.zeros(2, B, 16, num_heads, head_dim) for _ in range(2)]
-    context = torch.randn(B, 16, 64)
-
-    sizes = []
-    for step in range(3):
-        action = torch.randn(B, 4, 8) if step > 0 else None
-        timestep_action = torch.tensor([[500] * 4]) if step > 0 else None
-        state = torch.randn(B, 1, 64) if step > 0 else None
-        embodiment_id = torch.tensor([0]) if step > 0 else None
-
-        with torch.no_grad():
-            _, _, updated_kv = model(
-                x=torch.randn(B, 4, 1, 4, 4),
-                timestep=torch.tensor([[0 if step == 0 else 500]]),
-                context=context, seq_len=4,
-                kv_cache=kv_cache, crossattn_cache=crossattn_cache,
-                current_start_frame=step,
-                action=action, timestep_action=timestep_action,
-                state=state, embodiment_id=embodiment_id,
-                y=None, clip_feature=None,
-            )
-        for i, kv in enumerate(updated_kv):
-            kv_cache[i] = kv.clone()
-        sizes.append(kv_cache[0].shape[2])
-
-    print(f"  KV sizes: {sizes}")
-    assert all(sizes[i] < sizes[i + 1] for i in range(len(sizes) - 1))
-    print("✅ KV cache growth: PASS")
-
-
-# ── Test 5: RoPE precision alignment ────────────────────────────────
-
-def test_rope_precision():
-    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import (
-        sinusoidal_embedding_1d as vllm_sin,
-        rope_params as vllm_rope,
-        rope_apply as vllm_rope_apply,
-        rope_action_apply as vllm_rope_action,
-        causal_rope_action_apply as vllm_causal_rope,
-    )
-    from groot.vla.model.dreamzero.modules.wan2_1_submodule import (
-        sinusoidal_embedding_1d as dz_sin,
-        rope_params_polar as dz_rope,
-        rope_apply_polar as dz_rope_apply,
-        rope_action_apply_polar as dz_rope_action,
-    )
-    from groot.vla.model.dreamzero.modules.wan_video_dit_action_casual_chunk import (
-        causal_rope_action_apply_polar as dz_causal_rope,
-    )
-
-    # sinusoidal_embedding_1d
-    pos = torch.arange(10).float()
-    for dim in [64, 128, 256]:
-        diff = (vllm_sin(dim, pos) - dz_sin(dim, pos)).abs().max().item()
-        assert diff == 0, f"sinusoidal dim={dim}: {diff}"
-        print(f"  sinusoidal_embedding_1d dim={dim}: OK ({diff:.2e})")
-
-    # rope_params
-    for d in [16, 32, 64, 128]:
-        diff = (vllm_rope(1024, d) - dz_rope(1024, d)).abs().max().item()
-        assert diff == 0, f"rope_params d={d}: {diff}"
-        print(f"  rope_params d={d}: OK ({diff:.2e})")
-
-    # rope_apply
-    d = 16
-    x = torch.randn(1, 8, 4, d)
-    freqs = vllm_rope(1024, d)[:8].view(-1, 1, d // 2)
-    v = vllm_rope_apply(x, freqs)
-    dz = dz_rope_apply(x, freqs)
-    diff = (v.float() - dz.float()).abs().max().item()
-    assert diff < 1e-6, f"rope_apply: {diff}"
-    print(f"  rope_apply: OK ({diff:.2e})")
-
-    # rope_action_apply
-    x = torch.randn(1, 13, 4, d)  # 8 spatial + 4 action + 1 state
-    freqs = vllm_rope(1024, d)[:8].view(-1, 1, d // 2)
-    freqs_a = vllm_rope(10240, d)
-    freqs_s = vllm_rope(1024, d)
-    v = vllm_rope_action(x, freqs, freqs_a, freqs_s, 5, 4, 1)
-    dz = dz_rope_action(x, freqs, freqs_a, freqs_s, 5, 4, 1)
-    diff = (v.float() - dz.float()).abs().max().item()
-    assert diff < 1e-6, f"rope_action_apply: {diff}"
-    print(f"  rope_action_apply: OK ({diff:.2e})")
-
-    # causal_rope_action_apply
-    x = torch.randn(1, 8, 4, d)
-    freqs = vllm_rope(1024, d)[:3].view(-1, 1, d // 2)
-    v = vllm_causal_rope(x, freqs, freqs_a, freqs_s, 5, 4, 1, 0)
-    dz = dz_causal_rope(x, freqs, freqs_a, freqs_s, 5, 4, 1, 0)
-    diff = (v.float() - dz.float()).abs().max().item()
-    assert diff < 1e-6, f"causal_rope: {diff}"
-    print(f"  causal_rope_action_apply: OK ({diff:.2e})")
-
-    print("✅ RoPE + embedding precision: ALL PASS")
-
-
-# ── Test 6: WanRMSNorm precision ────────────────────────────────────
-
-def test_rmsnorm_precision():
-    """RMSNorm precision — uses pytest default_vllm_config fixture."""
-    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import RMSNorm
-    from groot.vla.model.dreamzero.modules.wan2_1_submodule import WanRMSNorm as DzNorm
-
-    for dim in [64, 128, 5120]:
-        vl = RMSNorm(dim, eps=1e-5)
-        dz = DzNorm(dim, eps=1e-5)
-        vl.weight.data.copy_(dz.weight.data)
-        x = torch.randn(2, 10, dim)
-        diff = (vl(x) - dz(x)).abs().max().item()
-        assert diff < 1e-5, f"RMSNorm dim={dim}: {diff}"
-
-
-def test_mlpproj_precision():
-    """MLPProj (ColumnParallel+RowParallel) vs DreamZero (nn.Sequential).
-    Uses default_weight_loader for correct parallel weight copy.
-    """
-    from vllm.model_executor.model_loader.weight_utils import default_weight_loader
-    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import MLPProj as VllmMLP
-    from groot.vla.model.dreamzero.modules.wan2_1_submodule import MLPProj as DzMLP
-
-    vl = VllmMLP(1280, 5120)
-    dz = DzMLP(1280, 5120)
-
-    # Copy weights: dz.proj = Sequential(LN[0], Linear[1], GELU[2], Linear[3], LN[4])
-    # norm1 ← proj[0], fc1 ← proj[1], fc2 ← proj[3], norm2 ← proj[4]
-    default_weight_loader(vl.norm1.weight, dz.proj[0].weight.data)
-    default_weight_loader(vl.norm1.bias, dz.proj[0].bias.data)
-    default_weight_loader(vl.fc1.weight, dz.proj[1].weight.data)
-    default_weight_loader(vl.fc1.bias, dz.proj[1].bias.data)
-    default_weight_loader(vl.fc2.weight, dz.proj[3].weight.data)
-    default_weight_loader(vl.fc2.bias, dz.proj[3].bias.data)
-    default_weight_loader(vl.norm2.weight, dz.proj[4].weight.data)
-    default_weight_loader(vl.norm2.bias, dz.proj[4].bias.data)
-
-    x = torch.randn(1, 257, 1280)
-    diff = (vl(x) - dz(x)).abs().max().item()
-    assert diff < 1e-5, f"MLPProj: {diff}"
-
-
-# ── Test 8: CausalHead precision ─────────────────────────────────────
-
-def test_causal_head_precision():
-    """CausalHead precision — uses default_weight_loader for weight copy."""
-    from vllm.model_executor.model_loader.weight_utils import default_weight_loader
-    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import CausalHead as VllmHead
-
-    # Load DreamZero's CausalHead via exec (avoid flash_attn import chain)
-    import pathlib
-    src = pathlib.Path(os.path.join(
-        os.path.dirname(__file__), "../../third_party/dreamzero",
-        "groot/vla/model/dreamzero/modules/wan_video_dit_action_casual_chunk.py"
-    )).resolve()
-    if not src.exists():
-        src = pathlib.Path(os.path.join(
-            os.path.dirname(__file__), "../../../dreamzero",
-            "groot/vla/model/dreamzero/modules/wan_video_dit_action_casual_chunk.py"
-        )).resolve()
-    lines = src.read_text().split("\n")
-    # CausalHead is L1190-1215, but needs WanLayerNorm (defined in wan2_1_submodule)
-    from groot.vla.model.dreamzero.modules.wan2_1_submodule import WanLayerNorm
-    start = next(i for i, l in enumerate(lines) if "class CausalHead" in l)
-    end = next(i for i, l in enumerate(lines) if i > start and l.startswith("class "))
-    snippet = "\n".join(lines[start:end])
-    ns = {"torch": torch, "nn": torch.nn, "math": math, "WanLayerNorm": WanLayerNorm}
-    exec(snippet, ns)
-    DzHead = ns["CausalHead"]
-
-    dim, out_dim, patch_size = 64, 4, (1, 2, 2)
-    vl = VllmHead(dim, out_dim, patch_size)
-    dz = DzHead(dim, out_dim, patch_size)
-
-    # Copy weights (norm has elementwise_affine=False, no weight/bias to copy)
-    default_weight_loader(dz.head.weight, vl.head.weight.data)
-    default_weight_loader(dz.head.bias, vl.head.bias.data)
-    dz.modulation.data.copy_(vl.modulation.data)
-
-    x = torch.randn(1, 8, dim)
-    e = torch.randn(1, 8, 1, dim)  # [B, F, 1, C]
-    diff = (vl(x, e) - dz(x, e)).abs().max().item()
-    assert diff < 1e-5, f"CausalHead: {diff}"
-
-
-# ── Helper: load DreamZero classes via exec ──────────────────────────
-
-def _load_dz_source():
-    """Read DreamZero source file, return lines."""
-    import pathlib
-    for base in [
-        os.path.join(os.path.dirname(__file__), "../../third_party/dreamzero"),
-        os.path.join(os.path.dirname(__file__), "../../../dreamzero"),
-    ]:
-        p = pathlib.Path(base, "groot/vla/model/dreamzero/modules/wan_video_dit_action_casual_chunk.py").resolve()
-        if p.exists():
-            return p.read_text().split("\n")
-    raise FileNotFoundError("DreamZero source not found")
-
-
-def _exec_dz_classes(start_class: str, end_marker: str, extra_ns: dict | None = None):
-    """Extract and exec class definitions from DreamZero source."""
-    lines = _load_dz_source()
-    start = next(i for i, l in enumerate(lines) if start_class in l)
-    end = next(i for i, l in enumerate(lines) if i > start + 1 and end_marker in l)
-    snippet = "\n".join(lines[start:end])
-    from groot.vla.model.dreamzero.modules.wan2_1_submodule import (
-        WanRMSNorm, WanLayerNorm, rope_action_apply_polar, sinusoidal_embedding_1d,
-    )
-    from groot.vla.model.dreamzero.modules.wan_video_dit_action_casual_chunk import (
-        causal_rope_action_apply_polar,
-    )
-    from groot.vla.model.n1_5.modules.action_encoder import SinusoidalPositionalEncoding, swish
-    from groot.vla.model.dreamzero.modules.wan2_1_attention import AttentionModule
-    ns = {
-        "torch": torch, "nn": torch.nn, "F": torch.nn.functional, "math": math,
-        "WanRMSNorm": WanRMSNorm, "WanLayerNorm": WanLayerNorm,
-        "rope_action_apply": rope_action_apply_polar,
-        "causal_rope_action_apply": causal_rope_action_apply_polar,
-        "sinusoidal_embedding_1d": sinusoidal_embedding_1d,
-        "SinusoidalPositionalEncoding": SinusoidalPositionalEncoding,
-        "swish": swish, "AttentionModule": AttentionModule,
-    }
-    if extra_ns:
-        ns.update(extra_ns)
-    exec(snippet, ns)
-    return ns
-
-
-# ── Monkey-patch DreamZero's flash_attention to use SDPA ─────────────
-# This ensures both sides use the same kernel for fair precision comparison.
-
-def _sdpa_flash_attention(q, k, v, k_lens=None, window_size=(-1, -1)):
-    """Drop-in replacement for DreamZero's flash_attention using SDPA."""
-    return F.scaled_dot_product_attention(
-        q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
-    ).transpose(1, 2)
+def _make_crossattn_cache(num_layers: int) -> list[dict[str, object]]:
+    return [{"is_init": False, "k": None, "v": None} for _ in range(num_layers)]
 
 
 @pytest.fixture(autouse=True)
-def _patch_flash_attention():
-    """Patch DreamZero's flash_attention to SDPA for all GPU precision tests."""
-    import groot.vla.model.dreamzero.modules.wan2_1_submodule as submod
-    original = getattr(submod, "flash_attention", None)
-    submod.flash_attention = _sdpa_flash_attention
+def _manual_seed():
+    torch.manual_seed(0)
+    torch.cuda.manual_seed_all(0)
     yield
-    if original is not None:
-        submod.flash_attention = original
 
 
-# ── Test 9: WanT2VCrossAttention precision ───────────────────────────
+@pytest.fixture(autouse=True)
+def _disable_tf32():
+    old_matmul = torch.backends.cuda.matmul.allow_tf32
+    old_cudnn = torch.backends.cudnn.allow_tf32
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    yield
+    torch.backends.cuda.matmul.allow_tf32 = old_matmul
+    torch.backends.cudnn.allow_tf32 = old_cudnn
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU required")
+
+@pytest.fixture(autouse=True)
+def _patch_dreamzero_attention():
+    import groot.vla.model.dreamzero.modules.attention as base_attention
+    import groot.vla.model.dreamzero.modules.wan2_1_attention as wan_attention
+    import groot.vla.model.dreamzero.modules.wan2_1_submodule as wan_submodule
+    import groot.vla.model.dreamzero.modules.wan_video_dit_action_casual_chunk as wan_chunk
+
+    old_backend = os.environ.get("ATTENTION_BACKEND")
+    os.environ["ATTENTION_BACKEND"] = "torch"
+
+    original_base_flash = base_attention.flash_attention
+    original_wan_attention_flash = wan_attention.flash_attention
+    original_wan_submodule_flash = wan_submodule.flash_attention
+    original_attention_init = wan_attention.AttentionModule.__init__
+    original_t2v_forward = wan_submodule.WanT2VCrossAttention.forward
+
+    def sdpa_flash_attention(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        q_lens=None,
+        k_lens=None,
+        dropout_p: float = 0.0,
+        softmax_scale=None,
+        q_scale=None,
+        causal: bool = False,
+        window_size=(-1, -1),
+        deterministic: bool = False,
+        dtype: torch.dtype = torch.float32,
+        version=None,
+    ) -> torch.Tensor:
+        del window_size, deterministic, dtype, version
+        assert q_lens is None and k_lens is None, "varlen attention is not covered in this test"
+        out_dtype = q.dtype
+        if q_scale is not None:
+            q = q * q_scale
+        q = q.transpose(1, 2).float()
+        k = k.transpose(1, 2).float()
+        v = v.transpose(1, 2).float()
+        out = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=None,
+            is_causal=causal,
+            dropout_p=dropout_p,
+            scale=softmax_scale,
+        )
+        return out.transpose(1, 2).contiguous().to(out_dtype)
+
+    def patched_attention_init(
+        self,
+        num_heads: int,
+        head_dim: int,
+        dropout_p: float = 0.0,
+        softmax_scale=None,
+        q_scale=None,
+        causal: bool = False,
+        window_size=None,
+        deterministic: bool = False,
+        dtype: torch.dtype = torch.bfloat16,
+        backend: str | None = None,
+    ) -> None:
+        del dtype, backend
+        original_attention_init(
+            self,
+            num_heads=num_heads,
+            head_dim=head_dim,
+            dropout_p=dropout_p,
+            softmax_scale=softmax_scale,
+            q_scale=q_scale,
+            causal=causal,
+            window_size=window_size,
+            deterministic=deterministic,
+            dtype=torch.float32,
+            backend="torch",
+        )
+
+    base_attention.flash_attention = sdpa_flash_attention
+    wan_attention.flash_attention = sdpa_flash_attention
+    wan_submodule.flash_attention = sdpa_flash_attention
+
+    def patched_t2v_forward(self, x, context, context_lens=None, crossattn_cache=None):
+        return original_t2v_forward(self, x, context, context_lens, crossattn_cache)
+
+    wan_attention.AttentionModule.__init__ = patched_attention_init
+    wan_submodule.WanT2VCrossAttention.forward = patched_t2v_forward
+    wan_chunk.WAN_CROSSATTENTION_CLASSES["t2v_cross_attn"].forward = patched_t2v_forward
+
+    yield
+
+    base_attention.flash_attention = original_base_flash
+    wan_attention.flash_attention = original_wan_attention_flash
+    wan_submodule.flash_attention = original_wan_submodule_flash
+    wan_attention.AttentionModule.__init__ = original_attention_init
+    wan_submodule.WanT2VCrossAttention.forward = original_t2v_forward
+    wan_chunk.WAN_CROSSATTENTION_CLASSES["t2v_cross_attn"].forward = original_t2v_forward
+    if old_backend is None:
+        os.environ.pop("ATTENTION_BACKEND", None)
+    else:
+        os.environ["ATTENTION_BACKEND"] = old_backend
+
+
+
+def test_hotpath_layer_types():
+    from vllm.model_executor.layers.conv import Conv3dLayer
+    from vllm.model_executor.layers.linear import ColumnParallelLinear, RowParallelLinear
+    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import DistributedRMSNorm
+
+    model = _make_vllm_model()
+    block = model.blocks[0]
+
+    assert isinstance(model.patch_embedding, Conv3dLayer)
+    assert isinstance(block.self_attn.q, ColumnParallelLinear)
+    assert isinstance(block.self_attn.k, ColumnParallelLinear)
+    assert isinstance(block.self_attn.v, ColumnParallelLinear)
+    assert isinstance(block.self_attn.o, RowParallelLinear)
+    assert isinstance(block.self_attn.norm_q, DistributedRMSNorm)
+    assert isinstance(block.self_attn.norm_k, DistributedRMSNorm)
+    assert isinstance(block.cross_attn.q, ColumnParallelLinear)
+    assert isinstance(block.cross_attn.k, ColumnParallelLinear)
+    assert isinstance(block.cross_attn.v, ColumnParallelLinear)
+    assert isinstance(block.cross_attn.o, RowParallelLinear)
+    assert isinstance(block.ffn[0], ColumnParallelLinear)
+    assert isinstance(block.ffn[2], RowParallelLinear)
+
+
+
+def test_distributed_rmsnorm_precision():
+    from groot.vla.model.dreamzero.modules.wan2_1_submodule import WanRMSNorm
+    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import DistributedRMSNorm
+
+    vllm_norm = DistributedRMSNorm(64, eps=1e-6).to(device=DEVICE, dtype=DTYPE)
+    dreamzero_norm = WanRMSNorm(64, eps=1e-6).to(device=DEVICE, dtype=DTYPE)
+    _sync_module(vllm_norm, dreamzero_norm)
+
+    x = torch.randn(2, 10, 64, device=DEVICE, dtype=DTYPE)
+    _assert_close("DistributedRMSNorm", vllm_norm(x), dreamzero_norm(x))
+
+
+
 def test_t2v_cross_attn_precision():
-    from vllm.model_executor.model_loader.weight_utils import default_weight_loader
-    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import WanT2VCrossAttention as VllmCA
-    from groot.vla.model.dreamzero.modules.wan2_1_submodule import WanT2VCrossAttention as DzCA
+    from groot.vla.model.dreamzero.modules.wan2_1_submodule import WanT2VCrossAttention as DreamZeroCrossAttention
+    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import WanT2VCrossAttention
 
-    dim, num_heads = 64, 4
-    device = "cuda"
-    vl = VllmCA(dim, num_heads, qk_norm=True, eps=1e-6).to(device).bfloat16()
-    dz = DzCA(dim, num_heads, (-1, -1), True, 1e-6).to(device).bfloat16()
+    vllm_attn = WanT2VCrossAttention(64, 4, qk_norm=True, eps=1e-6).to(device=DEVICE, dtype=DTYPE)
+    dreamzero_attn = DreamZeroCrossAttention(64, 4, (-1, -1), True, 1e-6).to(device=DEVICE, dtype=DTYPE)
+    _sync_module(vllm_attn, dreamzero_attn)
 
-    for (vn, vp), (dn, dp) in zip(vl.named_parameters(), dz.named_parameters()):
-        default_weight_loader(dp, vp.data)
-
-    x = torch.randn(1, 8, dim, device=device, dtype=torch.bfloat16)
-    context = torch.randn(1, 16, dim, device=device, dtype=torch.bfloat16)
-    diff = (vl(x, context) - dz(x, context, context_lens=None)).abs().max().item()
-    assert diff == 0, f"WanT2VCrossAttention: {diff}"
+    x = torch.randn(1, 8, 64, device=DEVICE, dtype=DTYPE)
+    context = torch.randn(1, 16, 64, device=DEVICE, dtype=DTYPE)
+    _assert_close(
+        "WanT2VCrossAttention",
+        vllm_attn(x, context),
+        dreamzero_attn(x, context, context_lens=None),
+    )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU required")
+
 def test_i2v_cross_attn_precision():
-    from vllm.model_executor.model_loader.weight_utils import default_weight_loader
-    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import WanI2VCrossAttention as VllmCA
-    from groot.vla.model.dreamzero.modules.wan2_1_submodule import WanI2VCrossAttention as DzCA
+    from groot.vla.model.dreamzero.modules.wan2_1_submodule import WanI2VCrossAttention as DreamZeroCrossAttention
+    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import WanI2VCrossAttention
 
-    dim, num_heads = 64, 4
-    device = "cuda"
-    vl = VllmCA(dim, num_heads, qk_norm=True, eps=1e-6).to(device).bfloat16()
-    dz = DzCA(dim, num_heads, (-1, -1), True, 1e-6).to(device).bfloat16()
+    vllm_attn = WanI2VCrossAttention(64, 4, qk_norm=True, eps=1e-6).to(device=DEVICE, dtype=DTYPE)
+    dreamzero_attn = DreamZeroCrossAttention(64, 4, (-1, -1), True, 1e-6).to(device=DEVICE, dtype=DTYPE)
+    _sync_module(vllm_attn, dreamzero_attn)
 
-    for (vn, vp), (dn, dp) in zip(vl.named_parameters(), dz.named_parameters()):
-        default_weight_loader(dp, vp.data)
-
-    x = torch.randn(1, 8, dim, device=device, dtype=torch.bfloat16)
-    context = torch.randn(1, 257 + 16, dim, device=device, dtype=torch.bfloat16)
-    diff = (vl(x, context) - dz(x, context)).abs().max().item()
-    assert diff == 0, f"WanI2VCrossAttention: {diff}"
+    x = torch.randn(1, 8, 64, device=DEVICE, dtype=DTYPE)
+    context = torch.randn(1, 257 + 16, 64, device=DEVICE, dtype=DTYPE)
+    _assert_close("WanI2VCrossAttention", vllm_attn(x, context), dreamzero_attn(x, context))
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU required")
+
 def test_self_attn_precision():
-    from vllm.model_executor.model_loader.weight_utils import default_weight_loader
+    from groot.vla.model.dreamzero.modules.wan_video_dit_action_casual_chunk import CausalWanSelfAttention as DreamZeroSelfAttention
     from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import (
-        CausalWanSelfAttention as VllmSA, rope_params,
-    )
-    ns = _exec_dz_classes("class CausalWanSelfAttention", "class CausalWanAttentionBlock")
-    DzSA = ns["CausalWanSelfAttention"]
-
-    dim, num_heads, frame_seqlen = 64, 4, 4
-    head_dim = dim // num_heads
-    device = "cuda"
-    vl = VllmSA(dim, num_heads, frame_seqlen, num_action_per_block=4, num_state_per_block=1).to(device).bfloat16()
-    dz = DzSA(dim, num_heads, frame_seqlen, num_action_per_block=4, num_state_per_block=1).to(device).bfloat16()
-
-    for (vn, vp), (dn, dp) in zip(vl.named_parameters(), dz.named_parameters()):
-        default_weight_loader(dp, vp.data)
-
-    B = 1
-    kv_cache = torch.zeros(2, B, 0, num_heads, head_dim, device=device, dtype=torch.bfloat16)
-    freqs = rope_params(1024, head_dim)[:frame_seqlen].view(-1, 1, head_dim // 2).to(device)
-    freqs_a = rope_params(10240, head_dim).to(device)
-    freqs_s = rope_params(1024, head_dim).to(device)
-
-    x = torch.randn(B, frame_seqlen, dim, device=device, dtype=torch.bfloat16)
-    vl_out, vl_kv = vl(x, freqs, freqs_a, freqs_s, None, kv_cache, current_start_frame=0)
-    dz_out, dz_kv = dz(x, freqs, freqs_a, freqs_s, None, kv_cache, current_start_frame=0)
-    diff = (vl_out.float() - dz_out.float()).abs().max().item()
-    assert diff == 0, f"CausalWanSelfAttention: {diff}"
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU required")
-def test_attention_block_forward():
-    """CausalWanAttentionBlock — shape + KV cache update on GPU."""
-    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import (
-        CausalWanAttentionBlock as VllmBlock, rope_params,
+        CausalWanSelfAttention,
+        rope_params,
     )
 
-    dim, ffn_dim, num_heads, frame_seqlen = 64, 128, 4, 4
-    head_dim = dim // num_heads
-    device = "cuda"
-    block = VllmBlock("t2v_cross_attn", dim, ffn_dim, num_heads, frame_seqlen,
-                       num_action_per_block=4, num_state_per_block=1).to(device).bfloat16()
+    vllm_attn = CausalWanSelfAttention(64, 4, 4, num_action_per_block=4, num_state_per_block=1).to(
+        device=DEVICE, dtype=DTYPE
+    )
+    dreamzero_attn = DreamZeroSelfAttention(64, 4, 4, num_action_per_block=4, num_state_per_block=1).to(
+        device=DEVICE, dtype=DTYPE
+    )
+    _sync_module(vllm_attn, dreamzero_attn)
 
-    B = 1
-    kv_cache = torch.zeros(2, B, 0, num_heads, head_dim, device=device, dtype=torch.bfloat16)
-    freqs = rope_params(1024, head_dim)[:frame_seqlen].view(-1, 1, head_dim // 2).to(device)
-    freqs_a = rope_params(10240, head_dim).to(device)
-    freqs_s = rope_params(1024, head_dim).to(device)
+    kv_cache = torch.zeros(2, 1, 0, 4, 16, device=DEVICE, dtype=DTYPE)
+    freqs = rope_params(1024, 16)[:4].view(-1, 1, 8).to(device=DEVICE)
+    freqs_action = rope_params(10240, 16).to(device=DEVICE)
+    freqs_state = rope_params(1024, 16).to(device=DEVICE)
+    x = torch.randn(1, 4, 64, device=DEVICE, dtype=DTYPE)
 
-    x = torch.randn(B, frame_seqlen, dim, device=device, dtype=torch.bfloat16)
-    e = torch.randn(B, frame_seqlen, 6, dim, device=device, dtype=torch.bfloat16)
-    context = torch.randn(B, 16, dim, device=device, dtype=torch.bfloat16)
+    vllm_out, vllm_kv = vllm_attn(x, freqs, freqs_action, freqs_state, None, kv_cache, current_start_frame=0)
+    dreamzero_out, dreamzero_kv = dreamzero_attn(
+        x,
+        freqs,
+        freqs_action,
+        freqs_state,
+        None,
+        kv_cache,
+        current_start_frame=0,
+    )
 
-    out, updated_kv = block(x, e, freqs, freqs_a, freqs_s, context,
-                            kv_cache=kv_cache, current_start_frame=0)
-    assert out.shape == (B, frame_seqlen, dim)
-    assert updated_kv is not None
-    assert updated_kv.shape[2] > 0  # KV cache grew
+    _assert_close("CausalWanSelfAttention.out", vllm_out, dreamzero_out)
+    _assert_close("CausalWanSelfAttention.kv", vllm_kv, dreamzero_kv)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU required")
-def test_full_model_gpu():
-    """Full model forward on GPU: tiny config, 2 AR steps."""
-    model = _make_tiny_model().cuda().float()
-    B, num_heads, head_dim = 1, 4, 16
-    device = "cuda"
-    dtype = torch.float32
-    kv_cache = [torch.zeros(2, B, 0, num_heads, head_dim, device=device, dtype=dtype) for _ in range(2)]
-    crossattn_cache = [{"is_init": False, "k": None, "v": None} for _ in range(2)]
 
-    # Step 1: prefill
+def test_attention_block_precision():
+    from groot.vla.model.dreamzero.modules.wan_video_dit_action_casual_chunk import (
+        CausalWanAttentionBlock as DreamZeroAttentionBlock,
+    )
+    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import (
+        CausalWanAttentionBlock,
+        rope_params,
+    )
+
+    vllm_block = CausalWanAttentionBlock(
+        "t2v_cross_attn",
+        64,
+        128,
+        4,
+        4,
+        num_action_per_block=4,
+        num_state_per_block=1,
+    ).to(device=DEVICE, dtype=DTYPE)
+    dreamzero_block = DreamZeroAttentionBlock(
+        "t2v_cross_attn",
+        64,
+        128,
+        4,
+        4,
+        num_action_per_block=4,
+        num_state_per_block=1,
+    ).to(device=DEVICE, dtype=DTYPE)
+    _sync_module(vllm_block, dreamzero_block)
+
+    kv_cache = torch.zeros(2, 1, 0, 4, 16, device=DEVICE, dtype=DTYPE)
+    freqs = rope_params(1024, 16)[:4].view(-1, 1, 8).to(device=DEVICE)
+    freqs_action = rope_params(10240, 16).to(device=DEVICE)
+    freqs_state = rope_params(1024, 16).to(device=DEVICE)
+    x = torch.randn(1, 4, 64, device=DEVICE, dtype=DTYPE)
+    e = torch.randn(1, 4, 6, 64, device=DEVICE, dtype=DTYPE)
+    context = torch.randn(1, 16, 64, device=DEVICE, dtype=DTYPE)
+
+    vllm_out, vllm_kv = vllm_block(
+        x=x,
+        e=e,
+        freqs=freqs,
+        freqs_action=freqs_action,
+        freqs_state=freqs_state,
+        context=context,
+        action_register_length=None,
+        kv_cache=kv_cache,
+        current_start_frame=0,
+    )
+    dreamzero_out, dreamzero_kv = dreamzero_block(
+        x=x,
+        e=e,
+        freqs=freqs,
+        freqs_action=freqs_action,
+        freqs_state=freqs_state,
+        action_register_length=None,
+        context=context,
+        kv_cache=kv_cache,
+        current_start_frame=0,
+    )
+
+    _assert_close("CausalWanAttentionBlock.out", vllm_out, dreamzero_out)
+    _assert_close("CausalWanAttentionBlock.kv", vllm_kv, dreamzero_kv)
+
+
+
+def test_full_model_precision_prefill_and_ar_step():
+    vllm_model = _make_vllm_model()
+    dreamzero_model = _make_dreamzero_model()
+    _sync_module(vllm_model, dreamzero_model)
+
+    batch_size = 1
+    num_heads = TINY_CFG["num_heads"]
+    head_dim = TINY_CFG["dim"] // TINY_CFG["num_heads"]
+
+    vllm_kv = _make_empty_kv(TINY_CFG["num_layers"], batch_size, num_heads, head_dim)
+    dreamzero_kv = _make_empty_kv(TINY_CFG["num_layers"], batch_size, num_heads, head_dim)
+    vllm_crossattn_cache = _make_crossattn_cache(TINY_CFG["num_layers"])
+    dreamzero_crossattn_cache = _make_crossattn_cache(TINY_CFG["num_layers"])
+
+    x_prefill = torch.randn(batch_size, 4, 1, 4, 4, device=DEVICE, dtype=DTYPE)
+    timestep_prefill = torch.tensor([[0]], device=DEVICE)
+    context = torch.randn(batch_size, 16, 64, device=DEVICE, dtype=DTYPE)
+
     with torch.no_grad():
-        v1, a1, kv1 = model(
-            x=torch.randn(B, 4, 1, 4, 4, device=device, dtype=dtype),
-            timestep=torch.tensor([[0]], device=device),
-            context=torch.randn(B, 16, 64, device=device, dtype=dtype),
-            seq_len=4, kv_cache=kv_cache, crossattn_cache=crossattn_cache,
-            current_start_frame=0, y=None, clip_feature=None,
+        vllm_video_1, vllm_action_1, vllm_kv_1 = vllm_model(
+            x=x_prefill,
+            timestep=timestep_prefill,
+            context=context,
+            seq_len=4,
+            kv_cache=vllm_kv,
+            crossattn_cache=vllm_crossattn_cache,
+            current_start_frame=0,
+            action=None,
+            timestep_action=None,
+            state=None,
+            embodiment_id=None,
+            y=None,
+            clip_feature=None,
         )
-    assert v1.shape[0] == B
-    for i, kv in enumerate(kv1):
-        kv_cache[i] = kv.clone()
+        dreamzero_video_1, dreamzero_action_1, dreamzero_kv_1 = dreamzero_model(
+            x=x_prefill,
+            timestep=timestep_prefill,
+            context=context,
+            seq_len=4,
+            kv_cache=dreamzero_kv,
+            crossattn_cache=dreamzero_crossattn_cache,
+            current_start_frame=0,
+            action=None,
+            timestep_action=None,
+            state=None,
+            embodiment_id=None,
+            y=None,
+            clip_feature=None,
+        )
 
-    # Step 2: with action
+    assert vllm_action_1 is None
+    assert dreamzero_action_1 is None
+    _assert_close("CausalWanModel.prefill.video", vllm_video_1, dreamzero_video_1, atol=FULL_MODEL_ATOL, rtol=FULL_MODEL_RTOL)
+    for idx, (vllm_layer_kv, dreamzero_layer_kv) in enumerate(zip(vllm_kv_1, dreamzero_kv_1, strict=True)):
+        _assert_close(f"CausalWanModel.prefill.kv[{idx}]", vllm_layer_kv, dreamzero_layer_kv)
+
+    x_step = torch.randn(batch_size, 4, 1, 4, 4, device=DEVICE, dtype=DTYPE)
+    timestep_step = torch.tensor([[500]], device=DEVICE)
+    action = torch.randn(batch_size, 4, 8, device=DEVICE, dtype=DTYPE)
+    timestep_action = torch.tensor([[500, 500, 500, 500]], device=DEVICE)
+    state = torch.randn(batch_size, 1, 64, device=DEVICE, dtype=DTYPE)
+    embodiment_id = torch.tensor([0], device=DEVICE)
+
     with torch.no_grad():
-        v2, a2, kv2 = model(
-            x=torch.randn(B, 4, 1, 4, 4, device=device, dtype=dtype),
-            timestep=torch.tensor([[500]], device=device),
-            context=torch.randn(B, 16, 64, device=device, dtype=dtype),
-            seq_len=4, kv_cache=kv_cache, crossattn_cache=crossattn_cache,
+        vllm_video_2, vllm_action_2, vllm_kv_2 = vllm_model(
+            x=x_step,
+            timestep=timestep_step,
+            context=context,
+            seq_len=4,
+            kv_cache=[kv.clone() for kv in vllm_kv_1],
+            crossattn_cache=vllm_crossattn_cache,
             current_start_frame=1,
-            action=torch.randn(B, 4, 8, device=device, dtype=dtype),
-            timestep_action=torch.tensor([[500]*4], device=device),
-            state=torch.randn(B, 1, 64, device=device, dtype=dtype),
-            embodiment_id=torch.tensor([0], device=device),
-            y=None, clip_feature=None,
+            action=action,
+            timestep_action=timestep_action,
+            state=state,
+            embodiment_id=embodiment_id,
+            y=None,
+            clip_feature=None,
         )
-    assert v2.shape[0] == B
-    assert a2 is not None
-    assert a2.shape == (B, 4, 8)
+        dreamzero_video_2, dreamzero_action_2, dreamzero_kv_2 = dreamzero_model(
+            x=x_step,
+            timestep=timestep_step,
+            context=context,
+            seq_len=4,
+            kv_cache=[kv.clone() for kv in dreamzero_kv_1],
+            crossattn_cache=dreamzero_crossattn_cache,
+            current_start_frame=1,
+            action=action,
+            timestep_action=timestep_action,
+            state=state,
+            embodiment_id=embodiment_id,
+            y=None,
+            clip_feature=None,
+        )
 
-
-if __name__ == "__main__":
-    print("Run with pytest: pytest tests/dreamzero/test_causal_wan_model.py -v")
+    assert vllm_action_2 is not None
+    assert dreamzero_action_2 is not None
+    _assert_close("CausalWanModel.step.video", vllm_video_2, dreamzero_video_2, atol=FULL_MODEL_ATOL, rtol=FULL_MODEL_RTOL)
+    _assert_close("CausalWanModel.step.action", vllm_action_2, dreamzero_action_2, atol=FULL_MODEL_ATOL, rtol=FULL_MODEL_RTOL)
+    for idx, (vllm_layer_kv, dreamzero_layer_kv) in enumerate(zip(vllm_kv_2, dreamzero_kv_2, strict=True)):
+        _assert_close(f"CausalWanModel.step.kv[{idx}]", vllm_layer_kv, dreamzero_layer_kv)

@@ -1,83 +1,74 @@
 # DreamZero Implementation TODO
 
+## 当前状态
+
+- `action_encoder.py`：已完成，对齐 DreamZero，GPU 精度测试通过。
+- `causal_wan_model.py`：inference-only 端口已完成，热点路径已经切到 vllm-omni 基础设施，单卡与 TP=2 GPU 对齐测试通过。
+- 训练路径：按要求删除，不再列为 TODO。
+
 ## 已完成
 
-| 组件 | 文件 | 精度测试结果 | 测试位置 |
-|------|------|------------|---------|
-| `sinusoidal_embedding_1d` | `modeling/causal_wan_model.py` | 0.00e+00 bit-identical | `tests/dreamzero/test_causal_wan_model.py::test_rope_precision` |
-| `rope_params` | `modeling/causal_wan_model.py` | 0.00e+00 bit-identical (d=16,32,64,128) | 同��� |
-| `rope_apply` | `modeling/causal_wan_model.py` | 0.00e+00 bit-identical | 同上 |
-| `rope_action_apply` | `modeling/causal_wan_model.py` | 0.00e+00 bit-identical | 同上 |
-| `causal_rope_action_apply` | `modeling/causal_wan_model.py` | 0.00e+00 bit-identical | 同上 |
-| `WanRMSNorm` | `modeling/causal_wan_model.py` (import vllm RMSNorm) | 0.00e+00 bit-identical (dim=64,128,5120) | `tests/dreamzero/test_causal_wan_model.py::test_rmsnorm_precision` L245 |
-| `WanLayerNorm` | `modeling/causal_wan_model.py` | — (nn.LayerNorm 封装) | — |
-| `MLPProj` | `modeling/causal_wan_model.py` | 0.00e+00 bit-identical | `tests/dreamzero/test_causal_wan_model.py::test_mlpproj_precision` L267 |
-| `SinusoidalPositionalEncoding` | `modeling/action_encoder.py` | 0.00e+00 bit-identical (dim=64,128,256,5120) | `tests/dreamzero/test_action_encoder.py::test_sinusoidal_positional_encoding` |
-| `CategorySpecificLinear` | `modeling/action_encoder.py` | 0.00e+00 bit-identical | `tests/dreamzero/test_action_encoder.py::test_category_specific_linear` |
-| `CategorySpecificMLP` | `modeling/action_encoder.py` | 0.00e+00 bit-identical | `tests/dreamzero/test_action_encoder.py::test_category_specific_mlp` |
-| `MultiEmbodimentActionEncoder` | `modeling/action_encoder.py` | 0.00e+00 bit-identical | `tests/dreamzero/test_action_encoder.py::test_multi_embodiment_action_encoder` |
-| `DreamZeroState.reset` | `state_dreamzero.py` | — (纯状态管理) | — |
-| `DreamZeroState.accumulate_frames` | `state_dreamzero.py` | 待测 | 待写 |
-| `DreamZeroState.should_reset` | `state_dreamzero.py` | 待测 | 待写 |
-| `DreamZeroState.create_kv_caches` | `state_dreamzero.py` | 待测 | 待写 |
-| `DreamZeroState.update_kv_cache` | `state_dreamzero.py` | 待测 | 待写 |
-| `DreamZeroState.get_kv_caches` | `state_dreamzero.py` | 待测 | 待写 |
-| `ServingRealtimeRobotOpenPI` | `entrypoints/.../openpi_serving.py` | — (serving 层) | — |
-| `RobotRealtimeConnection` | `entrypoints/.../openpi_connection.py` | — (协议层) | — |
-| Transform (base/droid/roboarena) | `entrypoints/.../transform/` | — (key 映射) | — |
+| 组件 | 当前实现 | 状态 | 验证 |
+|------|---------|------|------|
+| `SinusoidalPositionalEncoding` | `modeling/action_encoder.py` | 与 DreamZero 一致 | `tests/dreamzero/test_action_encoder.py::test_sinusoidal_positional_encoding` |
+| `CategorySpecificLinear` | `modeling/action_encoder.py` | 与 DreamZero 一致 | `tests/dreamzero/test_action_encoder.py::test_category_specific_linear` |
+| `CategorySpecificMLP` | `modeling/action_encoder.py` | 与 DreamZero 一致 | `tests/dreamzero/test_action_encoder.py::test_category_specific_mlp` |
+| `MultiEmbodimentActionEncoder` | `modeling/action_encoder.py` | 与 DreamZero 一致 | `tests/dreamzero/test_action_encoder.py::test_multi_embodiment_action_encoder` |
+| `DistributedRMSNorm` | `modeling/causal_wan_model.py` | 替代 DreamZero `WanRMSNorm`，支持 TP 全局 RMS；已修复 TP=2 stream/all-reduce 精度问题 | `tests/dreamzero/test_causal_wan_model.py::test_distributed_rmsnorm_precision` / `tests/dreamzero/test_causal_wan_model_tp2.py::test_causal_wan_model_tp2_precision` |
+| `MLPProj` | `modeling/causal_wan_model.py` | 已复用 `ColumnParallelLinear + RowParallelLinear` | 已纳入 full model 精度覆盖 |
+| `WanT2VCrossAttention` | `modeling/causal_wan_model.py` | 已复用 `Attention + Column/RowParallelLinear`，单卡与 TP=2 对齐 | `tests/dreamzero/test_causal_wan_model.py::test_t2v_cross_attn_precision` / `tests/dreamzero/test_causal_wan_model_tp2.py::test_causal_wan_model_tp2_precision` |
+| `WanI2VCrossAttention` | `modeling/causal_wan_model.py` | 已复用 `Attention + Column/RowParallelLinear`，已修复 TP=2 I2V 偏差 | `tests/dreamzero/test_causal_wan_model.py::test_i2v_cross_attn_precision` / `tests/dreamzero/test_causal_wan_model_tp2.py::test_causal_wan_model_tp2_precision` |
+| `CausalWanSelfAttention` | `modeling/causal_wan_model.py` | 已复用 `Attention + Column/RowParallelLinear + DistributedRMSNorm`，单卡与 TP=2 对齐 | `tests/dreamzero/test_causal_wan_model.py::test_self_attn_precision` / `tests/dreamzero/test_causal_wan_model_tp2.py::test_causal_wan_model_tp2_precision` |
+| `CausalWanAttentionBlock` | `modeling/causal_wan_model.py` | FFN 已切到 TP 线性层，单卡与 TP=2 对齐 | `tests/dreamzero/test_causal_wan_model.py::test_attention_block_precision` / `tests/dreamzero/test_causal_wan_model_tp2.py::test_causal_wan_model_tp2_precision` |
+| `CausalWanModel.__init__` | `modeling/causal_wan_model.py` | `patch_embedding` 已切到 `Conv3dLayer` | `tests/dreamzero/test_causal_wan_model.py::test_hotpath_layer_types` |
+| `_create_freqs` / `unpatchify` / `_forward_blocks` / `_forward_inference` | `modeling/causal_wan_model.py` | 与 DreamZero inference 分支对齐 | `tests/dreamzero/test_causal_wan_model.py::test_full_model_precision_prefill_and_ar_step` |
+| tiny full model prefill + AR step | `modeling/causal_wan_model.py` | 单卡与 TP=2 GPU 数值对齐通过 | `tests/dreamzero/test_causal_wan_model.py::test_full_model_precision_prefill_and_ar_step` / `tests/dreamzero/test_causal_wan_model_tp2.py::test_causal_wan_model_tp2_precision` |
 
-## causal_wan_model.py 待实现
+### TP=2 修复记录
 
-### 需要修改已有代码
+| 项目 | 状态 | 备注 |
+|------|------|------|
+| TP=2 测试脚本 | 已完成 | `tests/dreamzero/test_causal_wan_model_tp2.py` 已覆盖热点层、RMSNorm、T2V/I2V、self-attn、block、full model |
+| TP=2 I2V 精度偏差 | 已修复 | 根因是 `DistributedRMSNorm` 在 TP=2 下通过 pynccl stream 规约时与本地算子发生竞态，已改为 TP group 上的 `torch.distributed.all_reduce(...)`，并在 I2V 路径补充默认 stream 恢复 |
 
-| 组件 | 当前实现 | 改成 | 精度测试结果 | 测试位置 |
-|------|---------|------|------------|---------|
-| `MLPProj` | `nn.Linear` × 2 | `ColumnParallelLinear` + `RowParallelLinear` | 待重测 | 待更新 |
+## 剩余 TODO
 
-### 需要新实现
+### 并行框架复用
 
-| 组件 | 复用 vllm 算子 | 对应 DreamZero 原始 | 精度测试结果 | 测试位置 |
-|------|--------------|-------------------|------------|---------|
-| `CausalWanSelfAttention` | `RMSNorm` + `F.scaled_dot_product_attention` | `wan_video_dit...py` L188-1084 | shape PASS | `test_init` / `test_prefill` / `test_inference_with_action` |
-| `WanT2VCrossAttention` | `RMSNorm` + `F.sdpa` | `wan2_1_submodule.py` L243-278 | shape PASS | `test_init` |
-| `WanI2VCrossAttention` | `RMSNorm` + `F.sdpa` | `wan2_1_submodule.py` L308-362 | shape PASS | `test_init` |
-| `CausalWanAttentionBlock` | 组合 self+cross+FFN | `wan_video_dit...py` L1087-1190 | shape PASS | `test_init` |
-| `CausalHead` | `nn.Linear` | `wan_video_dit...py` L1190-1215 | bit-identical | `test_causal_head_precision` |
-| `CausalWanModel.__init__` | `nn.Conv3d` + 组装 | `wan_video_dit...py` L1230-1387 | shape PASS | `test_init` |
-| `_create_freqs` | — | `wan_video_dit...py` L2151-2174 | shape PASS | `test_prefill` |
-| `unpatchify` | — | `wan_video_dit...py` L2127-2149 | shape PASS | `test_prefill` |
-| `_forward_blocks` | — | `wan_video_dit...py` L1691-1779 | shape PASS | `test_prefill` |
-| `_forward_inference` | — | `wan_video_dit...py` L1863-1950 | shape PASS (KV cache growth [4,8,12]) | `test_prefill` / `test_inference_with_action` / `test_kv_cache_growth` |
+| 项目 | 现状 | 备注 |
+|------|------|------|
+| Sequence Parallel / Ulysses / Ring | 未接入 | 当前注意力显式 `skip_sequence_parallel=True`，模型也没有 `_sp_plan` |
+| Bagel / WAN2.2 风格的并行边界切分 | 未接入 | 需要单独设计 DreamZero 的 sharding 边界和 cache 语义 |
 
-## 其他待实现文件
+### 严格一致性收尾
 
-| 文件 | 对应 DreamZero 原始 | 精度测试结果 | 测试位置 |
-|------|-------------------|------------|---------|
-| `pipeline_dreamzero.py` | `WANPolicyHead.lazy_joint_video_action` L929-1270 | 待测 | 待写 |
-| `modeling/wan_video_image_encoder.py` | `wan_video_image_encoder.py` L856-891 | 待测 | 待写 |
-| `action_transform.py` | `GrootSimPolicy.apply/unapply` | 待测 | 待写 |
-| registry 注册 | `registry.py` 加一行 | — | — |
-| 端到端测试 | server + test_client_AR.py | 待测 | 待写 |
+| 项目 | 现状 | 备注 |
+|------|------|------|
+| `img_emb` 创建条件 | 与原始不一致 | 当前 `("i2v", "ti2v")`，原始仅 `"i2v"` |
+| `init_weights()` | 未保留 | 仅影响裸模型构造，不影响已加载权重的推理路径 |
 
-## vllm 算子复用汇总
+### 其他未完成文件
 
-| vllm 算子 | import 路径 | 用在哪 |
-|-----------|-----------|--------|
-| `QKVParallelLinear` | `vllm.model_executor.layers.linear` | self-attn Q/K/V (×40), cross-attn Q/K/V (×40) |
-| `RowParallelLinear` | 同上 | self-attn O (×40), cross-attn O (×40), FFN down (×40), MLPProj down |
-| `ColumnParallelLinear` | 同上 | FFN up (×40), MLPProj up |
-| `RMSNorm` | `vllm.model_executor.layers.layernorm` | QK norm (×80) |
-| `Attention` | `vllm_omni.diffusion.attention.layer` | self-attn (×40), cross-attn (×40) |
-| `Conv3dLayer` | `vllm.model_executor.layers.conv` | patch_embedding (×1) |
+| 文件 | 对应 DreamZero 原始 | 状态 |
+|------|-------------------|------|
+| `pipeline_dreamzero.py` | `WANPolicyHead.lazy_joint_video_action` L929-1270 | 待测 |
+| `modeling/wan_video_image_encoder.py` | `wan_video_image_encoder.py` L856-891 | 待测 |
+| `action_transform.py` | `GrootSimPolicy.apply/unapply` | 待测 |
+| registry 注册 | `registry.py` | 待补 |
+| 端到端服务测试 | server + client | 待补 |
 
-## 不复用的组件
+## 当前 vllm-omni 复用情况
 
-| 组件 | 原因 |
-|------|------|
-| `text_embedding` (nn.Linear×2) | 跑一次，不在热路径 |
-| `time_embedding` (nn.Linear×2) | 同上 |
-| `time_projection` (nn.Linear×1) | 同上 |
-| `CausalHead` (nn.Linear×1) | 同上 |
-| `WanLayerNorm` (nn.LayerNorm) | 标准 PyTorch |
-| `CategorySpecificLinear/MLP` | 非标准 Linear (per-embodiment weights)，不能替换 |
-| CLIP (WanImageEncoder) | open_clip，与 vllm 的 HF CLIP 不同 |
+| 基础设施 | 用途 |
+|---------|------|
+| `Conv3dLayer` | `patch_embedding` |
+| `ColumnParallelLinear` | self-attn / cross-attn QKV、FFN up、`MLPProj` |
+| `RowParallelLinear` | self-attn / cross-attn O、FFN down、`MLPProj` |
+| `DistributedRMSNorm` | self-attn / cross-attn QK norm |
+| `Attention` | self-attn / cross-attn kernel 调度与后端选择 |
+
+## 验证命令
+
+- `MASTER_PORT=29601 PYTHONPATH=. /home/yangshen/miniconda3/envs/dreamzero/bin/python -m pytest tests/dreamzero/test_action_encoder.py -v -s`
+- `PYTHONPATH=. /home/yangshen/miniconda3/envs/dreamzero/bin/python -m pytest tests/dreamzero/test_causal_wan_model.py -v -s`
+- `PYTHONPATH=. /home/yangshen/miniconda3/envs/dreamzero/bin/python -m pytest tests/dreamzero/test_causal_wan_model_tp2.py -v -s`

@@ -11,7 +11,7 @@ Key differences from WanTransformer3DModel (wan2_2_transformer.py):
 - KV cache for streaming inference
 - Action/state token support (appended after video tokens)
 - Extended RoPE with action/state-specific frequencies
-- Dual forward: _forward_inference (KV cache) / _forward_train
+- Inference-only forward with KV cache
 """
 
 from __future__ import annotations
@@ -21,15 +21,19 @@ from typing import Any
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
-from vllm.model_executor.layers.activation import NewGELU
-from vllm.model_executor.layers.layernorm import LayerNorm
+from vllm.distributed import (
+    get_tensor_model_parallel_rank,
+    get_tensor_model_parallel_world_size,
+    get_tp_group,
+    tensor_model_parallel_all_reduce,
+)
+from vllm.model_executor.layers.conv import Conv3dLayer
 from vllm.model_executor.layers.linear import (
     ColumnParallelLinear,
-    QKVParallelLinear,
     RowParallelLinear,
 )
+from vllm.model_executor.utils import set_weight_attrs
 
 from vllm_omni.diffusion.attention.layer import Attention
 from vllm_omni.diffusion.models.dreamzero.modeling.action_encoder import (
@@ -94,7 +98,7 @@ def rope_action_apply(
     num_action_per_block: int = 32,
     num_state_per_block: int = 1,
 ) -> torch.Tensor:
-    """RoPE with action/state frequency tables (training mode).
+    """RoPE with action/state frequency tables for multi-step sequences.
     Source: wan2_1_submodule.py L130-159 (rope_action_apply_polar)
     """
     B, seq_len, n, _ = x.shape                                  # L139
@@ -149,13 +153,8 @@ def causal_rope_action_apply(
 
 
 # ── Normalization ───────────────────────────────────────────────────
-# Reuse wan2_2's DistributedRMSNorm (supports TP, no vllm config needed)
 # Source: wan2_1_submodule.py L162-178 (WanRMSNorm)
 #         wan2_2_transformer.py L65-95 (DistributedRMSNorm — TP-aware version)
-
-from vllm.model_executor.layers.layernorm import RMSNorm  # noqa: E402
-# Replaces DreamZero's WanRMSNorm (wan2_1_submodule.py L162-178)
-# vllm RMSNorm: TP support + CUDA kernels. Needs VllmConfig context.
 
 
 class WanLayerNorm(nn.LayerNorm):
@@ -163,6 +162,71 @@ class WanLayerNorm(nn.LayerNorm):
 
     def __init__(self, dim: int, eps: float = 1e-6, elementwise_affine: bool = False) -> None:
         super().__init__(dim, eps=eps, elementwise_affine=elementwise_affine)
+
+
+class DistributedRMSNorm(nn.Module):
+    """RMSNorm that computes global RMS across tensor parallel ranks."""
+
+    def __init__(self, hidden_size: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        set_weight_attrs(self.weight, {"weight_loader": self.weight_loader})
+
+    def weight_loader(self, param: torch.Tensor, loaded_weight: torch.Tensor) -> None:
+        if param.shape == loaded_weight.shape:
+            param.data.copy_(loaded_weight)
+            return
+
+        tp_size = get_tensor_model_parallel_world_size()
+        if loaded_weight.shape[0] % tp_size != 0:
+            raise ValueError(
+                f"Cannot shard RMSNorm weight of shape {tuple(loaded_weight.shape)} across tp_size={tp_size}."
+            )
+
+        shard_size = loaded_weight.shape[0] // tp_size
+        start_idx = get_tensor_model_parallel_rank() * shard_size
+        shard = loaded_weight.narrow(0, start_idx, shard_size)
+        if param.shape != shard.shape:
+            raise ValueError(
+                f"RMSNorm shard shape mismatch: param={tuple(param.shape)}, shard={tuple(shard.shape)}."
+            )
+        param.data.copy_(shard)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        _ensure_default_cuda_stream(x.device)
+        tp_size = get_tensor_model_parallel_world_size()
+        x_float = x.float()
+        local_sum_sq = (x_float**2).sum(dim=-1, keepdim=True)
+        local_count = x.shape[-1]
+
+        if tp_size > 1:
+            global_sum_sq = local_sum_sq.clone()
+            torch.distributed.all_reduce(global_sum_sq, group=get_tp_group().device_group)
+            global_count = local_count * tp_size
+        else:
+            global_sum_sq = local_sum_sq
+            global_count = local_count
+
+        rms = torch.sqrt(global_sum_sq / global_count + self.eps)
+        return (x_float / rms).type_as(x) * self.weight
+
+
+def _ensure_default_cuda_stream(device: torch.device) -> None:
+    if device.type != "cuda" or torch.cuda.is_current_stream_capturing():
+        return
+
+    current_stream = torch.cuda.current_stream(device)
+    default_stream = torch.cuda.default_stream(device)
+    if current_stream.cuda_stream == default_stream.cuda_stream:
+        return
+
+    try:
+        from vllm.utils.torch_utils import prev_set_stream
+    except ImportError:
+        torch.cuda.set_stream(default_stream)
+    else:
+        prev_set_stream(default_stream)
 
 
 # ── Projections ─────────────────────────────────────────────────────
@@ -187,6 +251,7 @@ class MLPProj(nn.Module):
         self.norm2 = nn.LayerNorm(out_dim)                           # L573
 
     def forward(self, image_embeds: torch.Tensor) -> torch.Tensor:
+        _ensure_default_cuda_stream(image_embeds.device)
         x = self.norm1(image_embeds)                                 # L576
         x = self.fc1(x)
         x = self.act(x)
@@ -213,33 +278,48 @@ class WanT2VCrossAttention(nn.Module):
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.q = nn.Linear(dim, dim)                                 # L205
-        self.k = nn.Linear(dim, dim)                                 # L206
-        self.v = nn.Linear(dim, dim)                                 # L207
-        self.o = nn.Linear(dim, dim)                                 # L208
-        self.norm_q = RMSNorm(dim, eps=eps) if qk_norm else nn.Identity()  # L209
-        self.norm_k = RMSNorm(dim, eps=eps) if qk_norm else nn.Identity()  # L210
-        self.attn = Attention(num_heads, self.head_dim, causal=False,
-                              softmax_scale=self.head_dim ** -0.5)
+        tp_size = get_tensor_model_parallel_world_size()
+        if num_heads % tp_size != 0:
+            raise ValueError(
+                f"num_heads={num_heads} must be divisible by tp_size={tp_size}."
+            )
+        self.tp_num_heads = num_heads // tp_size
+        self.tp_inner_dim = self.tp_num_heads * self.head_dim
+        self.q = ColumnParallelLinear(dim, dim, bias=True, gather_output=False, return_bias=False)  # L205
+        self.k = ColumnParallelLinear(dim, dim, bias=True, gather_output=False, return_bias=False)  # L206
+        self.v = ColumnParallelLinear(dim, dim, bias=True, gather_output=False, return_bias=False)  # L207
+        self.o = RowParallelLinear(dim, dim, bias=True, input_is_parallel=True, return_bias=False)  # L208
+        self.norm_q = DistributedRMSNorm(self.tp_inner_dim, eps=eps) if qk_norm else nn.Identity()  # L209
+        self.norm_k = DistributedRMSNorm(self.tp_inner_dim, eps=eps) if qk_norm else nn.Identity()  # L210
+        self.attn = Attention(
+            self.tp_num_heads,
+            self.head_dim,
+            causal=False,
+            softmax_scale=self.head_dim ** -0.5,
+            skip_sequence_parallel=True,
+        )
 
     def forward(self, x: torch.Tensor, context: torch.Tensor,
+                context_lens: torch.Tensor | None = None,
                 crossattn_cache: dict | None = None) -> torch.Tensor:
         """Source: wan2_1_submodule.py L245-278"""
-        b, n, d = x.size(0), self.num_heads, self.head_dim          # L253
-        q = self.norm_q(self.q(x)).view(b, -1, n, d)                # L256
+        del context_lens
+        _ensure_default_cuda_stream(x.device)
+        b, n, d = x.size(0), self.tp_num_heads, self.head_dim       # L253
+        q = self.norm_q(self.q(x)).unflatten(2, (n, d))             # L256
         if crossattn_cache is not None:                              # L258
             if not crossattn_cache["is_init"]:                       # L259
                 crossattn_cache["is_init"] = True                    # L260
-                k = self.norm_k(self.k(context)).view(b, -1, n, d)   # L261
-                v = self.v(context).view(b, -1, n, d)                # L262
+                k = self.norm_k(self.k(context)).unflatten(2, (n, d))  # L261
+                v = self.v(context).unflatten(2, (n, d))             # L262
                 crossattn_cache["k"] = k                             # L263
                 crossattn_cache["v"] = v                             # L264
             else:
                 k = crossattn_cache["k"]                             # L266
                 v = crossattn_cache["v"]                             # L267
         else:
-            k = self.norm_k(self.k(context)).view(b, -1, n, d)       # L269
-            v = self.v(context).view(b, -1, n, d)                    # L270
+            k = self.norm_k(self.k(context)).unflatten(2, (n, d))    # L269
+            v = self.v(context).unflatten(2, (n, d))                 # L270
         x = self.attn(q, k, v)                                      # L273
         x = x.flatten(2)                                             # L276
         x = self.o(x)                                                # L277
@@ -259,45 +339,62 @@ class WanI2VCrossAttention(nn.Module):
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.q = nn.Linear(dim, dim)                                 # L205
-        self.k = nn.Linear(dim, dim)                                 # L206
-        self.v = nn.Linear(dim, dim)                                 # L207
-        self.o = nn.Linear(dim, dim)                                 # L208
-        self.norm_q = RMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
-        self.norm_k = RMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
-        self.k_img = nn.Linear(dim, dim)                             # L318
-        self.v_img = nn.Linear(dim, dim)                             # L319
-        self.norm_k_img = RMSNorm(dim, eps=eps) if qk_norm else nn.Identity()  # L321
-        self.attn = Attention(num_heads, self.head_dim, causal=False,
-                              softmax_scale=self.head_dim ** -0.5)
+        tp_size = get_tensor_model_parallel_world_size()
+        if num_heads % tp_size != 0:
+            raise ValueError(
+                f"num_heads={num_heads} must be divisible by tp_size={tp_size}."
+            )
+        self.tp_num_heads = num_heads // tp_size
+        self.tp_inner_dim = self.tp_num_heads * self.head_dim
+        self.q = ColumnParallelLinear(dim, dim, bias=True, gather_output=False, return_bias=False)  # L205
+        self.k = ColumnParallelLinear(dim, dim, bias=True, gather_output=False, return_bias=False)  # L206
+        self.v = ColumnParallelLinear(dim, dim, bias=True, gather_output=False, return_bias=False)  # L207
+        self.o = RowParallelLinear(dim, dim, bias=True, input_is_parallel=True, return_bias=False)  # L208
+        self.norm_q = DistributedRMSNorm(self.tp_inner_dim, eps=eps) if qk_norm else nn.Identity()
+        self.norm_k = DistributedRMSNorm(self.tp_inner_dim, eps=eps) if qk_norm else nn.Identity()
+        self.k_img = ColumnParallelLinear(dim, dim, bias=True, gather_output=False, return_bias=False)  # L318
+        self.v_img = ColumnParallelLinear(dim, dim, bias=True, gather_output=False, return_bias=False)  # L319
+        self.norm_k_img = DistributedRMSNorm(self.tp_inner_dim, eps=eps) if qk_norm else nn.Identity()  # L321
+        self.attn = Attention(
+            self.tp_num_heads,
+            self.head_dim,
+            causal=False,
+            softmax_scale=self.head_dim ** -0.5,
+            skip_sequence_parallel=True,
+        )
 
     def forward(self, x: torch.Tensor, context: torch.Tensor,
+                context_lens: torch.Tensor | None = None,
                 crossattn_cache: dict | None = None) -> torch.Tensor:
         """Source: wan2_1_submodule.py L324-361"""
+        del context_lens
+        _ensure_default_cuda_stream(x.device)
         context_img = context[:, :257]                               # L330
         context = context[:, 257:]                                   # L331
-        b, n, d = x.size(0), self.num_heads, self.head_dim          # L332
-        q = self.norm_q(self.q(x)).view(b, -1, n, d)                # L334
+        b, n, d = x.size(0), self.tp_num_heads, self.head_dim       # L332
+        q = self.norm_q(self.q(x)).unflatten(2, (n, d))             # L334
         if crossattn_cache is not None:                              # L336
             if not crossattn_cache["is_init"]:
                 crossattn_cache["is_init"] = True
-                k = self.norm_k(self.k(context)).view(b, -1, n, d)
-                v = self.v(context).view(b, -1, n, d)
+                k = self.norm_k(self.k(context)).unflatten(2, (n, d))
+                v = self.v(context).unflatten(2, (n, d))
                 crossattn_cache["k"] = k
                 crossattn_cache["v"] = v
             else:
                 k = crossattn_cache["k"]
                 v = crossattn_cache["v"]
         else:
-            k = self.norm_k(self.k(context)).view(b, -1, n, d)       # L348
-            v = self.v(context).view(b, -1, n, d)                    # L349
+            k = self.norm_k(self.k(context)).unflatten(2, (n, d))    # L348
+            v = self.v(context).unflatten(2, (n, d))                 # L349
         x = self.attn(q, k, v)                                      # L350
-        k_img = self.norm_k_img(self.k_img(context_img)).view(b, -1, n, d)  # L352
-        v_img = self.v_img(context_img).view(b, -1, n, d)           # L353
+        _ensure_default_cuda_stream(x.device)
+        k_img = self.norm_k_img(self.k_img(context_img)).unflatten(2, (n, d))  # L352
+        v_img = self.v_img(context_img).unflatten(2, (n, d))        # L353
         img_x = self.attn(q, k_img, v_img)                          # L354
         x = x.flatten(2)                                             # L357
         img_x = img_x.flatten(2)                                     # L358
         x = x + img_x                                                # L359
+        _ensure_default_cuda_stream(x.device)
         x = self.o(x)                                                # L360
         return x
 
@@ -336,6 +433,13 @@ class CausalWanSelfAttention(nn.Module):
         self.dim = dim                                               # L203
         self.num_heads = num_heads                                   # L204
         self.head_dim = dim // num_heads                             # L205
+        tp_size = get_tensor_model_parallel_world_size()
+        if num_heads % tp_size != 0:
+            raise ValueError(
+                f"num_heads={num_heads} must be divisible by tp_size={tp_size}."
+            )
+        self.tp_num_heads = num_heads // tp_size
+        self.tp_inner_dim = self.tp_num_heads * self.head_dim
         self.local_attn_size = local_attn_size                       # L206
         self.num_frame_per_block = num_frame_per_block               # L208
         self.frame_seqlen = frame_seqlen                             # L212
@@ -346,14 +450,19 @@ class CausalWanSelfAttention(nn.Module):
             else local_attn_size * frame_seqlen
         )
         # layers                                                     # L216-223
-        self.q = nn.Linear(dim, dim)
-        self.k = nn.Linear(dim, dim)
-        self.v = nn.Linear(dim, dim)
-        self.o = nn.Linear(dim, dim)
-        self.norm_q = RMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
-        self.norm_k = RMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
-        self.attn = Attention(num_heads, self.head_dim, causal=False,
-                              softmax_scale=self.head_dim ** -0.5)
+        self.q = ColumnParallelLinear(dim, dim, bias=True, gather_output=False, return_bias=False)
+        self.k = ColumnParallelLinear(dim, dim, bias=True, gather_output=False, return_bias=False)
+        self.v = ColumnParallelLinear(dim, dim, bias=True, gather_output=False, return_bias=False)
+        self.o = RowParallelLinear(dim, dim, bias=True, input_is_parallel=True, return_bias=False)
+        self.norm_q = DistributedRMSNorm(self.tp_inner_dim, eps=eps) if qk_norm else nn.Identity()
+        self.norm_k = DistributedRMSNorm(self.tp_inner_dim, eps=eps) if qk_norm else nn.Identity()
+        self.attn = Attention(
+            self.tp_num_heads,
+            self.head_dim,
+            causal=False,
+            softmax_scale=self.head_dim ** -0.5,
+            skip_sequence_parallel=True,
+        )
 
     def forward(
         self,
@@ -369,12 +478,13 @@ class CausalWanSelfAttention(nn.Module):
         """Inference-only forward (KV cache path).
         Source: wan_video_dit_action_casual_chunk.py L786-1084 (kv_cache branch L1008-1084)
         """
-        b, s, n, d = *x.shape[:2], self.num_heads, self.head_dim    # L803
+        _ensure_default_cuda_stream(x.device)
+        b, s, n, d = *x.shape[:2], self.tp_num_heads, self.head_dim  # L803
 
         # QKV                                                        # L806-812
-        q = self.norm_q(self.q(x)).view(b, s, n, d)
-        k = self.norm_k(self.k(x)).view(b, s, n, d)
-        v = self.v(x).view(b, s, n, d)
+        q = self.norm_q(self.q(x)).unflatten(2, (n, d))
+        k = self.norm_k(self.k(x)).unflatten(2, (n, d))
+        v = self.v(x).unflatten(2, (n, d))
 
         updated_kv_cache: torch.Tensor | None = None
 
@@ -458,7 +568,7 @@ class CausalWanAttentionBlock(nn.Module):
         sink_size: int = 0,
         num_frame_per_block: int = 1,
         qk_norm: bool = True,
-        cross_attn_norm: bool = True,
+        cross_attn_norm: bool = False,
         eps: float = 1e-6,
         num_action_per_block: int = 32,
         num_state_per_block: int = 1,
@@ -481,9 +591,9 @@ class CausalWanAttentionBlock(nn.Module):
         )
         self.norm2 = WanLayerNorm(dim, eps)                          # L1134
         self.ffn = nn.Sequential(                                    # L1135-1137
-            nn.Linear(dim, ffn_dim),
+            ColumnParallelLinear(dim, ffn_dim, bias=True, gather_output=False, return_bias=False),
             nn.GELU(approximate="tanh"),
-            nn.Linear(ffn_dim, dim),
+            RowParallelLinear(ffn_dim, dim, bias=True, input_is_parallel=True, return_bias=False),
         )
         self.modulation = nn.Parameter(                              # L1140
             torch.randn(1, 6, dim) / dim**0.5
@@ -520,7 +630,7 @@ class CausalWanAttentionBlock(nn.Module):
         x = x + (y * e[2].squeeze(2))                               # L1175
 
         # cross-attention + FFN                                       # L1178-1186
-        x = x + self.cross_attn(self.norm3(x), context, crossattn_cache)  # L1179
+        x = x + self.cross_attn(self.norm3(x), context, crossattn_cache=crossattn_cache)  # L1179
         y = self.ffn(                                                # L1180-1181
             self.norm2(x) * (1 + e[4].squeeze(2)) + e[3].squeeze(2)
         )
@@ -557,6 +667,7 @@ class CausalHead(nn.Module):
             e: [B, F, 1, C]     (time embedding, unsqueezed)
         Source: wan_video_dit_action_casual_chunk.py L1207-1215
         """
+        _ensure_default_cuda_stream(x.device)
         e = (self.modulation.unsqueeze(1) + e).chunk(2, dim=2)       # L1213
         x = self.head(                                               # L1214
             self.norm(x) * (1 + e[1].squeeze(2)) + e[0].squeeze(2)
@@ -646,7 +757,7 @@ class CausalWanModel(nn.Module):
         )
 
         # Embeddings                                                  # L1346-1355
-        self.patch_embedding = nn.Conv3d(in_dim, dim, kernel_size=patch_size, stride=patch_size)  # L1346
+        self.patch_embedding = Conv3dLayer(in_dim, dim, kernel_size=patch_size, stride=patch_size)  # L1346
         self.text_embedding = nn.Sequential(                         # L1348-1350
             nn.Linear(text_dim, dim), nn.GELU(approximate="tanh"), nn.Linear(dim, dim),
         )
@@ -819,6 +930,7 @@ class CausalWanModel(nn.Module):
         embodiment_id: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor]]:
         """Source: wan_video_dit_action_casual_chunk.py L1863-1950"""
+        _ensure_default_cuda_stream(x.device)
         if self.model_type == "i2v":                                 # L1910
             assert clip_feature is not None and y is not None
         assert context.shape[1] == self.text_len                     # L1912

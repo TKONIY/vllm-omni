@@ -18,13 +18,18 @@ def default_vllm_config(default_vllm_config):
         init_distributed_environment,
     )
 
+    has_gpu = torch.cuda.is_available() and torch.cuda.device_count() > 0
+    device = "cuda" if has_gpu else "cpu"
+
     if not torch.distributed.is_initialized():
         os.environ.setdefault("MASTER_ADDR", "localhost")
         os.environ.setdefault("MASTER_PORT", "29599")
         os.environ.setdefault("RANK", "0")
         os.environ.setdefault("LOCAL_RANK", "0")
         os.environ.setdefault("WORLD_SIZE", "1")
-        init_distributed_environment(world_size=1, rank=0, local_rank=0, distributed_init_method="env://")
+        backend = "nccl" if has_gpu else "gloo"
+        init_distributed_environment(world_size=1, rank=0, local_rank=0,
+                                     distributed_init_method="env://")
 
     try:
         initialize_model_parallel(1, 1)
