@@ -194,7 +194,6 @@ class DistributedRMSNorm(nn.Module):
         param.data.copy_(shard)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        _ensure_default_cuda_stream(x.device)
         tp_size = get_tensor_model_parallel_world_size()
         x_float = x.float()
         local_sum_sq = (x_float**2).sum(dim=-1, keepdim=True)
@@ -210,23 +209,6 @@ class DistributedRMSNorm(nn.Module):
 
         rms = torch.sqrt(global_sum_sq / global_count + self.eps)
         return (x_float / rms).type_as(x) * self.weight
-
-
-def _ensure_default_cuda_stream(device: torch.device) -> None:
-    if device.type != "cuda" or torch.cuda.is_current_stream_capturing():
-        return
-
-    current_stream = torch.cuda.current_stream(device)
-    default_stream = torch.cuda.default_stream(device)
-    if current_stream.cuda_stream == default_stream.cuda_stream:
-        return
-
-    try:
-        from vllm.utils.torch_utils import prev_set_stream
-    except ImportError:
-        torch.cuda.set_stream(default_stream)
-    else:
-        prev_set_stream(default_stream)
 
 
 # ── Projections ─────────────────────────────────────────────────────
@@ -251,7 +233,6 @@ class MLPProj(nn.Module):
         self.norm2 = nn.LayerNorm(out_dim)                           # L573
 
     def forward(self, image_embeds: torch.Tensor) -> torch.Tensor:
-        _ensure_default_cuda_stream(image_embeds.device)
         x = self.norm1(image_embeds)                                 # L576
         x = self.fc1(x)
         x = self.act(x)
@@ -304,7 +285,6 @@ class WanT2VCrossAttention(nn.Module):
                 crossattn_cache: dict | None = None) -> torch.Tensor:
         """Source: wan2_1_submodule.py L245-278"""
         del context_lens
-        _ensure_default_cuda_stream(x.device)
         b, n, d = x.size(0), self.tp_num_heads, self.head_dim       # L253
         q = self.norm_q(self.q(x)).unflatten(2, (n, d))             # L256
         if crossattn_cache is not None:                              # L258
@@ -368,7 +348,6 @@ class WanI2VCrossAttention(nn.Module):
                 crossattn_cache: dict | None = None) -> torch.Tensor:
         """Source: wan2_1_submodule.py L324-361"""
         del context_lens
-        _ensure_default_cuda_stream(x.device)
         context_img = context[:, :257]                               # L330
         context = context[:, 257:]                                   # L331
         b, n, d = x.size(0), self.tp_num_heads, self.head_dim       # L332
@@ -387,14 +366,12 @@ class WanI2VCrossAttention(nn.Module):
             k = self.norm_k(self.k(context)).unflatten(2, (n, d))    # L348
             v = self.v(context).unflatten(2, (n, d))                 # L349
         x = self.attn(q, k, v)                                      # L350
-        _ensure_default_cuda_stream(x.device)
         k_img = self.norm_k_img(self.k_img(context_img)).unflatten(2, (n, d))  # L352
         v_img = self.v_img(context_img).unflatten(2, (n, d))        # L353
         img_x = self.attn(q, k_img, v_img)                          # L354
         x = x.flatten(2)                                             # L357
         img_x = img_x.flatten(2)                                     # L358
         x = x + img_x                                                # L359
-        _ensure_default_cuda_stream(x.device)
         x = self.o(x)                                                # L360
         return x
 
@@ -478,7 +455,6 @@ class CausalWanSelfAttention(nn.Module):
         """Inference-only forward (KV cache path).
         Source: wan_video_dit_action_casual_chunk.py L786-1084 (kv_cache branch L1008-1084)
         """
-        _ensure_default_cuda_stream(x.device)
         b, s, n, d = *x.shape[:2], self.tp_num_heads, self.head_dim  # L803
 
         # QKV                                                        # L806-812
@@ -539,7 +515,7 @@ class CausalWanSelfAttention(nn.Module):
                 k_cat = new_k
                 v_cat = new_v
 
-            x = self.attn(q_cat, k_cat, v_cat)                        # L1067-1073
+            x = self.attn(q_cat, k_cat, v_cat)                       # L1067-1073
             updated_kv_cache = torch.stack([new_k, new_v], dim=0)    # L1078
 
         # output                                                     # L1082-1083
@@ -667,7 +643,6 @@ class CausalHead(nn.Module):
             e: [B, F, 1, C]     (time embedding, unsqueezed)
         Source: wan_video_dit_action_casual_chunk.py L1207-1215
         """
-        _ensure_default_cuda_stream(x.device)
         e = (self.modulation.unsqueeze(1) + e).chunk(2, dim=2)       # L1213
         x = self.head(                                               # L1214
             self.norm(x) * (1 + e[1].squeeze(2)) + e[0].squeeze(2)
@@ -757,7 +732,19 @@ class CausalWanModel(nn.Module):
         )
 
         # Embeddings                                                  # L1346-1355
-        self.patch_embedding = Conv3dLayer(in_dim, dim, kernel_size=patch_size, stride=patch_size)  # L1346
+        # Upstream DreamZero uses a plain nn.Conv3d here
+        # (wan_video_dit_action_casual_chunk.py L1386-L1391).
+        #
+        # vLLM's Conv3dLayer can rewrite non-overlapping strided convs
+        # (kernel_size == stride, no padding) into a GEMM fast path. For
+        # DreamZero's bf16 i2v prefill, that changes accumulation order and
+        # causes the first-frame KV cache to drift from upstream even though
+        # the final outputs may still match. Force the native conv path so
+        # patch embedding stays numerically identical to upstream.
+        self.patch_embedding = Conv3dLayer(
+            in_dim, dim, kernel_size=patch_size, stride=patch_size,
+        )  # L1346
+        self.patch_embedding.enable_linear = False
         self.text_embedding = nn.Sequential(                         # L1348-1350
             nn.Linear(text_dim, dim), nn.GELU(approximate="tanh"), nn.Linear(dim, dim),
         )
@@ -794,9 +781,60 @@ class CausalWanModel(nn.Module):
             rope_params(1024, 2 * (d // 6)),
         ]
 
-        # Image embedding for i2v                                    # L1380-1381
-        if model_type in ("i2v", "ti2v"):
+        # Image embedding for i2v only                               # L1380-1381
+        if model_type == "i2v":
             self.img_emb = MLPProj(1280, dim)
+
+        # Initialize weights                                         # L1383-1384
+        self.init_weights()
+
+    def init_weights(self) -> None:
+        """Initialize parameters with DreamZero's bare-model scheme.
+        Source: wan_video_dit_action_casual_chunk.py L2176-2194
+
+        Upstream initializes every `nn.Linear` with Xavier uniform and
+        zero bias. This port applies the same rule to vLLM
+        `ColumnParallelLinear` / `RowParallelLinear`, using the full
+        unsharded fan-in/fan-out so the TP shards follow the same Xavier
+        distribution as the original dense weight.
+        """
+
+        def _init_linear_like(module: nn.Module) -> None:
+            if isinstance(module, nn.Linear):                       # L2182-2185
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+                return
+
+            if isinstance(module, (ColumnParallelLinear, RowParallelLinear)):
+                fan_in = module.input_size
+                fan_out = module.output_size
+                bound = math.sqrt(6.0 / float(fan_in + fan_out))
+                nn.init.uniform_(module.weight, -bound, bound)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+
+        # Basic init                                                 # L2181-2185
+        for module in self.modules():
+            _init_linear_like(module)
+
+        # Patch embedding follows upstream Conv3d handling: Xavier
+        # for weight, Conv3d-style uniform bias.                    # L2187-2191
+        nn.init.xavier_uniform_(self.patch_embedding.weight.flatten(1))
+        if self.patch_embedding.bias is not None:
+            fan_in = self.patch_embedding.in_channels * math.prod(self.patch_embedding.kernel_size)
+            bound = 1 / math.sqrt(fan_in)
+            nn.init.uniform_(self.patch_embedding.bias, -bound, bound)
+
+        for module in self.text_embedding.modules():               # L2188-2190
+            if isinstance(module, nn.Linear):
+                nn.init.normal_(module.weight, std=0.02)
+
+        for module in self.time_embedding.modules():               # L2190-2191
+            if isinstance(module, nn.Linear):
+                nn.init.normal_(module.weight, std=0.02)
+
+        nn.init.zeros_(self.head.head.weight)                      # L2193
 
     def _create_freqs(self, grid_size: torch.Tensor, start_frame: int) -> torch.Tensor:
         """Create 3D RoPE frequency tensor.
@@ -930,7 +968,6 @@ class CausalWanModel(nn.Module):
         embodiment_id: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor]]:
         """Source: wan_video_dit_action_casual_chunk.py L1863-1950"""
-        _ensure_default_cuda_stream(x.device)
         if self.model_type == "i2v":                                 # L1910
             assert clip_feature is not None and y is not None
         assert context.shape[1] == self.text_len                     # L1912

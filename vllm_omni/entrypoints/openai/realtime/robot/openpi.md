@@ -151,7 +151,6 @@ vllm_omni/entrypoints/openai/realtime/robot/
 ├── openpi_connection.py       # 协议层：WebSocket + msgpack
 ├── openpi_serving.py          # 业务层：transform 路由 + engine 调用
 ├── openpi.md                  # 本文档
-├── dreamzero.md               # DreamZero 推理链路设计
 └── transform/
     ├── __init__.py
     ├── base.py                # RobotPolicyTransform 基类 + 注册表
@@ -162,4 +161,10 @@ vllm_omni/diffusion/models/dreamzero/
 ├── state_dreamzero.py         # 模型状态：帧累积 + KV cache (统一 key)
 ├── pipeline_dreamzero.py      # 主 pipeline (待实现)
 └── modeling/                  # 模型组件 (待实现)
+
+docs/models/dreamzero/
+├── README.md                  # 文档索引
+├── dreamzero.md               # DreamZero 推理链路设计
+├── review.md                  # 复审记录
+└── todo.md                    # TODO + 精度附录
 ```

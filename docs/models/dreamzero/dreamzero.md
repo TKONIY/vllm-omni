@@ -66,7 +66,8 @@ openpi_serving.py: ServingRealtimeRobotOpenPI.infer(obs)
   │ 1. session 跟踪
   │ 2. transform = get_transform(obs["embodiment"] or default)
   │ 3. unified_obs = transform.transform_input(obs)
-  │    数据集 key → 统一 key (images/exterior_0, state/joint_position 等)
+  │    数据集相关: key映射 + 视角拼接 + 语言模板 + raw state 提取
+  │    输出: {images, prompt(str), state(raw), embodiment_id}
   │ 4. _build_request(unified_obs) → OmniDiffusionRequest
   │    unified_obs 透传到 extra_args["unified_obs"]
   ▼
@@ -74,35 +75,39 @@ DiffusionEngine.step(request)
   ▼
 pipeline_dreamzero.py: DreamZeroPipeline.forward(req)
   │
+  │ ┌─── 模型相关 (pipeline 内部) ─────────────────────────┐
+  │ │ self.tokenizer       — tokenize prompt + neg prompt   │
+  │ │ self.max_state_dim   — state padding (64)             │
+  │ │ self.negative_prompt — 固定 negative prompt 字符串     │
+  │ │ self.seed            — 确定性噪声 (1140)               │
+  │ └──────────────────────────────────────────────────────┘
+  │
   │ ┌─── state_dreamzero.py: DreamZeroState ──────────────┐
-  │ │ 持久状态（跨 forward 调用存活，模型相关）:              │
-  │ │ - frame_buffers: 帧累积 buffer（按统一 key）           │
+  │ │ 持久状态（跨 forward 调用存活）:                       │
+  │ │ - frame_buffers: 帧累积 buffer                        │
   │ │ - kv_cache / kv_cache_neg: KV cache (40层)            │
   │ │ - crossattn_cache / crossattn_cache_neg               │
   │ │ - clip_feas / ys: 编码缓存                             │
   │ │ - current_start_frame: AR 帧计数器                     │
-  │ │                                                        │
-  │ │ 方法:                                                   │
-  │ │ - accumulate_frames(unified_obs) → 帧累积              │
-  │ │ - reset() → 清空所有状态                                │
-  │ │ - should_reset(...) → 判断是否需要 reset                │
-  │ │ - create/update/get kv_caches                          │
   │ └────────────────────────────────────────────────────────┘
   │
-  │ 1. state.accumulate_frames(unified_obs) → 多帧视频
-  │ 2. 视频预处理 (uint8→float, normalize)
-  │ 3. text encoder (复用 UMT5)
-  │ 4. image encoder (CLIP) + VAE encode
-  │ 5. state 管理 KV cache 创建/prefill
-  │ 6. diffuse() 去噪循环
+  │ 1. tokenize prompt + negative prompt (self.tokenizer)
+  │ 2. state padding (raw → pad to max_state_dim)
+  │ 3. embodiment_name → embodiment_id (self.embodiment_name_to_id)
+  │ 4. 视频预处理 (uint8→float, normalize)
+  │ 5. text encoder (复用 UMT5)
+  │ 6. image encoder (CLIP) + VAE encode
+  │ 7. KV cache 创建/prefill
+  │ 8. diffuse() 去噪循环
   │    ├─ predict_noise_maybe_with_cfg (CFGParallelMixin)
   │    ├─ scheduler_step_maybe_with_cfg (VideoActionScheduler)
   │    └─ _synchronize_cfg_parallel_step_output
-  │ 7. 动作反归一化
+  │ 9. action denorm: q99 反归一化 (self.action_norm_stats)
+  │ 10. relative→absolute: action += last_state (if self.relative_action)
   ▼
-返回: DiffusionOutput(custom_output={"actions": ndarray(N,8)})
+返回: DiffusionOutput(custom_output={"actions": ndarray(N, max_action_dim)})
   ▼
-openpi_serving.py: transform.transform_output(result) → ndarray
+openpi_serving.py: transform.transform_output(result) → ndarray(N, ACTION_DIM)
   ▼
 openpi_connection.py: _pack(actions) → send_bytes
   ▼
@@ -115,40 +120,75 @@ client 收到 ndarray(N, 8)
 Transform (数据集相关, 无状态)          State (模型相关, 有状态)          Pipeline (推理)
 ┌──────────────────────┐          ┌────────────────────────┐    ┌──────────────┐
 │ DroidTransform       │          │ DreamZeroState         │    │ DreamZero    │
-│ RoboArenaTransform   │──key映射──▶│ accumulate_frames()   │──▶│ Pipeline     │
-│ LiberoTransform      │          │ KV cache management   │    │ .forward()   │
+│ RoboArenaTransform   │──全量变换──▶│ accumulate_frames()   │──▶│ Pipeline     │
+│ AgibotTransform      │          │ KV cache management   │    │ .forward()   │
 │ ...                  │          │ encoding cache        │    │              │
 └──────────────────────┘          └────────────────────────┘    └──────────────┘
-  observation/xxx                   images/exterior_0              model input
-  → images/exterior_0               → (T,H,W,3) stacked
+
+Transform 职责 (纯数据集):            State 职责:                    Pipeline 职责 (纯模型):
+1. key mapping                     1. 帧累积                       1. tokenization (prompt + neg)
+2. 多视角拼接 (embodiment-specific) 2. KV cache 管理                2. state padding (max_state_dim)
+3. 语言模板包装 (str, 不tokenize)   3. CLIP/VAE 编码缓存            3. 视频预处理 + encode
+4. raw state 提取 (不padding)      4. 帧计数器                     4. 去噪循环 + CFG parallel
+5. output action dim 裁剪          5. should_reset 检测            5. negative prompt (模型常量)
 ```
+
+## 数据集格式对比
+
+| 数据集 | 外部相机 key 索引 | 相机数 | 拼接方式 | EMBODIMENT_NAME |
+|--------|------------------|--------|----------|-----------------|
+| DROID | 1-indexed (`exterior_image_1/2_left`) | 3 | wrist 顶行 + ext 底行 | `oxe_droid` |
+| RoboArena | 0-indexed (`exterior_image_0/1_left`) | 3 | 同 DROID | `oxe_droid` |
+| AGIBOT | head + 2 hands | 4 | 2x2 grid: head/right 顶行, left/black 底行 | `agibot` |
+| GR1_UNIFIED | 单视角 | 1 | 不拼接 | `gr1_unified` |
 
 ## Transform 注册机制
 
 ```python
-# transform/base.py — 基类 + 注册表
+# transform/base.py — 基类 + 注册表（无模型常量）
 TRANSFORMS: dict[str, RobotPolicyTransform] = {}
-register_transform("droid", DroidTransform())
-register_transform("roboarena", RoboArenaTransform())
+
+# transform/droid.py — OXE_DROID embodiment
+class DroidTransform(RobotPolicyTransform):
+    IMAGE_KEY_MAP = {
+        "observation/exterior_image_1_left": "images/exterior_0",
+        "observation/exterior_image_2_left": "images/exterior_1",
+        "observation/wrist_image_left": "images/wrist",
+    }
+    EMBODIMENT_NAME = "oxe_droid"  # pipeline 映射为 numeric ID
+    ACTION_DIM = 8
+    # _stitch_views(): wrist 2x宽顶行 + ext 底行
+    # _language_template(): "A multi-view video shows that a robot {instruction}..."
+    # _extract_raw_state(): joint(7) + gripper(1) → ndarray(8,)
+
+# transform/roboarena.py — 继承 DroidTransform, 只改 IMAGE_KEY_MAP
+class RoboArenaTransform(DroidTransform):
+    IMAGE_KEY_MAP = {
+        "observation/exterior_image_0_left": "images/exterior_0",
+        "observation/exterior_image_1_left": "images/exterior_1",
+        "observation/wrist_image_left": "images/wrist",
+    }
+
+# pipeline_dreamzero.py — 模型持有 name→ID 映射
+self.embodiment_name_to_id = {"oxe_droid": 17, "agibot": 26, ...}
 
 # openpi_serving.py — 按 obs["embodiment"] 路由
 transform = get_transform(obs.get("embodiment", "roboarena"))
 unified_obs = transform.transform_input(obs)
 ```
 
-## 统一 key 格式
+## Transform 输出格式 (统一 dict)
 
-Transform 输出 / State 消费的统一格式：
+Transform 只输出字符串和 numpy，不含任何模型常量。
+模型相关的处理（tokenize、padding、negative prompt）全在 pipeline 里。
 
-| 统一 key | 类型 | 说明 |
-|----------|------|------|
-| `images/exterior_0` | ndarray (H,W,3) 或 (T,H,W,3) | 外部相机 0 |
-| `images/exterior_1` | ndarray (H,W,3) 或 (T,H,W,3) | 外部相机 1 (可选) |
-| `images/wrist` | ndarray (H,W,3) 或 (T,H,W,3) | 手腕相机 (可选) |
-| `state/joint_position` | ndarray (N,) | 关节位置 |
-| `state/gripper_position` | ndarray (N,) | 夹爪位置 |
-| `prompt` | str | 语言指令 |
-| `session_id` | str | 会话 ID (透传) |
+| key | 类型 | shape | 说明 |
+|-----|------|-------|------|
+| `images` | ndarray uint8 | `(T, 2H, 2W, 3)` | 拼接后单视角图，DROID: `(1, 360, 640, 3)` |
+| `prompt` | str | - | 模板化后的 prompt（pipeline tokenizes） |
+| `state` | ndarray float64 | `(state_dim,)` | raw state，DROID: `(8,)`（pipeline pads to 64） |
+| `embodiment_name` | str | - | 如 `"oxe_droid"`（pipeline 映射为 numeric ID） |
+| `session_id` | str | - | 会话 ID (透传，可选) |
 
 ## 需要实现的文件
 

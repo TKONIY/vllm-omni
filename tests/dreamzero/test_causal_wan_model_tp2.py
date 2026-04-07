@@ -167,6 +167,69 @@ def _make_crossattn_cache(num_layers: int) -> list[dict[str, object]]:
     return [{"is_init": False, "k": None, "v": None} for _ in range(num_layers)]
 
 
+def _clone_crossattn_cache(caches: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {
+            "is_init": cache["is_init"],
+            "k": None if cache["k"] is None else cache["k"].clone(),
+            "v": None if cache["v"] is None else cache["v"].clone(),
+        }
+        for cache in caches
+    ]
+
+
+def _assert_crossattn_cache_uninitialized(name: str, cache: dict[str, object]) -> None:
+    assert cache["is_init"] is False, f"{name}.is_init should stay False"
+    assert cache["k"] is None, f"{name}.k should stay None"
+    assert cache["v"] is None, f"{name}.v should stay None"
+
+
+def _assert_crossattn_cache_initialized(
+    name: str,
+    cache: dict[str, object],
+    *,
+    batch_size: int,
+    context_tokens: int,
+    num_heads: int,
+    head_dim: int,
+) -> None:
+    assert cache["is_init"] is True, f"{name}.is_init should be True"
+    assert isinstance(cache["k"], torch.Tensor), f"{name}.k should be a tensor"
+    assert isinstance(cache["v"], torch.Tensor), f"{name}.v should be a tensor"
+    expected_shape = (batch_size, context_tokens, num_heads, head_dim)
+    assert cache["k"].shape == expected_shape, (
+        f"{name}.k shape mismatch: actual={tuple(cache['k'].shape)}, expected={expected_shape}"
+    )
+    assert cache["v"].shape == expected_shape, (
+        f"{name}.v shape mismatch: actual={tuple(cache['v'].shape)}, expected={expected_shape}"
+    )
+
+
+def _assert_crossattn_cache_reused(
+    name: str,
+    actual: dict[str, object],
+    expected: dict[str, object],
+    *,
+    batch_size: int,
+    context_tokens: int,
+    num_heads: int,
+    head_dim: int,
+) -> None:
+    _assert_crossattn_cache_initialized(
+        name,
+        actual,
+        batch_size=batch_size,
+        context_tokens=context_tokens,
+        num_heads=num_heads,
+        head_dim=head_dim,
+    )
+    assert expected["is_init"] is True, f"{name}.expected.is_init should be True"
+    assert isinstance(expected["k"], torch.Tensor), f"{name}.expected.k should be a tensor"
+    assert isinstance(expected["v"], torch.Tensor), f"{name}.expected.v should be a tensor"
+    _assert_close(f"{name}.k", actual["k"], expected["k"])
+    _assert_close(f"{name}.v", actual["v"], expected["v"])
+
+
 def _assert_crossattn_cache_matches(
     name: str,
     actual: dict[str, object],
@@ -659,14 +722,17 @@ def _test_full_model_precision_prefill_and_ar_step_tp2(local_rank: int, device: 
             vllm_layer_kv,
             _slice_heads(dreamzero_layer_kv, local_rank, TP_SIZE, head_dim=3),
         )
-    for idx, (vllm_cache, dreamzero_cache) in enumerate(
-        zip(vllm_crossattn_cache, dreamzero_crossattn_cache, strict=True)
-    ):
-        _assert_crossattn_cache_matches(
-            f"CausalWanModel.prefill.crossattn_cache[{idx}]",
+    # Match upstream causal chunk behavior: cross-attention cache is not
+    # threaded through `_forward_blocks()` and stays untouched.
+    for idx, vllm_cache in enumerate(vllm_crossattn_cache):
+        _assert_crossattn_cache_uninitialized(
+            f"CausalWanModel.prefill.crossattn_cache[{idx}].tp2",
             vllm_cache,
+        )
+    for idx, dreamzero_cache in enumerate(dreamzero_crossattn_cache):
+        _assert_crossattn_cache_uninitialized(
+            f"CausalWanModel.prefill.dreamzero_crossattn_cache[{idx}].tp2",
             dreamzero_cache,
-            local_rank=local_rank,
         )
 
     x_step = _shared_randn(batch_size, 4, 1, 4, 4, device=device, dtype=DTYPE)
@@ -730,14 +796,15 @@ def _test_full_model_precision_prefill_and_ar_step_tp2(local_rank: int, device: 
             vllm_layer_kv,
             _slice_heads(dreamzero_layer_kv, local_rank, TP_SIZE, head_dim=3),
         )
-    for idx, (vllm_cache, dreamzero_cache) in enumerate(
-        zip(vllm_crossattn_cache, dreamzero_crossattn_cache, strict=True)
-    ):
-        _assert_crossattn_cache_matches(
-            f"CausalWanModel.step.crossattn_cache[{idx}]",
+    for idx, vllm_cache in enumerate(vllm_crossattn_cache):
+        _assert_crossattn_cache_uninitialized(
+            f"CausalWanModel.step.crossattn_cache[{idx}].tp2",
             vllm_cache,
+        )
+    for idx, dreamzero_cache in enumerate(dreamzero_crossattn_cache):
+        _assert_crossattn_cache_uninitialized(
+            f"CausalWanModel.step.dreamzero_crossattn_cache[{idx}].tp2",
             dreamzero_cache,
-            local_rank=local_rank,
         )
 
 

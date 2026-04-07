@@ -7,6 +7,7 @@ Run:
     PYTHONPATH=. /home/yangshen/miniconda3/envs/dreamzero/bin/python -m pytest         tests/dreamzero/test_causal_wan_model.py -v -s
 """
 
+import math
 import os
 import sys
 
@@ -51,6 +52,10 @@ TINY_CFG = dict(
     max_num_embodiments=4,
     hidden_size=32,
 )
+
+
+def _tiny_cfg(*, model_type: str) -> dict[str, object]:
+    return {**TINY_CFG, "model_type": model_type}
 
 
 def _assert_close(name: str, actual: torch.Tensor, expected: torch.Tensor, *, atol: float = ATOL, rtol: float = RTOL) -> None:
@@ -111,6 +116,69 @@ def _make_empty_kv(num_layers: int, batch_size: int, num_heads: int, head_dim: i
 
 def _make_crossattn_cache(num_layers: int) -> list[dict[str, object]]:
     return [{"is_init": False, "k": None, "v": None} for _ in range(num_layers)]
+
+
+def _clone_crossattn_cache(caches: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {
+            "is_init": cache["is_init"],
+            "k": None if cache["k"] is None else cache["k"].clone(),
+            "v": None if cache["v"] is None else cache["v"].clone(),
+        }
+        for cache in caches
+    ]
+
+
+def _assert_crossattn_cache_uninitialized(name: str, cache: dict[str, object]) -> None:
+    assert cache["is_init"] is False, f"{name}.is_init should stay False"
+    assert cache["k"] is None, f"{name}.k should stay None"
+    assert cache["v"] is None, f"{name}.v should stay None"
+
+
+def _assert_crossattn_cache_initialized(
+    name: str,
+    cache: dict[str, object],
+    *,
+    batch_size: int,
+    context_tokens: int,
+    num_heads: int,
+    head_dim: int,
+) -> None:
+    assert cache["is_init"] is True, f"{name}.is_init should be True"
+    assert isinstance(cache["k"], torch.Tensor), f"{name}.k should be a tensor"
+    assert isinstance(cache["v"], torch.Tensor), f"{name}.v should be a tensor"
+    expected_shape = (batch_size, context_tokens, num_heads, head_dim)
+    assert cache["k"].shape == expected_shape, (
+        f"{name}.k shape mismatch: actual={tuple(cache['k'].shape)}, expected={expected_shape}"
+    )
+    assert cache["v"].shape == expected_shape, (
+        f"{name}.v shape mismatch: actual={tuple(cache['v'].shape)}, expected={expected_shape}"
+    )
+
+
+def _assert_crossattn_cache_reused(
+    name: str,
+    actual: dict[str, object],
+    expected: dict[str, object],
+    *,
+    batch_size: int,
+    context_tokens: int,
+    num_heads: int,
+    head_dim: int,
+) -> None:
+    _assert_crossattn_cache_initialized(
+        name,
+        actual,
+        batch_size=batch_size,
+        context_tokens=context_tokens,
+        num_heads=num_heads,
+        head_dim=head_dim,
+    )
+    assert expected["is_init"] is True, f"{name}.expected.is_init should be True"
+    assert isinstance(expected["k"], torch.Tensor), f"{name}.expected.k should be a tensor"
+    assert isinstance(expected["v"], torch.Tensor), f"{name}.expected.v should be a tensor"
+    _assert_close(f"{name}.k", actual["k"], expected["k"])
+    _assert_close(f"{name}.v", actual["v"], expected["v"])
 
 
 @pytest.fixture(autouse=True)
@@ -258,6 +326,108 @@ def test_hotpath_layer_types():
     assert isinstance(block.ffn[2], RowParallelLinear)
 
 
+def test_img_emb_created_only_for_i2v():
+    from groot.vla.model.dreamzero.modules.wan_video_dit_action_casual_chunk import CausalWanModel as DreamZeroModel
+    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import CausalWanModel as VllmModel
+
+    for model_type, expected in (("t2v", False), ("i2v", True), ("ti2v", False)):
+        vllm_model = VllmModel(**_tiny_cfg(model_type=model_type)).to(device=DEVICE, dtype=DTYPE)
+        dreamzero_model = DreamZeroModel(**_tiny_cfg(model_type=model_type)).to(device=DEVICE, dtype=DTYPE)
+
+        assert hasattr(vllm_model, "img_emb") is expected, f"vLLM model_type={model_type}"
+        assert hasattr(dreamzero_model, "img_emb") is expected, f"DreamZero model_type={model_type}"
+
+
+def test_init_weights_called_and_matches_upstream_scheme(monkeypatch):
+    from groot.vla.model.dreamzero.modules.wan_video_dit_action_casual_chunk import CausalWanModel as DreamZeroModel
+    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import CausalWanModel as VllmModel
+
+    called = 0
+    original_init_weights = VllmModel.init_weights
+
+    def wrapped_init_weights(self):
+        nonlocal called
+        called += 1
+        return original_init_weights(self)
+
+    monkeypatch.setattr(VllmModel, "init_weights", wrapped_init_weights)
+
+    torch.manual_seed(1234)
+    torch.cuda.manual_seed_all(1234)
+    vllm_model = VllmModel(**_tiny_cfg(model_type="i2v")).to(device=DEVICE, dtype=DTYPE)
+
+    torch.manual_seed(1234)
+    torch.cuda.manual_seed_all(1234)
+    dreamzero_model = DreamZeroModel(**_tiny_cfg(model_type="i2v")).to(device=DEVICE, dtype=DTYPE)
+
+    assert called == 1
+
+    assert torch.count_nonzero(vllm_model.head.head.weight).item() == 0
+    assert torch.count_nonzero(dreamzero_model.head.head.weight).item() == 0
+
+    zero_biases = [
+        vllm_model.text_embedding[0].bias,
+        vllm_model.time_embedding[0].bias,
+        vllm_model.blocks[0].self_attn.q.bias,
+        vllm_model.blocks[0].self_attn.o.bias,
+        vllm_model.img_emb.fc1.bias,
+        vllm_model.img_emb.fc2.bias,
+        dreamzero_model.text_embedding[0].bias,
+        dreamzero_model.time_embedding[0].bias,
+        dreamzero_model.blocks[0].self_attn.q.bias,
+        dreamzero_model.blocks[0].self_attn.o.bias,
+        dreamzero_model.img_emb.proj[1].bias,
+        dreamzero_model.img_emb.proj[3].bias,
+    ]
+    for bias in zero_biases:
+        assert torch.count_nonzero(bias).item() == 0
+
+    for weight in (
+        vllm_model.text_embedding[0].weight,
+        vllm_model.text_embedding[2].weight,
+        vllm_model.time_embedding[0].weight,
+        vllm_model.time_embedding[2].weight,
+        dreamzero_model.text_embedding[0].weight,
+        dreamzero_model.text_embedding[2].weight,
+        dreamzero_model.time_embedding[0].weight,
+        dreamzero_model.time_embedding[2].weight,
+    ):
+        std = weight.float().std().item()
+        assert 0.015 <= std <= 0.025, f"expected normal std≈0.02, got {std:.4f}"
+
+    for weight, fan_in, fan_out in (
+        (
+            vllm_model.blocks[0].self_attn.q.weight,
+            vllm_model.blocks[0].self_attn.q.input_size,
+            vllm_model.blocks[0].self_attn.q.output_size,
+        ),
+        (
+            vllm_model.blocks[0].self_attn.o.weight,
+            vllm_model.blocks[0].self_attn.o.input_size,
+            vllm_model.blocks[0].self_attn.o.output_size,
+        ),
+        (
+            dreamzero_model.blocks[0].self_attn.q.weight,
+            dreamzero_model.blocks[0].self_attn.q.in_features,
+            dreamzero_model.blocks[0].self_attn.q.out_features,
+        ),
+        (
+            dreamzero_model.blocks[0].self_attn.o.weight,
+            dreamzero_model.blocks[0].self_attn.o.in_features,
+            dreamzero_model.blocks[0].self_attn.o.out_features,
+        ),
+    ):
+        bound = math.sqrt(6.0 / float(fan_in + fan_out))
+        assert weight.float().abs().max().item() <= bound + 1e-6
+
+    conv_bias_bound = 1 / math.sqrt(
+        vllm_model.patch_embedding.in_channels * math.prod(vllm_model.patch_embedding.kernel_size)
+    )
+    assert torch.isfinite(vllm_model.patch_embedding.bias).all()
+    assert vllm_model.patch_embedding.bias.float().abs().max().item() <= conv_bias_bound + 1e-6
+    assert torch.isfinite(dreamzero_model.patch_embedding.bias).all()
+
+
 
 def test_distributed_rmsnorm_precision():
     from groot.vla.model.dreamzero.modules.wan2_1_submodule import WanRMSNorm
@@ -289,6 +459,72 @@ def test_t2v_cross_attn_precision():
     )
 
 
+def test_t2v_cross_attn_cache_fill_and_reuse():
+    from groot.vla.model.dreamzero.modules.wan2_1_submodule import WanT2VCrossAttention as DreamZeroCrossAttention
+    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import WanT2VCrossAttention
+
+    vllm_attn = WanT2VCrossAttention(64, 4, qk_norm=True, eps=1e-6).to(device=DEVICE, dtype=DTYPE)
+    dreamzero_attn = DreamZeroCrossAttention(64, 4, (-1, -1), True, 1e-6).to(device=DEVICE, dtype=DTYPE)
+    _sync_module(vllm_attn, dreamzero_attn)
+
+    x = torch.randn(1, 8, 64, device=DEVICE, dtype=DTYPE)
+    x_step = torch.randn(1, 8, 64, device=DEVICE, dtype=DTYPE)
+    context = torch.randn(1, 16, 64, device=DEVICE, dtype=DTYPE)
+    vllm_cache = {"is_init": False, "k": None, "v": None}
+    dreamzero_cache = {"is_init": False, "k": None, "v": None}
+
+    _assert_close(
+        "WanT2VCrossAttention.prefill.cache",
+        vllm_attn(x, context, crossattn_cache=vllm_cache),
+        dreamzero_attn(x, context, context_lens=None, crossattn_cache=dreamzero_cache),
+    )
+    _assert_crossattn_cache_initialized(
+        "WanT2VCrossAttention.vllm_cache",
+        vllm_cache,
+        batch_size=1,
+        context_tokens=16,
+        num_heads=4,
+        head_dim=16,
+    )
+    _assert_crossattn_cache_initialized(
+        "WanT2VCrossAttention.dreamzero_cache",
+        dreamzero_cache,
+        batch_size=1,
+        context_tokens=16,
+        num_heads=4,
+        head_dim=16,
+    )
+    _assert_close("WanT2VCrossAttention.cache.k", vllm_cache["k"], dreamzero_cache["k"])
+    _assert_close("WanT2VCrossAttention.cache.v", vllm_cache["v"], dreamzero_cache["v"])
+
+    vllm_cache_prefill = _clone_crossattn_cache([vllm_cache])[0]
+    dreamzero_cache_prefill = _clone_crossattn_cache([dreamzero_cache])[0]
+
+    _assert_close(
+        "WanT2VCrossAttention.reuse.cache",
+        vllm_attn(x_step, context, crossattn_cache=vllm_cache),
+        dreamzero_attn(x_step, context, context_lens=None, crossattn_cache=dreamzero_cache),
+    )
+    _assert_crossattn_cache_reused(
+        "WanT2VCrossAttention.vllm_cache_reuse",
+        vllm_cache,
+        vllm_cache_prefill,
+        batch_size=1,
+        context_tokens=16,
+        num_heads=4,
+        head_dim=16,
+    )
+    _assert_crossattn_cache_reused(
+        "WanT2VCrossAttention.dreamzero_cache_reuse",
+        dreamzero_cache,
+        dreamzero_cache_prefill,
+        batch_size=1,
+        context_tokens=16,
+        num_heads=4,
+        head_dim=16,
+    )
+
+
 
 def test_i2v_cross_attn_precision():
     from groot.vla.model.dreamzero.modules.wan2_1_submodule import WanI2VCrossAttention as DreamZeroCrossAttention
@@ -301,6 +537,72 @@ def test_i2v_cross_attn_precision():
     x = torch.randn(1, 8, 64, device=DEVICE, dtype=DTYPE)
     context = torch.randn(1, 257 + 16, 64, device=DEVICE, dtype=DTYPE)
     _assert_close("WanI2VCrossAttention", vllm_attn(x, context), dreamzero_attn(x, context))
+
+
+def test_i2v_cross_attn_cache_fill_and_reuse():
+    from groot.vla.model.dreamzero.modules.wan2_1_submodule import WanI2VCrossAttention as DreamZeroCrossAttention
+    from vllm_omni.diffusion.models.dreamzero.modeling.causal_wan_model import WanI2VCrossAttention
+
+    vllm_attn = WanI2VCrossAttention(64, 4, qk_norm=True, eps=1e-6).to(device=DEVICE, dtype=DTYPE)
+    dreamzero_attn = DreamZeroCrossAttention(64, 4, (-1, -1), True, 1e-6).to(device=DEVICE, dtype=DTYPE)
+    _sync_module(vllm_attn, dreamzero_attn)
+
+    x = torch.randn(1, 8, 64, device=DEVICE, dtype=DTYPE)
+    x_step = torch.randn(1, 8, 64, device=DEVICE, dtype=DTYPE)
+    context = torch.randn(1, 257 + 16, 64, device=DEVICE, dtype=DTYPE)
+    vllm_cache = {"is_init": False, "k": None, "v": None}
+    dreamzero_cache = {"is_init": False, "k": None, "v": None}
+
+    _assert_close(
+        "WanI2VCrossAttention.prefill.cache",
+        vllm_attn(x, context, crossattn_cache=vllm_cache),
+        dreamzero_attn(x, context, crossattn_cache=dreamzero_cache),
+    )
+    _assert_crossattn_cache_initialized(
+        "WanI2VCrossAttention.vllm_cache",
+        vllm_cache,
+        batch_size=1,
+        context_tokens=16,
+        num_heads=4,
+        head_dim=16,
+    )
+    _assert_crossattn_cache_initialized(
+        "WanI2VCrossAttention.dreamzero_cache",
+        dreamzero_cache,
+        batch_size=1,
+        context_tokens=16,
+        num_heads=4,
+        head_dim=16,
+    )
+    _assert_close("WanI2VCrossAttention.cache.k", vllm_cache["k"], dreamzero_cache["k"])
+    _assert_close("WanI2VCrossAttention.cache.v", vllm_cache["v"], dreamzero_cache["v"])
+
+    vllm_cache_prefill = _clone_crossattn_cache([vllm_cache])[0]
+    dreamzero_cache_prefill = _clone_crossattn_cache([dreamzero_cache])[0]
+
+    _assert_close(
+        "WanI2VCrossAttention.reuse.cache",
+        vllm_attn(x_step, context, crossattn_cache=vllm_cache),
+        dreamzero_attn(x_step, context, crossattn_cache=dreamzero_cache),
+    )
+    _assert_crossattn_cache_reused(
+        "WanI2VCrossAttention.vllm_cache_reuse",
+        vllm_cache,
+        vllm_cache_prefill,
+        batch_size=1,
+        context_tokens=16,
+        num_heads=4,
+        head_dim=16,
+    )
+    _assert_crossattn_cache_reused(
+        "WanI2VCrossAttention.dreamzero_cache_reuse",
+        dreamzero_cache,
+        dreamzero_cache_prefill,
+        batch_size=1,
+        context_tokens=16,
+        num_heads=4,
+        head_dim=16,
+    )
 
 
 
@@ -461,6 +763,19 @@ def test_full_model_precision_prefill_and_ar_step():
     _assert_close("CausalWanModel.prefill.video", vllm_video_1, dreamzero_video_1, atol=FULL_MODEL_ATOL, rtol=FULL_MODEL_RTOL)
     for idx, (vllm_layer_kv, dreamzero_layer_kv) in enumerate(zip(vllm_kv_1, dreamzero_kv_1, strict=True)):
         _assert_close(f"CausalWanModel.prefill.kv[{idx}]", vllm_layer_kv, dreamzero_layer_kv)
+    # The causal DreamZero chunk model does not thread cross-attention cache
+    # through `_forward_blocks()` in either upstream or this port, so the
+    # cache must remain untouched on both sides.
+    for idx, vllm_cache in enumerate(vllm_crossattn_cache):
+        _assert_crossattn_cache_uninitialized(
+            f"CausalWanModel.prefill.crossattn_cache[{idx}]",
+            vllm_cache,
+        )
+    for idx, dreamzero_cache in enumerate(dreamzero_crossattn_cache):
+        _assert_crossattn_cache_uninitialized(
+            f"CausalWanModel.prefill.dreamzero_crossattn_cache[{idx}]",
+            dreamzero_cache,
+        )
 
     x_step = torch.randn(batch_size, 4, 1, 4, 4, device=DEVICE, dtype=DTYPE)
     timestep_step = torch.tensor([[500]], device=DEVICE)
@@ -507,3 +822,13 @@ def test_full_model_precision_prefill_and_ar_step():
     _assert_close("CausalWanModel.step.action", vllm_action_2, dreamzero_action_2, atol=FULL_MODEL_ATOL, rtol=FULL_MODEL_RTOL)
     for idx, (vllm_layer_kv, dreamzero_layer_kv) in enumerate(zip(vllm_kv_2, dreamzero_kv_2, strict=True)):
         _assert_close(f"CausalWanModel.step.kv[{idx}]", vllm_layer_kv, dreamzero_layer_kv)
+    for idx, vllm_cache in enumerate(vllm_crossattn_cache):
+        _assert_crossattn_cache_uninitialized(
+            f"CausalWanModel.step.crossattn_cache[{idx}]",
+            vllm_cache,
+        )
+    for idx, dreamzero_cache in enumerate(dreamzero_crossattn_cache):
+        _assert_crossattn_cache_uninitialized(
+            f"CausalWanModel.step.dreamzero_crossattn_cache[{idx}]",
+            dreamzero_cache,
+        )
