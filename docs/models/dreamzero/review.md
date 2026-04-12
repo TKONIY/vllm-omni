@@ -7,7 +7,21 @@
 - 当前工作树下，pipeline 级 parity 已经可以给出明确结论：
   - `TP=1, CF_P=1/2`：与 DreamZero eager 参考实现严格对齐；
   - `TP=2, CF_P=1/2`：首个失败点稳定出现在 `state.positive.kv[1]`，`max_diff=1.562e-02`。
-- 当前 scheduler 目标已收敛为：**对齐 DreamZero 不加 `torch.compile` 的 eager 路径**。仓内 `scheduling_flow_unipc_multistep.py` 已回退到原仓版本，且单独测试确认它与 DreamZero eager scheduler 在 step0/step1 上完全一致；DreamZero upstream 的 compiled/eager `bf16` 数值差异单独记录在 `todo.md`。
+- 当前对齐口径已收敛为：**DreamZero eager + 不加 `torch.compile` + 不启用 DiT cache/skip schedule**。仓内 `scheduling_flow_unipc_multistep.py` 已回退到原仓版本，且单独测试确认它与 DreamZero eager scheduler 在 step0/step1 上完全一致；DreamZero upstream 的 compiled/eager `bf16` 数值差异单独记录在 `todo.md`。
+- 正式服务链路现在也已经有结论，而不再只是 pipeline 级结论：
+  - `tests/dreamzero/test_client_ar_path_parity.py` 已确认同一份 DreamZero client 脚本在 upstream `/` 与 vLLM `/v1/realtime/robot/openpi` 两种 path 下保持相同客户端逻辑；
+  - `tests/dreamzero/test_openpi_e2e_source_parity.py` 已确认 upstream DreamZero server vs `vllm serve --omni` 在 DROID、`TP=1`、eager/no-compile/no-DiT-cache 基线下端到端严格对齐。
+
+## 本轮新增确认并已修复
+
+### 正式 stage 启动时的 `hidden_size` 误接线
+
+- `DreamZeroPipeline.__init__()` 曾把 `action_head_cfg.config.hidden_size=64` 误传给 `CausalWanModel`
+- 这会错误缩小 DiT 内部 action/state MLP 维度，并在正式 stage 加载 root checkpoint 时触发形状不匹配
+- 当前已修复为：
+  - DiT 只按 `diffusion_model_cfg` 构造
+  - 不再把 action-head 级 `hidden_size` 传入 `CausalWanModel`
+- 该修复已经被正式服务 e2e 覆盖到：修复后 `vllm serve --omni` 的 DreamZero stage 能正常初始化并通过 source parity
 
 ## 本次确认已解决，并已从问题列表移除
 
@@ -41,13 +55,20 @@
 
 ## 当前仍未对齐的点
 
-### [已修复] ~~`image_encoder` 未实现~~ → 已接入
+### [已澄清] `image_encoder` 的真正结论：当前应走本地 `DreamZeroImageEncoder`
 
-- `__init__` 现在加载 `CLIPVisionModel` + `CLIPImageProcessor`（from HuggingFace transformers），与 `pipeline_wan2_2_i2v.py:207-213` 完全相同的模式。
-- `_encode_image()` 使用 `output_hidden_states=True` + `hidden_states[-2]`，等价于 DreamZero `use_31_block=True`（跳最后一层，取第 31 层输出）。
-- 输入预处理：`[-1,1] → [0,1]` 反归一化后送入 `CLIPImageProcessor`，对应 `wan_video_image_encoder.py:879` 的 `mul_(0.5).add_(0.5)`。
-- 输出 shape `[B, 257, 1280]`，与 DreamZero 一致。
-- 若 checkpoint 目录缺少 `image_encoder` / `image_processor` 子目录，当前实现会直接报错，不再退化到零特征。
+- 新增 `tests/dreamzero/test_hf_image_encoder_real_weight_parity.py` 后，real-weight / real-input 的严格结论已经明确：
+  - upstream `WanImageEncoder.encode_image()`
+  - 当前本地端口 `DreamZeroImageEncoder.encode_image()`
+  - 手工构造并从 DreamZero root 权重 remap 的 `CLIPVisionModel(...).hidden_states[-2]`
+- 其中稳定成立的结论是：
+  - 本地 `DreamZeroImageEncoder` 在真实 checkpoint 权重 + 真实服务输入路径下与 upstream `max_diff = 0.0`；
+  - `CLIPImageProcessor` 不是 DreamZero 源码等价预处理；
+  - HF `CLIPVisionModel` 路线在当前真实 `bf16` 服务输入口径下仍会漂移，因此不应作为当前正式实现。
+- 因此，当前 pipeline 的正确实现是：
+  - 直接复用仓内 `DreamZeroImageEncoder`；
+  - 权重按源码命名直接映射：`action_head.image_encoder.* -> image_encoder.*`；
+  - 不再走 HF `CLIPVisionModel` 作为生产路径。
 
 ### [高] `TP>1` 的 pipeline parity 仍受 `RowParallelLinear` `bf16` 漂移影响
 
@@ -59,11 +80,16 @@
 - 这个结果与现有 `RowParallelLinear` 专项测试一致：`bf16 + TP>1` 会先在层级测试出现明显偏差，再在 DreamZero pipeline 中首先体现为 KV cache 漂移。
 - 因此，当前阻塞“整条链路 TP=2 严格对齐”的主因已经收敛到 TP 线性层数值路径，而不是 pipeline / state / CFG / image encoder / scheduler 接线错误。
 
-### [中] 默认 DiT skip schedule 仍未复现
+### [中] 正式服务 e2e 覆盖面仍未补全
 
-- 当前 pipeline 的 denoise loop 每一步都会执行模型。
-- 上游 `wan_flow_matching_action_tf.py` 默认还包含 `dit_step_mask` 与 `should_run_model()`，会在部分 step 复用上一步预测。
-- 如果目标是“默认推理轨迹一一对应”，这一项仍是实质性数值差异，而不只是性能差异。
+- 现在已经完成的正式服务 parity 覆盖是：
+  - DROID
+  - `TP=1`
+  - eager / no-compile / no-DiT-cache
+- 还没有补成正式自动化回归的包括：
+  - `CF_P=2` 的 OpenPI e2e
+  - AgiBot 的正式 smoke / parity
+  - `TP=2` 的正式服务 smoke（即便不追 strict parity，也可以补“可运行”回归）
 
 ### [已修复] ~~CFG parallel prefill 不是上游语义~~ → 已对齐
 
@@ -76,6 +102,7 @@
 
 - `causal_wan_model.py` 现在只在 `model_type == "i2v"` 时创建 `img_emb`，已与 DreamZero `wan_video_dit_action_casual_chunk.py:1380-1381` 对齐。
 - `causal_wan_model.py` 已补回上游 `init_weights()` 裸模型初始化路径，并将同样的 Xavier/zero 规则适配到 vLLM `ColumnParallelLinear` / `RowParallelLinear`。
+- `DistributedRMSNorm` 已改回与 upstream `WanRMSNorm` 同形的 `x * rsqrt(mean_sq + eps)` 数值路径，不再使用 `sqrt + divide` 变形；这修掉了 `TP=1`、`no-skip` 基线下首个 `block1.self_attn.norm_k` 漂移点，并恢复了 `tests/dreamzero/test_pipeline_dreamzero_parity.py` 的 `TP=1, CF_P=1/2` 严格对齐。
 
 ### cross-attn cache 语义澄清
 
@@ -114,12 +141,13 @@
   - action 后处理仍是 raw padded action。
 - 当前真正还应该保留在 review 里的问题，应该只剩：
   - `TP>1` 下 `RowParallelLinear` 引入的 pipeline parity 漂移；
-  - 默认 DiT skip schedule 未复现；
+  - `CF_P=2` / AgiBot / `TP=2` 的正式服务级自动化覆盖仍未补齐；
   - sequence/ring parallel 框架未复用。
 - 已从问题列表移除（本轮修复）：
   - CFG parallel prefill 语义 → 已改为走 `predict_noise_maybe_with_cfg()`，遵循 `cfg_parallel.md` 设计规则。
-  - `image_encoder` 缺失 → 已接入 `CLIPVisionModel` + `CLIPImageProcessor`，复用 wan2_2 模式。
+  - `image_encoder` 路线 → 已切回仓内 `DreamZeroImageEncoder`，并补齐 `action_head.image_encoder.* -> image_encoder.*` 直映射。
   - CFG 数学里的 `cfg_normalize=False` → 已显式补到 prefill / denoise 调用点，对齐 DreamZero 直接 CFG 公式。
   - `crossattn_cache` 测试口径错误 → 已拆清“模块级支持 cache”与“full-model 链路不上 cache”两层语义，并补上对应测试。
   - pipeline 级 TP / CF_P / upstream parity 测试缺失 → 已补上 `tests/dreamzero/test_pipeline_dreamzero_parity.py`，当前口径为 DreamZero eager reference，并已拿到明确通过/失败矩阵。
   - scheduler 外部 `step_index` 传递 → 已删除，对 parity 无影响。
+  - DiT cache / skip schedule 代码 → 已从 `pipeline_dreamzero.py` 删除；当前基线明确只对齐 no-compile / no-skip 的 eager 路径。

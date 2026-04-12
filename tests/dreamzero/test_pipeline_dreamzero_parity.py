@@ -76,6 +76,8 @@ NUM_FRAMES = 5
 NUM_FRAME_PER_BLOCK = 1
 ACTION_HORIZON = 4
 NEGATIVE_PROMPT = "bad quality"
+CLIP_IMAGE_MEAN = torch.tensor([0.48145466, 0.4578275, 0.40821073], dtype=torch.float32).view(1, 3, 1, 1)
+CLIP_IMAGE_STD = torch.tensor([0.26862954, 0.26130258, 0.27577711], dtype=torch.float32).view(1, 3, 1, 1)
 
 TINY_CFG = dict(
     model_type="i2v",
@@ -359,10 +361,22 @@ class FakeImageProcessor:
         return SimpleNamespace(pixel_values=images)
 
 
+def _fake_clip_hidden_from_pixel_values(pixel_values: torch.Tensor, *, dtype: torch.dtype) -> torch.Tensor:
+    batch_size, channels, _, _ = pixel_values.shape
+    down = F.interpolate(pixel_values.float(), size=(16, 16), mode="bilinear", align_corners=False)
+    tokens = down.permute(0, 2, 3, 1).reshape(batch_size, 256, channels)
+    mean = tokens.mean(dim=-1, keepdim=True)
+    basis = torch.arange(1280, device=down.device, dtype=torch.float32).view(1, 1, -1)
+    feats = torch.sin(mean * (basis + 1) / 37.0)
+    cls = feats.mean(dim=1, keepdim=True)
+    return torch.cat([cls, feats], dim=1).to(dtype=dtype)
+
+
 class FakeClipVision(nn.Module):
     def __init__(self, *, dtype: torch.dtype) -> None:
         super().__init__()
         self._dtype = dtype
+        self.config = SimpleNamespace(image_size=224)
 
     @property
     def dtype(self) -> torch.dtype:
@@ -370,38 +384,59 @@ class FakeClipVision(nn.Module):
 
     def forward(self, pixel_values: torch.Tensor, output_hidden_states: bool = True):
         del output_hidden_states
-        batch_size, channels, _, _ = pixel_values.shape
-        down = F.interpolate(pixel_values.float(), size=(16, 16), mode="bilinear", align_corners=False)
-        tokens = down.permute(0, 2, 3, 1).reshape(batch_size, 256, channels)
-        mean = tokens.mean(dim=-1, keepdim=True)
-        basis = torch.arange(1280, device=down.device, dtype=torch.float32).view(1, 1, -1)
-        feats = torch.sin(mean * (basis + 1) / 37.0)
-        cls = feats.mean(dim=1, keepdim=True)
-        hidden = torch.cat([cls, feats], dim=1).to(dtype=self._dtype)
+        hidden = _fake_clip_hidden_from_pixel_values(pixel_values, dtype=self._dtype)
         return SimpleNamespace(hidden_states=[torch.zeros_like(hidden), hidden, torch.zeros_like(hidden)])
 
 
 class FakeDreamZeroImageEncoder(nn.Module):
+    def __init__(self, *, dtype: torch.dtype = DTYPE) -> None:
+        super().__init__()
+        self._dummy = nn.Parameter(torch.zeros(1, dtype=dtype))
+
+    @property
+    def dtype(self) -> torch.dtype:
+        return self._dummy.dtype
+
     def encode_image(self, videos: torch.Tensor) -> torch.Tensor:
-        frame = videos[:, 0].float() * 0.5 + 0.5
-        down = F.interpolate(frame, size=(16, 16), mode="bilinear", align_corners=False)
-        tokens = down.permute(0, 2, 3, 1).reshape(down.shape[0], 256, down.shape[1])
-        mean = tokens.mean(dim=-1, keepdim=True)
-        basis = torch.arange(1280, device=down.device, dtype=torch.float32).view(1, 1, -1)
-        feats = torch.sin(mean * (basis + 1) / 37.0)
-        cls = feats.mean(dim=1, keepdim=True)
-        return torch.cat([cls, feats], dim=1).to(dtype=videos.dtype)
+        size = (224, 224)
+        pixel_values = torch.cat([
+            F.interpolate(frame_batch.float(), size=size, mode="bicubic", align_corners=False)
+            for frame_batch in videos
+        ])
+        pixel_values = pixel_values.mul(0.5).add(0.5)
+        pixel_values = (
+            pixel_values
+            - CLIP_IMAGE_MEAN.to(device=pixel_values.device, dtype=pixel_values.dtype)
+        ) / CLIP_IMAGE_STD.to(device=pixel_values.device, dtype=pixel_values.dtype)
+        pixel_values = pixel_values.to(dtype=self.dtype)
+        return _fake_clip_hidden_from_pixel_values(pixel_values, dtype=self.dtype)
 
 
 class FakeVAE(nn.Module):
-    def encode(self, video: torch.Tensor, *args, **kwargs) -> torch.Tensor:
-        del args, kwargs
+    def __init__(self, *, dtype: torch.dtype = torch.float32) -> None:
+        super().__init__()
+        self._dummy = nn.Parameter(torch.zeros(1, dtype=dtype))
+
+    @property
+    def dtype(self) -> torch.dtype:
+        return self._dummy.dtype
+
+    def _latent_mu(self, video: torch.Tensor) -> torch.Tensor:
         batch_size, channels, num_frames, _, _ = video.shape
         frame_indices = [0] + list(range(4, num_frames, 4))
         selected = video[:, :, frame_indices]
         pooled = F.avg_pool3d(selected.float(), kernel_size=(1, 8, 8), stride=(1, 8, 8))
         repeated = pooled.repeat(1, (16 + channels - 1) // channels, 1, 1, 1)[:, :16]
-        return repeated.to(dtype=video.dtype)
+        return repeated.to(dtype=self.dtype)
+
+    def _encode(self, video: torch.Tensor) -> torch.Tensor:
+        mu = self._latent_mu(video)
+        logvar = torch.zeros_like(mu)
+        return torch.cat([mu, logvar], dim=1)
+
+    def encode(self, video: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+        del args, kwargs
+        return self._latent_mu(video)
 
 
 class AttrDict(dict):
@@ -563,8 +598,28 @@ def _build_vllm_pipeline(transformer: nn.Module, device: torch.device) -> DreamZ
     pipe.tokenizer = FakeTokenizer()
     pipe.text_encoder = FakeTextEncoderVLLM(64).to(device)
     pipe.image_processor = FakeImageProcessor()
-    pipe.image_encoder = FakeClipVision(dtype=DTYPE).to(device)
+    pipe.image_encoder = FakeDreamZeroImageEncoder(dtype=DTYPE).to(device)
+    pipe.register_buffer(
+        "clip_image_mean",
+        torch.tensor([0.48145466, 0.4578275, 0.40821073], dtype=torch.float32).view(1, 3, 1, 1),
+        persistent=False,
+    )
+    pipe.register_buffer(
+        "clip_image_std",
+        torch.tensor([0.26862954, 0.26130258, 0.27577711], dtype=torch.float32).view(1, 3, 1, 1),
+        persistent=False,
+    )
     pipe.vae = FakeVAE().to(device)
+    pipe.register_buffer(
+        "vae_latents_mean",
+        torch.zeros(1, 16, 1, 1, 1, dtype=torch.float32, device=device),
+        persistent=False,
+    )
+    pipe.register_buffer(
+        "vae_latents_inv_std",
+        torch.ones(1, 16, 1, 1, 1, dtype=torch.float32, device=device),
+        persistent=False,
+    )
     pipe.transformer = transformer
     pipe.scheduler = FlowUniPCMultistepScheduler(num_train_timesteps=1000, shift=1, use_dynamic_shifting=False)
     pipe.state = DreamZeroState()
@@ -628,6 +683,7 @@ def _build_reference_head(source_model: nn.Module, device: torch.device):
     head._device = str(device)
     head.dynamic_cache_schedule = False
     head.dit_step_mask = [True] * NUM_INFERENCE_STEPS
+    head.skip_countdown = 0
     head.normalize_video = lambda x: x * 2.0 - 1.0
     head.model = source_model
     head.action_dim = TINY_CFG["action_dim"]
@@ -731,9 +787,24 @@ def _denormalize_reference_action(action: torch.Tensor, embodiment_name: str) ->
     return action_real
 
 
-def _postprocess_reference(head_out: Any, state_features: torch.Tensor, embodiment_name: str) -> tuple[torch.Tensor, torch.Tensor]:
-    action = _denormalize_reference_action(head_out.action_pred.clone(), embodiment_name)
-    action[..., :7] = action[..., :7] + state_features[:, 0, :7].unsqueeze(1)
+def _postprocess_reference(
+    head_out: Any,
+    raw_state: np.ndarray | torch.Tensor,
+    embodiment_name: str,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Mirror upstream `sim_policy.py` postprocess exactly.
+
+    Source:
+    - `sim_policy.py:814-820` casts `model_pred["action_pred"]` to float before
+      calling `unapply()`
+    - `sim_policy.py:539-604` denormalizes and then adds the original raw state
+      back for the relative joint dimensions
+    """
+    action = _denormalize_reference_action(head_out.action_pred.float().clone(), embodiment_name)
+    if not torch.is_tensor(raw_state):
+        raw_state = torch.from_numpy(np.asarray(raw_state, dtype=np.float64))
+    raw_state = raw_state.to(device=action.device, dtype=torch.float32).reshape(-1)
+    action[..., :7] = action[..., :7] + raw_state[:7].view(1, 1, 7)
     return action.squeeze(0), head_out.video_pred
 
 
@@ -928,9 +999,13 @@ def _run_combo_worker(rank: int, world_size: int, tp_size: int, cfg_parallel_siz
                     with torch.no_grad():
                         reference = ref_head.lazy_joint_video_action(AttrDict(), ref_batch)
 
-                    ref_action, ref_video = _postprocess_reference(reference, ref_batch.state, "oxe_droid")
-                    actual_action = torch.from_numpy(output.custom_output["actions"]).to(device=device, dtype=torch.float32)
-                    actual_video = output.custom_output["video_pred"].to(device=device, dtype=torch.float32)
+                    ref_action, ref_video = _postprocess_reference(
+                        reference,
+                        unified_obs["state"],
+                        "oxe_droid",
+                    )
+                    actual_action = torch.from_numpy(output.output["actions"]).to(device=device, dtype=torch.float32)
+                    actual_video = output.output["video"].to(device=device, dtype=torch.float32)
 
                     _assert_close(
                         f"step{step_idx}.actions",

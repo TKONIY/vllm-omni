@@ -4,7 +4,8 @@
 
 - `action_encoder.py`：已完成，对齐 DreamZero，GPU 精度测试通过。
 - `causal_wan_model.py`：inference-only 端口已完成，热点路径已经切到 vllm-omni 基础设施；单卡与 TP=2 的 `fp32`/单层级测试通过，但保留原生 `bf16 x bf16` 的 `RowParallelLinear` 后，`.venv` 下 pipeline parity 在 `TP>1` 仍会出现数值漂移，详见下方 TODO。
-- `pipeline_dreamzero.py` / `state_dreamzero.py` / `transform/*`：主链路已接通；当前 `tests/dreamzero/test_pipeline_dreamzero_parity.py` 对比的是 DreamZero eager reference。结果为：`TP=1, CF_P=1/2` 严格对齐，`TP=2, CF_P=1/2` 首个失败点稳定为 `state.positive.kv[1]`，`max_diff=1.562e-02`。
+- `pipeline_dreamzero.py` / `state_dreamzero.py` / `transform/*`：主链路已接通；当前 `tests/dreamzero/test_pipeline_dreamzero_parity.py` 对比的是 **DreamZero eager + no-compile + no-DiT-cache/skip** reference。结果为：`TP=1, CF_P=1/2` 严格对齐，`TP=2, CF_P=1/2` 首个失败点稳定为 `state.positive.kv[1]`，`max_diff=1.562e-02`。
+- 正式服务链路：已完成 DROID / `TP=1` / eager 基线的 source-vs-vLLM OpenPI parity，`tests/dreamzero/test_openpi_e2e_source_parity.py` 已通过；同一份 DreamZero client 逻辑在 upstream `/` 与 vLLM `/v1/realtime/robot/openpi` 的 path 差异也已由 `tests/dreamzero/test_client_ar_path_parity.py` 固化。
 - `scheduling_flow_unipc_multistep.py`：已恢复到原仓 eager-aligned 版本；新增 `tests/dreamzero/test_flow_unipc_scheduler_precision.py`，确认当前 vLLM scheduler 与 DreamZero 不加 `torch.compile` 的 scheduler 在 step0/step1 上完全一致。
 - 训练路径：按要求删除，不再列为 TODO。
 
@@ -16,7 +17,7 @@
 | `CategorySpecificLinear` | `modeling/action_encoder.py` | 与 DreamZero 一致 | `tests/dreamzero/test_action_encoder.py::test_category_specific_linear` |
 | `CategorySpecificMLP` | `modeling/action_encoder.py` | 与 DreamZero 一致 | `tests/dreamzero/test_action_encoder.py::test_category_specific_mlp` |
 | `MultiEmbodimentActionEncoder` | `modeling/action_encoder.py` | 与 DreamZero 一致 | `tests/dreamzero/test_action_encoder.py::test_multi_embodiment_action_encoder` |
-| `DistributedRMSNorm` | `modeling/causal_wan_model.py` | 替代 DreamZero `WanRMSNorm`，支持 TP 全局 RMS | `tests/dreamzero/test_causal_wan_model.py::test_distributed_rmsnorm_precision` / `tests/dreamzero/test_causal_wan_model_tp2.py::test_causal_wan_model_tp2_precision` |
+| `DistributedRMSNorm` | `modeling/causal_wan_model.py` | 替代 DreamZero `WanRMSNorm`，支持 TP 全局 RMS，并保持 upstream `x * rsqrt(mean_sq + eps)` 数值路径 | `tests/dreamzero/test_causal_wan_model.py::test_distributed_rmsnorm_precision` / `tests/dreamzero/test_causal_wan_model_tp2.py::test_causal_wan_model_tp2_precision` |
 | `MLPProj` | `modeling/causal_wan_model.py` | 已复用 `ColumnParallelLinear + RowParallelLinear` | 已纳入 full model 精度覆盖 |
 | `WanT2VCrossAttention` | `modeling/causal_wan_model.py` | 已复用 `Attention + Column/RowParallelLinear`，单卡与 TP=2 对齐 | `tests/dreamzero/test_causal_wan_model.py::test_t2v_cross_attn_precision` / `tests/dreamzero/test_causal_wan_model_tp2.py::test_causal_wan_model_tp2_precision` |
 | `WanI2VCrossAttention` | `modeling/causal_wan_model.py` | 已复用 `Attention + Column/RowParallelLinear`，单卡与 TP=2 对齐 | `tests/dreamzero/test_causal_wan_model.py::test_i2v_cross_attn_precision` / `tests/dreamzero/test_causal_wan_model_tp2.py::test_causal_wan_model_tp2_precision` |
@@ -43,8 +44,8 @@
 
 | 项目 | 现状 | 备注 |
 |------|------|------|
-| DiT cache skip (static mask) | 未接入 | `dit_step_mask` 跳步，8/16 步只跑模型 8 次，原始 L201-218 |
-| DiT cache skip (dynamic cosine) | 未接入 | `should_run_model` 基于 cosine similarity 动态跳步，原始 L899-927 |
+| DiT cache skip (static mask) | 未接入 | 当前精度基线明确不启用；若未来要追 upstream 性能路径，可再单独移植 `dit_step_mask` |
+| DiT cache skip (dynamic cosine) | 未接入 | 当前精度基线明确不启用；若未来要追 upstream 性能路径，可再单独移植 `should_run_model` |
 | Async pipeline (predicted frame feedback) | 未接入 | 用上一步 `video_pred` 代替 VAE encode 真实观测帧，省 VAE 延迟。代码已有 `latent_video` 参数透传，当前未启用。原始 L1013-1017 |
 
 ### 并行框架复用
@@ -60,21 +61,49 @@
 |------|------|------|
 | `RowParallelLinear` 在 `bf16 + TP>1` 下的数值漂移 | 未解决 | 当前保留 vLLM 原生 `bf16 x bf16` 路径；专门测试 `tests/diffusion/layers/test_row_parallel_linear_precision.py` 显示单层 `max_diff=1.25e-01`，pipeline parity 首个失败点约 `1.562e-02`（`state.positive.kv[1]`） |
 | DreamZero scheduler `eager` / `compiled` `bf16` 差异 | 已定位，记录现象 | 当前实现只对齐 DreamZero 不加 `torch.compile` 的 scheduler；若未来要对齐 upstream compiled 路径，需要单独处理这部分数值差异 |
+| 正式 OpenPI e2e 覆盖矩阵 | 未补全 | 当前只固化了 DROID + `TP=1` + eager/no-compile/no-DiT-cache；`CF_P=2`、AgiBot、`TP=2` smoke 尚未自动化 |
 
 ### Pipeline / Serving / Transform
 
 | 文件 | 对应 DreamZero 原始 | 状态 |
 |------|-------------------|------|
-| `pipeline_dreamzero.py` | `WANPolicyHead.lazy_joint_video_action` L929-1270 | 已实现，且 `tests/dreamzero/test_pipeline_dreamzero_parity.py` 已覆盖 TP=1/2、CF_P=1/2 与 upstream eager reference 对照 |
+| `pipeline_dreamzero.py` | `WANPolicyHead.lazy_joint_video_action` L929-1270 | 已实现，且 `tests/dreamzero/test_pipeline_dreamzero_parity.py` 已覆盖 TP=1/2、CF_P=1/2 与 upstream eager/no-compile/no-skip reference 对照 |
 | `state_dreamzero.py` | `ARDroidRoboarenaPolicy._frame_buffers` + `WANPolicyHead.kv_cache*` | 已实现并接线；`accumulate_frames()` 已在 pipeline `forward()` 中实际参与 AR 轨迹 |
 | `transform/base.py` | `dreamzero_cotrain.py` 基类 | 已实现：纯数据集关注点，3 个抽象方法 |
 | `transform/droid.py` | `dreamzero_cotrain.py` OXE_DROID | 已实现：3 路相机拼接 + 语言模板 + state 提取 |
 | `transform/roboarena.py` | `socket_test_optimized_AR.py` key 映射 | 已实现：继承 DroidTransform，只改 IMAGE_KEY_MAP |
 | `openpi_connection.py` | `websocket_policy_server.py` | 已实现 |
 | `openpi_serving.py` | 业务层 | 已实现 |
-| CLIP image encoder | `wan_video_image_encoder.py` L856-891 | ✅ 复用 `CLIPVisionModel` + `CLIPImageProcessor`（wan2_2 模式），无需移植 908 行自定义代码 |
-| registry 注册 | `registry.py` | 待补 |
-| 端到端服务测试 | server + client | 待补 |
+| CLIP image encoder | `wan_video_image_encoder.py` L856-891 | 已落实 | 当前 `pipeline_dreamzero.py` 使用仓内 `DreamZeroImageEncoder`；`tests/dreamzero/test_hf_image_encoder_real_weight_parity.py` 已确认本地实现与 upstream `WanImageEncoder.encode_image()` 在 real-weight + real-input 下精确对齐，而 HF `CLIPVisionModel` 路线在真实服务输入口径下仍会漂移 |
+
+### 剩余接线项
+
+| 项目 | 文件 | 状态 |
+|------|------|------|
+| registry 注册 | `registry.py` | 已完成 |
+| 正式 `/v1/realtime/robot/openpi` smoke | server + client | 已完成（`infer -> infer -> reset -> infer` 跑通） |
+| upstream source vs `vllm serve --omni` formal parity | server + client | 已完成（官方 HF repo id 冷缓存预热后，`TP=1` eager 路径严格对齐通过） |
+| `CF_P=2` 正式 OpenPI parity | server + client | 未完成 |
+| AgiBot 正式 smoke / parity | server + client | 未完成 |
+| `TP=2` 正式服务 smoke | server + client | 未完成（功能预期可跑，但不承诺 strict parity） |
+
+## Appendix: formal OpenPI e2e parity（upstream eager source vs `vllm serve --omni`）
+
+- 观测来源：DreamZero `test_client_AR.py` 的真实视频帧 helper（`frame [0]`，再接 `chunk [0,7,15,23]`，然后 `reset` 后再次 `frame [0]`）
+- upstream 参考：DreamZero `WANPolicyHead.lazy_joint_video_action()`，`torch.compile` 显式禁用（`torch.compile -> identity`）
+- vLLM 侧：正式 `/v1/realtime/robot/openpi` WebSocket，`--enforce-eager`
+- 当前结果：
+  - 正式服务已经能稳定返回 metadata、两次连续 `infer`、一次 `reset`、以及 reset 后的再次 `infer`
+  - `tests/dreamzero/test_openpi_e2e_source_parity.py` 已通过
+  - 当前通过口径：
+    - upstream：DreamZero eager / no-compile / no-DiT-cache
+    - vLLM：`--model GEAR-Dreams/DreamZero-DROID --enforce-eager`
+    - 对比阈值：`rtol=0.0, atol=0.0`
+- 已确认的缩圈：
+  - text encoder：real-weight 精确对齐（`max_diff = 0.0`）
+  - image encoder：本地 `DreamZeroImageEncoder` 在 real-weight + real-input 下精确对齐（`max_diff = 0.0`）
+  - HF `CLIPVisionModel`：在当前真实 `bf16` 服务输入口径下仍会漂移，不作为生产实现
+  - image encoder processor：`CLIPImageProcessor` 不是源码等价预处理；默认 processor 会带来 `feature max_diff = 13.140625`，即使改成 `224x224 + no center crop + same mean/std`，仍有 `feature max_diff = 6.734375`
 
 ## 当前 vllm-omni 复用情况
 
@@ -94,6 +123,7 @@
 - `PYTHONPATH=. .venv/bin/python tests/dreamzero/test_causal_wan_model_tp1_vs_tp2.py`
 - `PYTHONPATH=. .venv/bin/python -m pytest tests/dreamzero/test_pipeline_dreamzero_parity.py -q`
 - `PYTHONPATH=. .venv/bin/python -m pytest tests/dreamzero/test_flow_unipc_scheduler_precision.py -q`
+- `CUDA_VISIBLE_DEVICES=0 PYTHONPATH=. .venv/bin/pytest -q -s tests/dreamzero/test_hf_image_encoder_real_weight_parity.py`
 
 ## Appendix: Precision Report
 
