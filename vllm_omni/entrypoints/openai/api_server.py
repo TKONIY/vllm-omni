@@ -517,6 +517,10 @@ async def omni_init_app_state(
             stage_configs=diffusion_stage_configs,
         )
         state.openai_streaming_speech = None
+        state.openai_serving_realtime_robot = ServingRealtimeRobotOpenPI(
+            engine_client=engine_client,
+            model_name=model_name,
+        )
 
         state.enable_server_load_tracking = getattr(args, "enable_server_load_tracking", False)
         state.server_load_metrics = 0
@@ -831,7 +835,7 @@ async def omni_init_app_state(
     )
 
     # Robot policy serving (for /v1/realtime/robot/openpi)
-    # Works with both diffusion engine and LLM engine client.
+    # Current implementation is diffusion-only.
     state.openai_serving_realtime_robot = ServingRealtimeRobotOpenPI(
         engine_client=engine_client,
         model_name=served_model_names[0] if served_model_names else None,

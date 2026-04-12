@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-"""Serving layer for robot policy inference via /v1/realtime/robot/openpi.
+"""Serving layer for robot policy inference via `/v1/realtime/robot/openpi`.
 
-Flow: raw obs → transform (dataset key mapping) → unified obs → engine → actions
-Transform is stateless and selected per-request via obs["embodiment"].
+Flow: raw obs → transform (dataset key mapping) → unified obs →
+`DiffusionEngine.step()` → actions.
+Transform is stateless and selected per-request via `obs["embodiment"]`.
 """
 
 from __future__ import annotations
@@ -58,6 +59,7 @@ class ServingRealtimeRobotOpenPI:
     def reset(self, obs: dict) -> None:
         """Reset session state."""
         self._call_count = 0
+        self._current_session_id = None
 
     async def infer(self, obs: dict) -> np.ndarray:
         """raw obs → transform → engine → actions."""
@@ -76,10 +78,17 @@ class ServingRealtimeRobotOpenPI:
         transform = self._get_transform(obs)
         unified_obs = transform.transform_input(obs)
 
-        # Build request, run inference
-        request = self._build_request(unified_obs, obs)
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, self.engine_client.step, request)
+        # Build request, run inference through AsyncOmni
+        request = self._build_request(unified_obs)
+        result = None
+        async for output in self.engine_client.generate(
+            prompt=request.prompts[0],
+            request_id=request.request_ids[0],
+            sampling_params_list=[request.sampling_params],
+        ):
+            result = output
+        if result is None:
+            raise RuntimeError("Robot OpenPI request produced no output.")
 
         # Extract actions (via transform or default)
         return self._extract_actions(result, transform)
@@ -89,20 +98,14 @@ class ServingRealtimeRobotOpenPI:
         embodiment = obs.get("embodiment", self.default_embodiment)
         return get_transform(embodiment)
 
-    def _build_request(self, unified_obs: dict, raw_obs: dict) -> Any:
+    def _build_request(self, unified_obs: dict) -> Any:
         """Build engine request from unified obs.
 
-        Override for non-DiffusionEngine types.
+        Returns an `OmniDiffusionRequest` payload consumed by
+        `AsyncOmni.generate()` and routed to the diffusion stage.
         """
-        from vllm_omni.diffusion.diffusion_engine import DiffusionEngine
         from vllm_omni.diffusion.request import OmniDiffusionRequest
         from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-
-        assert isinstance(self.engine_client, DiffusionEngine), (
-            f"Default _build_request requires DiffusionEngine, "
-            f"got {type(self.engine_client).__name__}. "
-            f"Override _build_request() for other engine types."
-        )
 
         extra_args = {
             "reset": self._call_count <= 1,
@@ -110,7 +113,7 @@ class ServingRealtimeRobotOpenPI:
             "unified_obs": unified_obs,
         }
 
-        prompt = unified_obs.get("prompt", "")
+        prompt = unified_obs["prompt"]
         sampling_params = OmniDiffusionSamplingParams(extra_args=extra_args)
         return OmniDiffusionRequest(
             prompts=[prompt],

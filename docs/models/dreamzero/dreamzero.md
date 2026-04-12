@@ -105,7 +105,7 @@ pipeline_dreamzero.py: DreamZeroPipeline.forward(req)
   │ 9. action denorm: q99 反归一化 (self.action_norm_stats)
   │ 10. relative→absolute: action += last_state (if self.relative_action)
   ▼
-返回: DiffusionOutput(custom_output={"actions": ndarray(N, max_action_dim)})
+返回: DiffusionOutput(output={"video": ..., "actions": ndarray(N, max_action_dim)})
   ▼
 openpi_serving.py: transform.transform_output(result) → ndarray(N, ACTION_DIM)
   ▼
@@ -184,7 +184,7 @@ Transform 只输出字符串和 numpy，不含任何模型常量。
 
 | key | 类型 | shape | 说明 |
 |-----|------|-------|------|
-| `images` | ndarray uint8 | `(T, 2H, 2W, 3)` | 拼接后单视角图，DROID: `(1, 360, 640, 3)` |
+| `images` | ndarray uint8 | `(T, 2H, 2W, 3)` | 拼接后单视角图；当前 DROID/RoboArena 在线服务会把常见 `180x320` 单视角输入收成 `176x320`，因此典型输出为 `(1, 352, 640, 3)` |
 | `prompt` | str | - | 模板化后的 prompt（pipeline tokenizes） |
 | `state` | ndarray float64 | `(state_dim,)` | raw state，DROID: `(8,)`（pipeline pads to 64） |
 | `embodiment_name` | str | - | 如 `"oxe_droid"`（pipeline 映射为 numeric ID） |

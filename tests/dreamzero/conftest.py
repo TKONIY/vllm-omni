@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
+import socket
 
 import pytest
 import torch
@@ -23,7 +24,10 @@ def default_vllm_config(default_vllm_config):
 
     if not torch.distributed.is_initialized():
         os.environ.setdefault("MASTER_ADDR", "localhost")
-        os.environ.setdefault("MASTER_PORT", "29599")
+        if "MASTER_PORT" not in os.environ:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.bind(("127.0.0.1", 0))
+                os.environ["MASTER_PORT"] = str(sock.getsockname()[1])
         os.environ.setdefault("RANK", "0")
         os.environ.setdefault("LOCAL_RANK", "0")
         os.environ.setdefault("WORLD_SIZE", "1")

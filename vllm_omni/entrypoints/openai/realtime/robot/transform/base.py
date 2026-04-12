@@ -85,21 +85,25 @@ class RobotPolicyTransform:
     def transform_output(self, result: Any) -> np.ndarray:
         """Extract action ndarray (N, ACTION_DIM) from model output.
 
+        Engine outputs actions through ``multimodal_output["actions"]``.
         Pipeline outputs (horizon, max_action_dim) after batch squeeze.
         We slice to actual ACTION_DIM.
         """
-        if hasattr(result, "custom_output"):
-            actions = result.custom_output.get("actions")
-            if actions is not None:
-                actions = np.asarray(actions, dtype=np.float32)
-                # Handle any remaining batch dims: squeeze to 2D (horizon, dim)
-                while actions.ndim > 2:
-                    actions = actions[0]
-                # Slice padded dim to actual ACTION_DIM
-                if actions.ndim == 2 and actions.shape[-1] > self.ACTION_DIM:
-                    actions = actions[:, :self.ACTION_DIM]
-                return actions
-        return np.zeros((24, self.ACTION_DIM), dtype=np.float32)
+        if (not hasattr(result, "multimodal_output") or result.multimodal_output is None):
+            raise RuntimeError("Missing multimodal_output in robot policy result")
+
+        actions = result.multimodal_output.get("actions")
+        if actions is None:
+            raise RuntimeError("Missing multimodal_output['actions'] in robot policy result")
+
+        actions = np.asarray(actions, dtype=np.float32)
+        # Handle any remaining batch dims: squeeze to 2D (horizon, dim)
+        while actions.ndim > 2:
+            actions = actions[0]
+        # Slice padded dim to actual ACTION_DIM
+        if actions.ndim == 2 and actions.shape[-1] > self.ACTION_DIM:
+            actions = actions[:, :self.ACTION_DIM]
+        return actions
 
     # ------------------------------------------------------------------
     # Subclass MUST override
