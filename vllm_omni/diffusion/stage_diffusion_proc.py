@@ -103,6 +103,24 @@ class StageDiffusionProc:
                     od_config.model_class_name = "NextStep11Pipeline"
                 od_config.tf_model_config = TransformerConfig()
                 od_config.update_multimodal_support()
+            elif model_type == "vla":
+                # DreamZero checkpoints currently identify themselves as VLA.
+                # Prefer the model-family namespace (`dreamzero`) over matching
+                # a specific backbone class name such as `CausalWanModel`.
+                action_head_cfg = cfg.get("action_head_cfg") or {}
+                action_head_cfg_config = action_head_cfg.get("config") or {}
+                backbone_cfg = cfg.get("backbone_cfg") or {}
+                if any(
+                    "dreamzero" in str(target).lower()
+                    for target in (
+                        action_head_cfg.get("_target_", ""),
+                        action_head_cfg_config.get("_target_", ""),
+                        backbone_cfg.get("_target_", ""),
+                    )
+                ):
+                    od_config.model_class_name = "DreamZeroPipeline"
+                    od_config.tf_model_config = TransformerConfig()
+                    od_config.update_multimodal_support()
             elif architectures and len(architectures) == 1:
                 od_config.model_class_name = architectures[0]
             else:

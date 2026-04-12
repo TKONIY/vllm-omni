@@ -196,7 +196,7 @@ class DistributedRMSNorm(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         tp_size = get_tensor_model_parallel_world_size()
         x_float = x.float()
-        local_sum_sq = (x_float**2).sum(dim=-1, keepdim=True)
+        local_sum_sq = x_float.pow(2).sum(dim=-1, keepdim=True)
         local_count = x.shape[-1]
 
         if tp_size > 1:
@@ -207,8 +207,12 @@ class DistributedRMSNorm(nn.Module):
             global_sum_sq = local_sum_sq
             global_count = local_count
 
-        rms = torch.sqrt(global_sum_sq / global_count + self.eps)
-        return (x_float / rms).type_as(x) * self.weight
+        mean_sq = global_sum_sq / global_count
+        # Keep the same numerical form as upstream `WanRMSNorm._norm()`:
+        #   x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + eps)
+        # For TP>1, extend the mean to the global hidden dimension first, then
+        # apply the same `rsqrt` formulation on each local shard.
+        return (x_float * torch.rsqrt(mean_sq + self.eps)).type_as(x) * self.weight
 
 
 # ── Projections ─────────────────────────────────────────────────────
