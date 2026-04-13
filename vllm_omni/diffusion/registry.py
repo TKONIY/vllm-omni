@@ -188,6 +188,11 @@ _DIFFUSION_MODELS = {
         "pipeline_omnivoice",
         "OmniVoicePipeline",
     ),
+    "LingbotWorldFastPipeline": (
+        "lingbot_world_fast",
+        "pipeline_lingbot_world_fast",
+        "LingbotWorldFastPipeline",
+    ),
 }
 
 

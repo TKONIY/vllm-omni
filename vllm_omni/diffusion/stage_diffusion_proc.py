@@ -40,6 +40,10 @@ if TYPE_CHECKING:
 logger = init_logger(__name__)
 
 
+def _is_lingbot_world_fast_model(model: str) -> bool:
+    return "lingbot-world-fast" in model.lower()
+
+
 class StageDiffusionProc:
     """Subprocess entry point for diffusion inference.
 
@@ -103,6 +107,8 @@ class StageDiffusionProc:
                     od_config.model_class_name = "NextStep11Pipeline"
                 od_config.tf_model_config = TransformerConfig()
                 od_config.update_multimodal_support()
+            elif cfg.get("_class_name") == "WanModel" and _is_lingbot_world_fast_model(od_config.model or ""):
+                od_config.model_class_name = "LingbotWorldFastPipeline"
             elif architectures and len(architectures) == 1:
                 od_config.model_class_name = architectures[0]
             else:

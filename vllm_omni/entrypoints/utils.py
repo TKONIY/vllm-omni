@@ -23,6 +23,10 @@ _DIFFUSERS_CLASS_TO_CONFIG: dict[str, str] = {
 }
 
 
+def _is_lingbot_world_fast_model(model: str) -> bool:
+    return "lingbot-world-fast" in model.lower()
+
+
 def inject_omni_kv_config(stage: Any, omni_conn_cfg: dict[str, Any], omni_from: str, omni_to: str) -> None:
     """Inject connector configuration into stage engine arguments."""
     # Prepare omni_kv_config dict
@@ -239,7 +243,9 @@ def resolve_model_config_path(model: str) -> str:
             # but have a valid config.json with model_type
             try:
                 config_dict = get_hf_file_to_dict("config.json", model, revision=None)
-                if config_dict and "model_type" in config_dict:
+                if config_dict and config_dict.get("_class_name") == "WanModel" and _is_lingbot_world_fast_model(model):
+                    model_type = "lingbot_world_fast"
+                elif config_dict and "model_type" in config_dict:
                     model_type = config_dict["model_type"]
                 else:
                     # For models with empty config.json (e.g. CosyVoice3),

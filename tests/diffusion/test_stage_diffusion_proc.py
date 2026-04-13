@@ -73,3 +73,34 @@ def test_process_batch_request_preserves_parent_request_id_and_kv_sender_info():
         assert result.images == ["img-1", "img-2"]
 
     asyncio.run(run_test())
+
+
+def test_enrich_config_maps_lingbot_world_fast_model_class(monkeypatch):
+    proc = object.__new__(StageDiffusionProc)
+    proc._od_config = SimpleNamespace(
+        model="robbyant/lingbot-world-fast",
+        model_class_name=None,
+        tf_model_config=None,
+        update_multimodal_support=lambda: None,
+    )
+
+    def fake_get_hf_file_to_dict(filename, model):
+        assert model == "robbyant/lingbot-world-fast"
+        if filename == "model_index.json":
+            return None
+        if filename == "config.json":
+            return {
+                "_class_name": "WanModel",
+                "model_type": "i2v",
+            }
+        raise AssertionError(f"Unexpected file: {filename}")
+
+    monkeypatch.setattr(
+        "vllm_omni.diffusion.stage_diffusion_proc.get_hf_file_to_dict",
+        fake_get_hf_file_to_dict,
+    )
+
+    StageDiffusionProc._enrich_config(proc)
+
+    assert proc._od_config.model_class_name == "LingbotWorldFastPipeline"
+    assert proc._od_config.tf_model_config is not None

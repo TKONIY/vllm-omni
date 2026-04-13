@@ -310,7 +310,6 @@ class TestResolveModelConfigPath:
         assert result is not None
         assert "glm_image.yaml" in result
 
-
 class TestLoadAndResolveStageConfigs:
     def test_load_and_resolve_with_kwargs(self):
         """Ensure that dtype survives default stage creation."""
