@@ -108,6 +108,9 @@ from vllm_omni.entrypoints.openai.protocol.videos import (
     VideoResponse,
 )
 from vllm_omni.entrypoints.openai.realtime.video.connection import RealtimeVideoConnection
+from vllm_omni.entrypoints.openai.realtime.video.lingbot_world_fast_serving import (
+    LingbotWorldFastRealtimeServing,
+)
 from vllm_omni.entrypoints.openai.realtime.video.serving import RealtimeVideoServing
 from vllm_omni.entrypoints.openai.serving_chat import OmniOpenAIServingChat
 from vllm_omni.entrypoints.openai.serving_speech import OmniOpenAIServingSpeech
@@ -147,6 +150,19 @@ def _should_enable_profiler_endpoints(stage_configs: list | None) -> bool:
             if profiler is not None:
                 return True
     return False
+
+
+def _create_realtime_video_serving(engine_client, model_name: str | None) -> RealtimeVideoServing:
+    model_name_lower = (model_name or "").lower()
+    if "lingbot-world-fast" in model_name_lower:
+        return LingbotWorldFastRealtimeServing(
+            engine_client=engine_client,
+            model_name=model_name,
+        )
+    return RealtimeVideoServing(
+        engine_client=engine_client,
+        model_name=model_name,
+    )
 
 
 class ProfileRequest(BaseModel):
@@ -522,7 +538,7 @@ async def omni_init_app_state(
             stage_configs=diffusion_stage_configs,
         )
         state.openai_streaming_speech = None
-        state.openai_serving_realtime_video = RealtimeVideoServing(
+        state.openai_serving_realtime_video = _create_realtime_video_serving(
             engine_client=engine_client,
             model_name=model_name,
         )
@@ -838,7 +854,7 @@ async def omni_init_app_state(
         model_name=served_model_names[0] if served_model_names else None,
         stage_configs=state.stage_configs,
     )
-    state.openai_serving_realtime_video = RealtimeVideoServing(
+    state.openai_serving_realtime_video = _create_realtime_video_serving(
         engine_client=engine_client,
         model_name=served_model_names[0] if served_model_names else None,
     )
