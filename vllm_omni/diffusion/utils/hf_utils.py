@@ -27,6 +27,27 @@ def _looks_like_bagel(model_name: str) -> bool:
         return False
 
 
+def _looks_like_dreamzero(model_name: str) -> bool:
+    """Best-effort detection for DreamZero-style VLA diffusion checkpoints."""
+    try:
+        cfg = get_hf_file_to_dict("config.json", model_name)
+        if cfg.get("model_type") != "vla":
+            return False
+        action_head_cfg = cfg.get("action_head_cfg") or {}
+        action_head_cfg_config = action_head_cfg.get("config") or {}
+        backbone_cfg = cfg.get("backbone_cfg") or {}
+        return any(
+            "dreamzero" in str(target).lower()
+            for target in (
+                action_head_cfg.get("_target_", ""),
+                action_head_cfg_config.get("_target_", ""),
+                backbone_cfg.get("_target_", ""),
+            )
+        )
+    except Exception:
+        return False
+
+
 @lru_cache
 def is_diffusion_model(model_name: str) -> bool:
     """Check if a model is a diffusion model.
@@ -72,6 +93,7 @@ def is_diffusion_model(model_name: str) -> bool:
     except Exception as e:
         logger.debug("Failed to load diffusers config via DiffusionPipeline: %s", e)
 
-        # Bagel is not a diffusers pipeline (no model_index.json), but is still a
-        # diffusion-style model in vllm-omni. Detect it via config.json.
-    return _looks_like_bagel(model_name)
+        # Bagel and DreamZero are not diffusers pipelines (no model_index.json),
+        # but are still diffusion-style models in vllm-omni. Detect them via
+        # config.json.
+    return _looks_like_bagel(model_name) or _looks_like_dreamzero(model_name)
