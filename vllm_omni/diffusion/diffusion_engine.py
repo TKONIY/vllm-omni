@@ -104,6 +104,21 @@ class DiffusionEngine:
             self.close()
             raise e
 
+    @staticmethod
+    def _slice_multimodal_payload(payload: Any, start_idx: int, end_idx: int) -> Any:
+        """Slice per-request multimodal payloads from batched outputs."""
+        sliced_payload = payload
+        if isinstance(payload, (list, tuple)):
+            sliced_payload = payload[start_idx:end_idx]
+            if len(sliced_payload) == 1:
+                sliced_payload = sliced_payload[0]
+        elif hasattr(payload, "shape") and getattr(payload, "shape", None) is not None:
+            if len(payload.shape) > 0 and payload.shape[0] >= end_idx:
+                sliced_payload = payload[start_idx:end_idx]
+                if end_idx - start_idx == 1:
+                    sliced_payload = sliced_payload[0]
+        return sliced_payload
+
     def step(self, request: OmniDiffusionRequest) -> list[OmniRequestOutput]:
         diffusion_engine_start_time = time.perf_counter()
 
@@ -163,8 +178,10 @@ class DiffusionEngine:
         custom_output = output.custom_output or {}
         model_audio_sample_rate = None
         model_fps = None
+        action_payload = None
         if isinstance(outputs, dict):
             audio_payload = outputs.get("audio")
+            action_payload = outputs.get("actions")
             custom_output.update(outputs.get("custom_output") or {})
             model_audio_sample_rate = outputs.get("audio_sample_rate")
             model_fps = outputs.get("fps")
@@ -231,6 +248,8 @@ class DiffusionEngine:
                     mm_output["audio_sample_rate"] = model_audio_sample_rate
                 if model_fps is not None:
                     mm_output["fps"] = model_fps
+                if action_payload is not None:
+                    mm_output["actions"] = action_payload
                 return [
                     OmniRequestOutput.from_diffusion(
                         request_id=request_id,
@@ -286,21 +305,21 @@ class DiffusionEngine:
                 else:
                     mm_output = {}
                     if audio_payload is not None:
-                        sliced_audio = audio_payload
-                        if isinstance(audio_payload, (list, tuple)):
-                            sliced_audio = audio_payload[start_idx:end_idx]
-                            if len(sliced_audio) == 1:
-                                sliced_audio = sliced_audio[0]
-                        elif hasattr(audio_payload, "shape") and getattr(audio_payload, "shape", None) is not None:
-                            if len(audio_payload.shape) > 0 and audio_payload.shape[0] >= end_idx:
-                                sliced_audio = audio_payload[start_idx:end_idx]
-                                if num_outputs == 1:
-                                    sliced_audio = sliced_audio[0]
-                        mm_output["audio"] = sliced_audio
+                        mm_output["audio"] = self._slice_multimodal_payload(
+                            audio_payload,
+                            start_idx,
+                            end_idx,
+                        )
                     if model_audio_sample_rate is not None:
                         mm_output["audio_sample_rate"] = model_audio_sample_rate
                     if model_fps is not None:
                         mm_output["fps"] = model_fps
+                    if action_payload is not None:
+                        mm_output["actions"] = self._slice_multimodal_payload(
+                            action_payload,
+                            start_idx,
+                            end_idx,
+                        )
                     results.append(
                         OmniRequestOutput.from_diffusion(
                             request_id=request_id,
