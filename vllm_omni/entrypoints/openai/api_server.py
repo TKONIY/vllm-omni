@@ -107,6 +107,8 @@ from vllm_omni.entrypoints.openai.protocol.videos import (
     VideoListResponse,
     VideoResponse,
 )
+from vllm_omni.entrypoints.openai.realtime.video.connection import RealtimeVideoConnection
+from vllm_omni.entrypoints.openai.realtime.video.serving import RealtimeVideoServing
 from vllm_omni.entrypoints.openai.serving_chat import OmniOpenAIServingChat
 from vllm_omni.entrypoints.openai.serving_speech import OmniOpenAIServingSpeech
 from vllm_omni.entrypoints.openai.serving_speech_stream import OmniStreamingSpeechHandler
@@ -520,6 +522,10 @@ async def omni_init_app_state(
             stage_configs=diffusion_stage_configs,
         )
         state.openai_streaming_speech = None
+        state.openai_serving_realtime_video = RealtimeVideoServing(
+            engine_client=engine_client,
+            model_name=model_name,
+        )
 
         state.enable_server_load_tracking = getattr(args, "enable_server_load_tracking", False)
         state.server_load_metrics = 0
@@ -831,6 +837,10 @@ async def omni_init_app_state(
         engine_client,
         model_name=served_model_names[0] if served_model_names else None,
         stage_configs=state.stage_configs,
+    )
+    state.openai_serving_realtime_video = RealtimeVideoServing(
+        engine_client=engine_client,
+        model_name=served_model_names[0] if served_model_names else None,
     )
 
     state.enable_server_load_tracking = args.enable_server_load_tracking
@@ -1209,6 +1219,21 @@ async def realtime_websocket(websocket: WebSocket):
         await websocket.close()
         return
     connection = RealtimeConnection(websocket, serving)
+    await connection.handle_connection()
+
+
+@router.websocket("/v1/realtime/video")
+async def realtime_video_websocket(websocket: WebSocket):
+    """WebSocket endpoint for realtime interactive video generation."""
+    serving = getattr(websocket.app.state, "openai_serving_realtime_video", None)
+    if serving is None:
+        await websocket.accept()
+        await websocket.send_json(
+            {"type": "error", "error": "Realtime video API is not available", "code": "unsupported"}
+        )
+        await websocket.close()
+        return
+    connection = RealtimeVideoConnection(websocket, serving)
     await connection.handle_connection()
 
 
