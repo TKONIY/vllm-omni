@@ -523,7 +523,7 @@ async def omni_init_app_state(
             stage_configs=diffusion_stage_configs,
         )
         state.openai_streaming_speech = None
-        state.openai_serving_realtime_robot = ServingRealtimeRobotOpenPI(
+        state.openai_serving_realtime_robot = ServingRealtimeRobotOpenPI.create_policy_server(
             engine_client=engine_client,
             model_name=model_name,
         )
@@ -842,7 +842,7 @@ async def omni_init_app_state(
 
     # Robot policy serving (for /v1/realtime/robot/openpi)
     # Current implementation is diffusion-only.
-    state.openai_serving_realtime_robot = ServingRealtimeRobotOpenPI(
+    state.openai_serving_realtime_robot = ServingRealtimeRobotOpenPI.create_policy_server(
         engine_client=engine_client,
         model_name=served_model_names[0] if served_model_names else None,
     )

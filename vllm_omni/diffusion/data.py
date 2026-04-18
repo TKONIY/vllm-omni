@@ -715,14 +715,15 @@ class OmniDiffusionConfig:
                 action_head_cfg = cfg.get("action_head_cfg") or {}
                 action_head_cfg_config = action_head_cfg.get("config") or {}
                 backbone_cfg = cfg.get("backbone_cfg") or {}
-                if any(
+                looks_like_dreamzero = any(
                     "dreamzero" in str(target).lower()
                     for target in (
                         action_head_cfg.get("_target_", ""),
                         action_head_cfg_config.get("_target_", ""),
                         backbone_cfg.get("_target_", ""),
                     )
-                ):
+                )
+                if looks_like_dreamzero or self.model_class_name == "DreamZeroPipeline":
                     self.model_class_name = "DreamZeroPipeline"
                     self.tf_model_config = TransformerConfig()
                     self.update_multimodal_support()

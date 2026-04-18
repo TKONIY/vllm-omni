@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.stage_diffusion_proc import StageDiffusionProc
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
@@ -73,3 +74,42 @@ def test_process_batch_request_preserves_parent_request_id_and_kv_sender_info():
         assert result.images == ["img-1", "img-2"]
 
     asyncio.run(run_test())
+
+
+def test_enrich_config_preserves_explicit_model_class_name(monkeypatch):
+    monkeypatch.setattr(
+        "vllm.transformers_utils.config.get_hf_file_to_dict",
+        lambda path, _model: None if path == "model_index.json" else {"model_type": "vla", "architectures": ["VLA"]},
+    )
+
+    od_config = OmniDiffusionConfig(
+        model="GEAR-Dreams/DreamZero-DROID",
+        model_class_name="DreamZeroPipeline",
+    )
+    proc = StageDiffusionProc(od_config.model, od_config)
+
+    proc._enrich_config()
+
+    assert od_config.model_class_name == "DreamZeroPipeline"
+
+
+def test_enrich_config_keeps_omnivoice_architecture_behavior(monkeypatch):
+    monkeypatch.setattr(
+        "vllm.transformers_utils.config.get_hf_file_to_dict",
+        lambda path, _model: None
+        if path == "model_index.json"
+        else {
+            "model_type": "omnivoice",
+            "architectures": ["OmniVoice"],
+        },
+    )
+
+    od_config = OmniDiffusionConfig(
+        model="k2-fsa/OmniVoice",
+        model_class_name="OmniVoicePipeline",
+    )
+    proc = StageDiffusionProc(od_config.model, od_config)
+
+    proc._enrich_config()
+
+    assert od_config.model_class_name == "OmniVoice"
