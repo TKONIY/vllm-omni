@@ -199,6 +199,15 @@ class DiffusionWorker:
         """Generate output for the given requests."""
         return self.execute_model(request, self.od_config)
 
+    def reset_realtime_video_session(self, session_id: str) -> bool:
+        """Reset model-owned realtime video state when supported."""
+        assert self.model_runner is not None, "Model runner not initialized"
+        pipeline = self.model_runner.pipeline
+        reset_fn = getattr(pipeline, "reset_realtime_video_session", None)
+        if not callable(reset_fn):
+            return False
+        return bool(reset_fn(session_id))
+
     def profile(self, is_start: bool = True, profile_prefix: str | None = None) -> None:
         """Start or stop profiling for this GPU worker.
 

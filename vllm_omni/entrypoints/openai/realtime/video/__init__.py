@@ -4,7 +4,6 @@
 """Realtime interactive video serving helpers."""
 
 from .connection import RealtimeVideoConnection
-from .lingbot_world_fast_serving import LingbotWorldFastRealtimeServing
 from .protocol import (
     RealtimeVideoGenerationRequest,
     RealtimeVideoInputImage,
@@ -18,7 +17,6 @@ __all__ = [
     "RealtimeVideoGenerationRequest",
     "RealtimeVideoInputImage",
     "RealtimeVideoSession",
-    "LingbotWorldFastRealtimeServing",
     "RealtimeVideoServing",
     "RealtimeVideoTurnResult",
     "render_text_layers",

@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -75,67 +75,3 @@ def normalize_lingbot_control_chunk(payload: dict[str, Any]) -> LingbotWorldFast
         ijkl_action=ijkl_action,
         control_type=control_type,
     )
-
-
-@dataclass
-class LingbotWorldFastSessionConfig:
-    """Stable session parameters that change only on reset."""
-
-    session_id: str
-    rendered_prompt: str
-    text_layers: dict[str, str]
-    width: int
-    height: int
-    fps: int
-    chunk_size: int
-    seed: int | None = None
-    shift: float | None = None
-    max_attention_size: int | None = None
-
-    @property
-    def signature(self) -> tuple[Any, ...]:
-        return (
-            self.rendered_prompt,
-            tuple(self.text_layers.items()),
-            self.width,
-            self.height,
-            self.fps,
-            self.chunk_size,
-            self.seed,
-            self.shift,
-            self.max_attention_size,
-        )
-
-
-@dataclass
-class LingbotWorldFastSessionState:
-    """Persistent causal generation state across websocket turns."""
-
-    config: LingbotWorldFastSessionConfig
-    control_history: list[LingbotWorldFastControlChunk] = field(default_factory=list)
-    current_chunk_index: int = 0
-    generated_frame_count: int = 0
-    prompt_changed: bool = True
-    image_changed: bool = True
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    def append_control(self, chunk: LingbotWorldFastControlChunk) -> None:
-        self.control_history.append(chunk)
-
-    def reset_runtime(self) -> None:
-        self.control_history.clear()
-        self.current_chunk_index = 0
-        self.generated_frame_count = 0
-        self.extra.clear()
-        self.prompt_changed = True
-        self.image_changed = True
-
-    @property
-    def total_control_frames(self) -> int:
-        return int(sum(chunk.frame_count for chunk in self.control_history))
-
-    def mark_chunk_generated(self, *, produced_frames: int) -> None:
-        self.current_chunk_index += 1
-        self.generated_frame_count += int(produced_frames)
-        self.prompt_changed = False
-        self.image_changed = False

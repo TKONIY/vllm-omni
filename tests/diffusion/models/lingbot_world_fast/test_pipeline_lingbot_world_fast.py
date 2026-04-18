@@ -140,7 +140,6 @@ def _make_request(*, session_id: str, reset: bool) -> OmniDiffusionRequest:
         seed=0,
         extra_args={
             "realtime_video": {
-                "backend": "lingbot_world_fast",
                 "session_id": session_id,
                 "rendered_prompt": "robot world",
                 "text_layers": {"scene": "robot world"},
@@ -148,10 +147,6 @@ def _make_request(*, session_id: str, reset: bool) -> OmniDiffusionRequest:
                 "chunk_size": 3,
                 "shift": 5.0,
                 "reset": reset,
-                "session_state": {
-                    "prompt_changed": reset,
-                    "image_changed": reset,
-                },
             }
         },
     )
@@ -162,7 +157,7 @@ def _make_request(*, session_id: str, reset: bool) -> OmniDiffusionRequest:
     )
 
 
-def test_lingbot_world_fast_pipeline_preserves_session_state(monkeypatch):
+def test_lingbot_world_fast_pipeline_preserves_runtime_state(monkeypatch):
     monkeypatch.setattr(
         "vllm_omni.diffusion.models.lingbot_world_fast.pipeline_lingbot_world_fast.get_local_device",
         lambda: torch.device("cpu"),
@@ -195,3 +190,6 @@ def test_lingbot_world_fast_pipeline_preserves_session_state(monkeypatch):
     assert second.custom_output["video_chunk"].shape[0] == 12
     assert pipeline.sessions["s1"].generated_chunks == 2
     assert pipeline.sessions["s1"].generated_latent_frames == 6
+    assert pipeline.reset_realtime_video_session("s1") is True
+    assert "s1" not in pipeline.sessions
+    assert pipeline.reset_realtime_video_session("s1") is False

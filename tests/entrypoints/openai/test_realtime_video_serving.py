@@ -13,9 +13,6 @@ from starlette.testclient import TestClient
 
 from vllm_omni.diffusion.models.lingbot_world_fast import normalize_lingbot_control_chunk
 from vllm_omni.entrypoints.openai.realtime.video.connection import RealtimeVideoConnection
-from vllm_omni.entrypoints.openai.realtime.video.lingbot_world_fast_serving import (
-    LingbotWorldFastRealtimeServing,
-)
 from vllm_omni.entrypoints.openai.realtime.video.protocol import (
     RealtimeVideoGenerationRequest,
     RealtimeVideoSession,
@@ -40,9 +37,26 @@ class _FakeEngine:
             images=[],
             custom_output={
                 "video_chunk": np.zeros((2, 4, 4, 3), dtype=np.uint8),
+                "realtime_video": {"generated_chunks": 1},
             },
             multimodal_output={"fps": 16},
         )
+
+
+class _FakeCollectiveEngine:
+    def __init__(self) -> None:
+        self.stage_configs = [{"stage_type": "llm"}, {"stage_type": "diffusion"}]
+        self.rpc_calls = []
+        self.engine = SimpleNamespace(
+            stage_configs=self.stage_configs,
+            collective_rpc=self.collective_rpc,
+        )
+
+    def collective_rpc(self, *, method, args, stage_ids):
+        self.rpc_calls.append(
+            SimpleNamespace(method=method, args=args, stage_ids=stage_ids)
+        )
+        return [True]
 
 
 class _FakeServing:
@@ -152,9 +166,9 @@ def test_normalize_lingbot_control_chunk_rejects_frame_mismatch():
         )
 
 
-def test_lingbot_realtime_serving_sets_backend_and_session_state():
+def test_realtime_serving_keeps_lingbot_payload_generic():
     engine = _FakeEngine()
-    serving = LingbotWorldFastRealtimeServing(engine_client=engine, model_name="robbyant/lingbot-world-fast")
+    serving = RealtimeVideoServing(engine_client=engine, model_name="robbyant/lingbot-world-fast")
     session = RealtimeVideoSession(model="robbyant/lingbot-world-fast")
     session.apply_update(
         {
@@ -179,18 +193,27 @@ def test_lingbot_realtime_serving_sets_backend_and_session_state():
     engine_request = serving.build_engine_request(request)
     rt = engine_request.sampling_params.extra_args["realtime_video"]
 
-    assert rt["backend"] == "lingbot_world_fast"
-    assert rt["control_type"] == "cam"
-    assert rt["session_state"]["current_chunk_index"] == 0
-    assert rt["session_state"]["generated_frame_count"] == 0
-    assert rt["session_state"]["prompt_changed"] is True
-    assert rt["session_state"]["image_changed"] is True
+    assert "backend" not in rt
+    assert "session_state" not in rt
+    assert rt["text_layers"] == session.text_layers
+    assert rt["control"] == session.control
     assert rt["control"][0]["poses"].shape == (13, 4, 4)
 
     result = asyncio.run(serving.generate(request))
     assert result.chunk_index == 0
-    assert serving.sessions[request.session_id].current_chunk_index == 1
-    assert serving.sessions[request.session_id].generated_frame_count == 2
+    assert engine.requests[0].sampling.extra_args["realtime_video"]["control"] == session.control
+
+
+def test_realtime_serving_reset_uses_generic_diffusion_rpc():
+    engine = _FakeCollectiveEngine()
+    serving = RealtimeVideoServing(engine_client=engine, model_name="robbyant/lingbot-world-fast")
+
+    serving.reset("rtvideo_123")
+
+    assert len(engine.rpc_calls) == 1
+    assert engine.rpc_calls[0].method == "reset_realtime_video_session"
+    assert engine.rpc_calls[0].args == ("rtvideo_123",)
+    assert engine.rpc_calls[0].stage_ids == [1]
 
 
 def test_realtime_video_connection_event_flow():

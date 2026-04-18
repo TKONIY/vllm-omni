@@ -156,6 +156,11 @@ class LingbotWorldFastPipeline(nn.Module, SupportImageInput):
         del weights
         return None
 
+    def reset_realtime_video_session(self, session_id: str) -> bool:
+        removed = self.sessions.pop(session_id, None) is not None
+        logger.info("Lingbot realtime runtime session reset: %s removed=%s", session_id, removed)
+        return removed
+
     def _build_runtime_config(
         self,
         request: OmniDiffusionRequest,
@@ -349,16 +354,9 @@ class LingbotWorldFastPipeline(nn.Module, SupportImageInput):
         realtime_video: Mapping[str, Any],
     ) -> LingbotWorldFastRuntimeState:
         runtime_config = self._build_runtime_config(request, realtime_video)
-        session_state = realtime_video.get("session_state", {})
         request_reset = bool(realtime_video.get("reset"))
         session = self.sessions.get(runtime_config.session_id)
-        if (
-            session is None
-            or session.config.signature != runtime_config.signature
-            or request_reset
-            or session_state.get("prompt_changed")
-            or session_state.get("image_changed")
-        ):
+        if session is None or session.config.signature != runtime_config.signature or request_reset:
             session = self._init_runtime_state(request, realtime_video, runtime_config)
             self.sessions[runtime_config.session_id] = session
         return session
@@ -591,9 +589,6 @@ class LingbotWorldFastPipeline(nn.Module, SupportImageInput):
         realtime_video = req.sampling_params.extra_args.get("realtime_video")
         if not isinstance(realtime_video, Mapping):
             raise ValueError("LingbotWorldFastPipeline requires sampling_params.extra_args['realtime_video'].")
-        if realtime_video.get("backend") != "lingbot_world_fast":
-            raise ValueError("LingbotWorldFastPipeline only accepts backend='lingbot_world_fast'.")
-
         state = self._get_runtime_state(req, realtime_video)
         all_video_chunks: list[np.ndarray] = []
         for control_payload in realtime_video.get("control", []):
