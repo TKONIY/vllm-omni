@@ -22,32 +22,13 @@ Set `DEBUGPY_WAIT_FOR_CLIENT=0` if you want the server to start immediately.
 Any extra script arguments are appended to the underlying `vllm-omni serve`
 command.
 
-## DiT-Only Recipe Scripts
+## AR + DiT Stage-Config Scripts
 
-| Deployment | Script |
-| --- | --- |
-| TP=4 + FP8 | `docs/uad/hunyuan_image3_dit_tp4_fp8_debugpy.sh` |
-| TP=2 + FP8 + Ulysses SP=2 | `docs/uad/hunyuan_image3_dit_tp2_fp8_sp2_debugpy.sh` |
-| TP=2 + FP8 + CFG parallel=2 | `docs/uad/hunyuan_image3_dit_tp2_fp8_cfgp2_debugpy.sh` |
-
-Example:
-
-```bash
-bash docs/uad/hunyuan_image3_dit_tp2_fp8_sp2_debugpy.sh
-```
-
-## Stage-Config Scripts
-
-| Deployment config | Script |
-| --- | --- |
-| `hunyuan_image3_t2i.yaml` | `docs/uad/hunyuan_image3_stage_t2i_debugpy.sh` |
-| `hunyuan_image3_t2i_2gpu.yaml` | `docs/uad/hunyuan_image3_stage_t2i_2gpu_debugpy.sh` |
-| `hunyuan_image3_i2t.yaml` | `docs/uad/hunyuan_image3_stage_i2t_debugpy.sh` |
-| `hunyuan_image3_t2t.yaml` | `docs/uad/hunyuan_image3_stage_t2t_debugpy.sh` |
-| `hunyuan_image3_it2i.yaml` | `docs/uad/hunyuan_image3_stage_it2i_debugpy.sh` |
-| `hunyuan_image3_it2i_kv_reuse.yaml` | `docs/uad/hunyuan_image3_stage_it2i_kv_reuse_debugpy.sh` |
-| `hunyuan_image3_moe.yaml` | `docs/uad/hunyuan_image3_stage_moe_debugpy.sh` |
-| `hunyuan_image3_moe_dit_2gpu_fp8.yaml` | `docs/uad/hunyuan_image3_stage_moe_dit_2gpu_fp8_debugpy.sh` |
+| Script | Config | Main Difference |
+| --- | --- | --- |
+| `docs/uad/hunyuan_image3_stage_it2i_debugpy.sh` | `hunyuan_image3_it2i.yaml` | Basic image+text-to-image staged pipeline. AR uses GPUs 0-3, DiT/VAE uses GPUs 4-7 with TP=4 and EP enabled. No explicit AR->DiT KV reuse connector. |
+| `docs/uad/hunyuan_image3_stage_it2i_kv_reuse_debugpy.sh` | `hunyuan_image3_it2i_kv_reuse.yaml` | Compact 4-GPU AR+DiT path. AR uses GPUs 0-1, DiT/VAE uses GPUs 2-3 with TP=2 and EP enabled. AR sends KV cache to DiT through the configured RDMA connector. |
+| `docs/uad/hunyuan_image3_stage_moe_debugpy.sh` | `hunyuan_image3_moe.yaml` | Default full-size AR+DiT KV-reuse path. AR uses GPUs 0-3, DiT/VAE uses GPUs 4-7 with TP=4. Expert, sequence, and CFG parallel are disabled in this config. |
 
 Example:
 

@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # Shared debugpy launcher for HunyuanImage3 online serving scripts.
+#
+# This file is not a deployment recipe by itself. Recipe scripts source it to:
+# - run from the repository root with PYTHONPATH pointing at the working tree;
+# - start `vllm_omni.entrypoints.cli.main serve ... --omni` under debugpy;
+# - optionally block on VS Code attach before server startup.
 
 set -Eeuo pipefail
 

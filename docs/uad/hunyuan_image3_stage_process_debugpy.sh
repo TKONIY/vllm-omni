@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 # Launch one HunyuanImage3 stage under debugpy.
 #
+# Difference from the recipe scripts:
+# - recipe scripts launch the whole stage config from one process;
+# - this script launches exactly one stage selected by `STAGE_ID`;
+# - each stage can listen on a different debugpy port;
+# - stage 0 starts as the serving entrypoint by default;
+# - downstream stages default to `--headless` and wait for the runtime edge.
+#
+# Use this when you need separate breakpoints/debugpy sessions for AR and DiT.
+#
 # Examples:
 #   HUNYUAN_STAGE_CONFIG=vllm_omni/model_executor/stage_configs/hunyuan_image3_moe.yaml \
 #   STAGE_ID=0 DEBUGPY_PORT=5678 bash docs/uad/hunyuan_image3_stage_process_debugpy.sh

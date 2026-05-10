@@ -15,6 +15,34 @@ parallel 和 SP 留 TODO。
 - DiT denoise step 是按 token 计费的 scheduled item；VAE / artifact decode 是
   runner epilogue，不进入 scheduler token budget。
 
+## 架构对比
+
+| 原 vLLM AR engine | UAD engine on AR vLLM |
+|---|---|
+| **1. Request state**<br>`Request` / `CachedRequestState`<br>`prompt_token_ids`<br>`output_token_ids`<br>`num_computed_tokens` | **1. Request state**<br>`UADRequestState`<br>`engine_tokens`<br>`materialized_tokens`<br>`num_computed_tokens`<br>`phase` |
+| **2. Scheduler**<br>`Scheduler` / `OmniGenerationScheduler`<br>`request.num_computed_tokens`<br>`max_num_batched_tokens` | **2. Scheduler**<br>`UADModelAdapter.get_schedule_bounds()`<br>`UADScheduleBounds.min_scheduled_tokens`<br>`UADScheduleBounds.max_scheduled_tokens` |
+| **3. SchedulerOutput**<br>`SchedulerOutput`<br>`NewRequestData` / `CachedRequestData`<br>`num_scheduled_tokens`<br>`new_token_ids` | **3. SchedulerOutput**<br>`UADSchedulerOutput(base, uad_items)`<br>`UADScheduleItem.num_scheduled_tokens`<br>`runner_spec`<br>`state_policy` |
+| **4. Input builder**<br>`InputBatch` / `GPUModelRunner`<br>`token_ids_cpu`<br>`num_computed_tokens_cpu`<br>`block_table` / `slot_mapping` | **4. Input builder**<br>`UADInputs`<br>`input_ids` / `inputs_embeds`<br>`positions`<br>`latents` / `timesteps`<br>`attention_metadata` |
+| **5. Layer execution**<br>`GPUARModelRunner.execute_model()`<br>`input_ids` / `inputs_embeds`<br>`hidden_states` | **5. Layer execution**<br>`UADModelAdapter.forward()`<br>unified hidden buffer<br>shared projection + FFN/MoE |
+| **6. Attention**<br>`PerLayerAttnMetadata`<br>`attn_metadata`<br>`slot_mappings`<br>paged causal | **6. Attention**<br>`attention_metadata` 和 DiT patch plan<br>`out_causal/lse_causal`<br>`out_patch/lse_patch`<br>`shape_bucket` |
+| **7. Output handler**<br>`SamplerOutput`<br>`OmniModelRunnerOutput`<br>`sampled_token_ids` | **7. Output handler**<br>`UADPhaseOutput`<br>`sampled_token_ids` / `denoise_pred`<br>`artifact` |
+| **8. State update**<br>`CachedRequestData.new_token_ids`<br>`InputBatch.token_ids_cpu`<br>`InputBatch.num_computed_tokens_cpu` | **8. State update**<br>`UADPhaseUpdate`<br>`new_engine_tokens`<br>`new_materialized_tokens`<br>`num_new_computed_tokens` |
+
+一一对应关系：
+
+- `Request state`：原 AR request 只有 append-only token 序列和 `num_computed_tokens`；
+  UAD 拆成 `engine_tokens`、`materialized_tokens` 和同一语义的 `num_computed_tokens`。
+- `Scheduler`：两者都按 token budget 调度，UAD 只是让 AR/DiT items 同 tick 共存。
+- `SchedulerOutput`：原 AR 只输出每个 request 的 `num_scheduled_tokens`；UAD 保留主输出，
+  额外给 runner `uad_items` 描述 phase/input/output。
+- `Runner input builder`：原 AR 准备 token ids/embeds/slot mapping；UAD 在同层补充
+  latents、timesteps 和 phase metadata。
+- `Layer execution`：两者都尽量合并 projection/FFN/MoE；UAD 不按 AR/DiT 拆完整 forward。
+- `Attention`：原 AR 只有 paged causal attention；UAD 先复用 causal base，再给 DiT
+  chunk 补 bidirectional patch。
+- `Output handler`：原 AR 主要是 sampler 产生 `new_token_ids`；UAD output 分为 sample tokens、
+  denoise update 和 artifact epilogue。
+
 ## 1. Phase
 
 ```python
@@ -416,41 +444,19 @@ class UADModelAdapter(Protocol):
 
 ## 12. TODO: CFG Parallel
 
-CFG parallel 不进入 MVP。后续需要明确：
-
-- cond/uncond 是同一个 request 下的两个 branch，还是两个 scheduler-visible child
-  items。
-- `engine_tokens`、prefix KV、active chunk state 在两个 branch 间如何共享。
-- `num_scheduled_tokens` 如何计费：按 logical tokens 计一次，还是按 branch 数放大。
-- `runner_spec` 是否需要表达 `cfg_branch_id`、`cfg_group_id` 和 merge policy。
-- attention executor 是把 CFG branches 当普通 batch rows 跑，还是在 branch 维度做
-  专用 packing。
-- CFG merge 在 denoise output handler 中完成；merge 后只更新一次 latents/image
-  state。
-- final commit 只能发生一次，不能让 cond/uncond branch 分别推进
-  `num_computed_tokens`。
+CFG parallel 不进入 MVP。它会影响 request branch 表达、token budget 计费、cache/state
+共享、denoise merge 和 final commit 语义，需要单独 RFC 讨论。
 
 ## 13. TODO: SP / Ring / Ulysses
 
-SP 不进入 MVP。后续需要明确：
-
-- SP 只作用于 DiT bidirectional patch，还是也改造 causal base。
-- active chunk 按 sequence 维切分后，`active_token_start/active_token_len` 与每个 rank
-  的 local token range 如何映射。
-- Ring / Ulysses 的通信发生在 attention core 内；projection/FFN/MoE 是否仍按 TP/DP
-  现有路径执行。
-- causal base + bidirectional patch 的 logsumexp merge 在 SP 下如何合并跨 rank
-  `lse`。
-- attention metadata 需要携带 local q/k/v range、global chunk range、SP group、
-  padding/ragged 信息。
-- scheduler 是否只按 global `dit_query_tokens` 计费，runner 再拆 local tokens。
-- 不同 shape bucket / SP group size 的 DiT requests 是否允许同一 tick 混合。
+SP / Ring / Ulysses 不进入 MVP。它会改变 DiT attention patch 的 token 切分、跨 rank
+communication、attention metadata 和 logsumexp merge 方式，需要单独 RFC 讨论。
 
 ## 14. MVP 范围
 
-MVP 必须支持 AR-only 兼容、同 tick AR/DiT 调度、HunyuanImage3 单 engine
+MVP 支持：AR-only 兼容、同 tick AR/DiT 调度、HunyuanImage3 单 engine
 AR -> DiT -> VAE、DreamZero 类 chunk refinement、attention core 分支下的
-projection/FFN/MoE 合 batch、以及 multiturn image/chunk context commit。
+projection/FFN/MoE 合 batch、multiturn image/chunk context commit。
 
-MVP 暂不支持 CFG parallel、sequence parallel / Ring / Ulysses、完整 paged mixed-mask
-DiT attention、强制 AR+DiT attention 单 kernel 混跑、跨节点 KV transfer 重设计。
+MVP 不支持：CFG parallel、SP / Ring / Ulysses、完整 paged mixed-mask DiT attention、
+强制 AR+DiT attention 单 kernel 混跑、跨节点 KV transfer 重设计。
