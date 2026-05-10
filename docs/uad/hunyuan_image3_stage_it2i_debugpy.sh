@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 # HunyuanImage3 legacy stage config: image+text-to-image editing.
+#
+# What this launches:
+# - `hunyuan_image3_it2i.yaml`
+# - two-stage AR + DiT pipeline;
+# - AR stage on GPUs 0-3, DiT/VAE stage on GPUs 4-7;
+# - DiT uses tensor parallel size 4 with expert parallel enabled;
+# - AR output is converted to DiT input through the stage input processor;
+# - no explicit AR->DiT KV cache reuse connector.
+#
+# Use this when debugging the basic image+text-to-image staged pipeline.
 
 set -Eeuo pipefail
 
