@@ -14,6 +14,7 @@ from typing import Any
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--moe-report-data", required=True)
+    parser.add_argument("--moe-triton-report-data", default=None)
     parser.add_argument("--output-html", required=True)
     parser.add_argument("--single-expert-csv", required=True)
     parser.add_argument("--active-expert-csv", default=None)
@@ -411,21 +412,33 @@ svg text { font-family: Arial, sans-serif; }
 <h2>__TITLE__</h2>
 <p class="muted">Layer __LAYER_ID__, expert __EXPERT_ID__. Tab2 dense FFN and Tab4 top_k=1 MoE both use the same Hunyuan expert weights and shape.</p>
 <div class="tabs">
-  <button class="tabBtn active" data-tab="moeTab">MoE FusedMoE</button>
+  <button class="tabBtn active" data-tab="moeTab">TopK=8 MoE Auto/FI CUTLASS</button>
+  <button class="tabBtn" data-tab="moeTritonTab">TopK=8 MoE Triton</button>
   <button class="tabBtn" data-tab="denseTab">Single Expert Dense FFN</button>
   <button class="tabBtn" data-tab="activeExpertTab">Active Expert Sweep</button>
-  <button class="tabBtn" data-tab="topk1Tab">TopK=1 Same Expert MoE</button>
+  <button class="tabBtn" data-tab="topk1Tab">TopK=1 Same Expert Auto/FI CUTLASS</button>
   <button class="tabBtn" data-tab="backendTab">TopK=1 Backend Sweep</button>
 </div>
 
 <section id="moeTab" class="tab active">
   <div class="layout">
-    <div class="panel"><h3>MoE Kernel Time</h3><svg id="moeTimePlot" class="plot"></svg></div>
+    <div class="panel"><h3>TopK=8 MoE Auto/FI CUTLASS Kernel Time</h3><svg id="moeTimePlot" class="plot"></svg></div>
     <div class="panel"><button id="moeAllBtn">All</button> <button id="moeNoneBtn">None</button> <button id="moeMainBtn">Main</button><div id="moeLegend" class="legend"></div></div>
   </div>
   <div class="layout">
-    <div class="panel"><h3>MoE Input Token/s</h3><svg id="moeThroughputPlot" class="plot"></svg><div id="moeThroughputLegend" class="legend inlineLegend"></div></div>
+    <div class="panel"><h3>TopK=8 MoE Auto/FI CUTLASS Input Token/s</h3><svg id="moeThroughputPlot" class="plot"></svg><div id="moeThroughputLegend" class="legend inlineLegend"></div></div>
     <div class="panel"><h3 id="barTitle">Expert token distribution</h3><svg id="barPlot" class="plot"></svg><pre id="details" class="muted"></pre></div>
+  </div>
+</section>
+
+<section id="moeTritonTab" class="tab">
+  <div class="layout">
+    <div class="panel"><h3>TopK=8 MoE Triton Kernel Time</h3><svg id="moeTritonTimePlot" class="plot"></svg></div>
+    <div class="panel"><button id="moeTritonAllBtn">All</button> <button id="moeTritonNoneBtn">None</button> <button id="moeTritonMainBtn">Main</button><div id="moeTritonLegend" class="legend"></div></div>
+  </div>
+  <div class="layout">
+    <div class="panel"><h3>TopK=8 MoE Triton Input Token/s</h3><svg id="moeTritonThroughputPlot" class="plot"></svg><div id="moeTritonThroughputLegend" class="legend inlineLegend"></div></div>
+    <div class="panel"><h3 id="tritonBarTitle">Expert token distribution</h3><svg id="tritonBarPlot" class="plot"></svg><pre id="tritonDetails" class="muted"></pre></div>
   </div>
 </section>
 
@@ -449,11 +462,11 @@ svg text { font-family: Arial, sans-serif; }
 
 <section id="topk1Tab" class="tab">
   <div class="layout">
-    <div class="panel"><h3>TopK=1 Same Expert MoE Kernel Time</h3><svg id="topk1TimePlot" class="plot"></svg></div>
+    <div class="panel"><h3>TopK=1 Same Expert Auto/FI CUTLASS Kernel Time</h3><svg id="topk1TimePlot" class="plot"></svg></div>
     <div class="panel"><button id="topk1AllBtn">All</button> <button id="topk1NoneBtn">None</button> <button id="topk1MainBtn">Main</button><div id="topk1Legend" class="legend"></div></div>
   </div>
   <div class="layout">
-    <div class="panel"><h3>TopK=1 Same Expert MoE Input Token/s</h3><svg id="topk1ThroughputPlot" class="plot"></svg><div id="topk1ThroughputLegend" class="legend inlineLegend"></div></div>
+    <div class="panel"><h3>TopK=1 Same Expert Auto/FI CUTLASS Input Token/s</h3><svg id="topk1ThroughputPlot" class="plot"></svg><div id="topk1ThroughputLegend" class="legend inlineLegend"></div></div>
     <div class="panel"><pre id="topk1Details" class="muted"></pre></div>
   </div>
 </section>
@@ -475,6 +488,7 @@ svg text { font-family: Arial, sans-serif; }
 const report = __PAYLOAD__;
 const tokens = report.tokens || [];
 let selectedToken = tokens[Math.floor(tokens.length / 2)] || 1;
+const moeTriton = report.moe_triton_profile || {kernel_series: [], moe_throughput_series: [], token_meta: {}, expert_counts: {}};
 const activeSweep = report.active_expert_sweep || {rows: [], metrics: [], series: {}};
 let activeMetric = activeSweep.metrics.length ? activeSweep.metrics[0].key : "gemm_total_tflops";
 let selectedActiveExperts = 64;
@@ -564,9 +578,11 @@ const denseThroughputMainCats = new Set(["dense_gemm1_gate_up","dense_gemm2_down
 const topk1MainCats = new Set(["prefix_sum","expert_map_build","dispatch_expand","gemm1_gate_up_activation","gemm2_down","finalize_combine"]);
 const topk1ThroughputMainCats = new Set(["gemm1_gate_up_activation","gemm2_down","topk1_total"]);
 const moeSelected = new Set((report.kernel_series || []).filter(s => moeMainCats.has(s.category)).map(s => s.label));
+const moeTritonSelected = new Set((moeTriton.kernel_series || []).filter(s => moeMainCats.has(s.category)).map(s => s.label));
 const denseSelected = new Set((report.single_expert_series || []).filter(s => denseMainCats.has(s.category)).map(s => s.label));
 const topk1Selected = new Set((report.topk1_single_expert_series || []).filter(s => topk1MainCats.has(s.category)).map(s => s.label));
 const moeThroughputSelected = new Set((report.moe_throughput_series || []).map(s => s.label));
+const moeTritonThroughputSelected = new Set((moeTriton.moe_throughput_series || []).map(s => s.label));
 const denseThroughputSelected = new Set((report.single_expert_throughput_series || []).filter(s => denseThroughputMainCats.has(s.category)).map(s => s.label));
 const topk1ThroughputSelected = new Set((report.topk1_single_expert_throughput_series || []).filter(s => topk1ThroughputMainCats.has(s.category)).map(s => s.label));
 function formatThroughput(v) {
@@ -697,6 +713,29 @@ function renderBars() {
     `min / max: ${meta.min} / ${meta.max}\n` +
     `MoE event total: ${(meta.cuda_event_fused_moe_ms || 0).toFixed(4)} ms`;
 }
+function renderTritonBars() {
+  const svg = document.getElementById("tritonBarPlot"); clear(svg);
+  const counts = moeTriton.expert_counts ? moeTriton.expert_counts[selectedToken] : null;
+  if (!counts) {
+    document.getElementById("tritonDetails").textContent = "no Triton TopK=8 data";
+    return;
+  }
+  const rect = svg.getBoundingClientRect();
+  const w = Math.max(320, rect.width), h = 330, ml = 48, mr = 16, mt = 20, mb = 38;
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  const ymax = Math.max(...counts) * 1.12 || 1;
+  const barW = (w - ml - mr) / counts.length;
+  const sy = y => mt + (1 - y / ymax) * (h - mt - mb);
+  svg.appendChild(make("rect", {x:ml,y:mt,width:w-ml-mr,height:h-mt-mb,fill:"#f9fafb",stroke:"#d1d5db"}));
+  counts.forEach((c,i) => svg.appendChild(make("rect", {x:ml+i*barW+1,y:sy(c),width:Math.max(1,barW-2),height:h-mb-sy(c),fill:"#16a34a"})));
+  const meta = (moeTriton.token_meta || {})[selectedToken] || {};
+  document.getElementById("tritonBarTitle").textContent = `Expert token distribution @ ${selectedToken} input tokens`;
+  document.getElementById("tritonDetails").textContent =
+    `backend: ${moeTriton.moe_backend || "triton"}\n` +
+    `balanced rows/expert: ${(meta.mean || 0).toFixed(2)}\n` +
+    `min / max: ${meta.min} / ${meta.max}\n` +
+    `MoE Triton event total: ${(meta.cuda_event_fused_moe_ms || 0).toFixed(4)} ms`;
+}
 function renderDenseDetails() {
   const meta = (report.single_expert_meta || {})[selectedToken] || {};
   document.getElementById("denseDetails").textContent =
@@ -785,11 +824,13 @@ function renderActiveExpertPlot() {
 function renderAllPlots() {
   renderSeriesPlot("moeTimePlot", report.kernel_series || [], moeSelected, "ms", "kernel time (ms)");
   renderSeriesPlot("moeThroughputPlot", report.moe_throughput_series || [], moeThroughputSelected, "tokens_per_s", "input tokens/s", {formatY: formatThroughput});
+  renderSeriesPlot("moeTritonTimePlot", moeTriton.kernel_series || [], moeTritonSelected, "ms", "kernel time (ms)");
+  renderSeriesPlot("moeTritonThroughputPlot", moeTriton.moe_throughput_series || [], moeTritonThroughputSelected, "tokens_per_s", "input tokens/s", {formatY: formatThroughput});
   renderSeriesPlot("denseTimePlot", report.single_expert_series || [], denseSelected, "ms", "kernel time (ms)");
   renderSeriesPlot("denseThroughputPlot", report.single_expert_throughput_series || [], denseThroughputSelected, "tokens_per_s", "input tokens/s", {formatY: formatThroughput});
   renderSeriesPlot("topk1TimePlot", report.topk1_single_expert_series || [], topk1Selected, "ms", "kernel time (ms)");
   renderSeriesPlot("topk1ThroughputPlot", report.topk1_single_expert_throughput_series || [], topk1ThroughputSelected, "tokens_per_s", "input tokens/s", {formatY: formatThroughput});
-  renderBars(); renderDenseDetails(); renderTopk1Details(); renderActiveExpertPlot(); renderBackendSweep();
+  renderBars(); renderTritonBars(); renderDenseDetails(); renderTopk1Details(); renderActiveExpertPlot(); renderBackendSweep();
 }
 const activeMetricSelect = document.getElementById("activeMetric");
 activeSweep.metrics.forEach(metric => { const option = document.createElement("option"); option.value = metric.key; option.textContent = metric.label; activeMetricSelect.appendChild(option); });
@@ -800,14 +841,19 @@ const backendMetricSelect = document.getElementById("backendMetric");
 backendMetricSelect.value = backendMetric;
 backendMetricSelect.onchange = () => { backendMetric = backendMetricSelect.value; renderBackendSweep(); };
 renderLegend("moeLegend", report.kernel_series || [], moeSelected, renderAllPlots);
+renderLegend("moeTritonLegend", moeTriton.kernel_series || [], moeTritonSelected, renderAllPlots);
 renderLegend("denseLegend", report.single_expert_series || [], denseSelected, renderAllPlots);
 renderLegend("topk1Legend", report.topk1_single_expert_series || [], topk1Selected, renderAllPlots);
 renderLegend("moeThroughputLegend", report.moe_throughput_series || [], moeThroughputSelected, renderAllPlots);
+renderLegend("moeTritonThroughputLegend", moeTriton.moe_throughput_series || [], moeTritonThroughputSelected, renderAllPlots);
 renderLegend("denseThroughputLegend", report.single_expert_throughput_series || [], denseThroughputSelected, renderAllPlots);
 renderLegend("topk1ThroughputLegend", report.topk1_single_expert_throughput_series || [], topk1ThroughputSelected, renderAllPlots);
 document.getElementById("moeAllBtn").onclick = () => { (report.kernel_series || []).forEach(s => moeSelected.add(s.label)); renderLegend("moeLegend", report.kernel_series || [], moeSelected, renderAllPlots); renderAllPlots(); };
 document.getElementById("moeNoneBtn").onclick = () => { moeSelected.clear(); renderLegend("moeLegend", report.kernel_series || [], moeSelected, renderAllPlots); renderAllPlots(); };
 document.getElementById("moeMainBtn").onclick = () => { moeSelected.clear(); (report.kernel_series || []).forEach(s => { if (moeMainCats.has(s.category)) moeSelected.add(s.label); }); renderLegend("moeLegend", report.kernel_series || [], moeSelected, renderAllPlots); renderAllPlots(); };
+document.getElementById("moeTritonAllBtn").onclick = () => { (moeTriton.kernel_series || []).forEach(s => moeTritonSelected.add(s.label)); renderLegend("moeTritonLegend", moeTriton.kernel_series || [], moeTritonSelected, renderAllPlots); renderAllPlots(); };
+document.getElementById("moeTritonNoneBtn").onclick = () => { moeTritonSelected.clear(); renderLegend("moeTritonLegend", moeTriton.kernel_series || [], moeTritonSelected, renderAllPlots); renderAllPlots(); };
+document.getElementById("moeTritonMainBtn").onclick = () => { moeTritonSelected.clear(); (moeTriton.kernel_series || []).forEach(s => { if (moeMainCats.has(s.category)) moeTritonSelected.add(s.label); }); renderLegend("moeTritonLegend", moeTriton.kernel_series || [], moeTritonSelected, renderAllPlots); renderAllPlots(); };
 document.getElementById("denseAllBtn").onclick = () => { (report.single_expert_series || []).forEach(s => denseSelected.add(s.label)); renderLegend("denseLegend", report.single_expert_series || [], denseSelected, renderAllPlots); renderAllPlots(); };
 document.getElementById("denseNoneBtn").onclick = () => { denseSelected.clear(); renderLegend("denseLegend", report.single_expert_series || [], denseSelected, renderAllPlots); renderAllPlots(); };
 document.getElementById("denseMainBtn").onclick = () => { denseSelected.clear(); (report.single_expert_series || []).forEach(s => { if (denseMainCats.has(s.category)) denseSelected.add(s.label); }); renderLegend("denseLegend", report.single_expert_series || [], denseSelected, renderAllPlots); renderAllPlots(); };
@@ -840,6 +886,10 @@ def main() -> None:
     args = parse_args()
     report = json.loads(Path(args.moe_report_data).read_text())
     add_moe_throughput_series(report)
+    if args.moe_triton_report_data:
+        triton_report = json.loads(Path(args.moe_triton_report_data).read_text())
+        add_moe_throughput_series(triton_report)
+        report["moe_triton_profile"] = triton_report
     dense_rows = read_csv(args.single_expert_csv)
     if dense_rows:
         add_dense_data(report, dense_rows)
