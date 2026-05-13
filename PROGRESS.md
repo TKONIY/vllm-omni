@@ -48,3 +48,33 @@ Validation:
 Commit and push:
 
 - Step 1 is committed and pushed to the current branch upstream `fork/uad`.
+
+## Step 2: HunyuanImage3 Toy Phase Switch
+
+Status: completed.
+
+Completed modifications:
+
+- Added `UADPhaseUpdate` and DiT/image boundary fields to `UADRequestState`.
+- Extended `UADModelOutput` so runner outputs can carry a request state-machine update.
+- Updated `UADEngine` to apply phase updates after scheduled AR tokens are marked computed and new engine/materialized tokens are appended.
+- Updated `UADShadowScheduler` to skip `dit_step` requests in Step 2, so pending image context tokens are not accidentally scheduled as AR decode tokens.
+- Added `HunyuanImage3UADStateConfig` for HunyuanImage3 special-token rules: `<img_ratio_*>` detection, stage-transition helpers, ratio-index extraction, engine-only token filtering, and toy image-context token construction.
+- Updated `HunyuanImage3UADAdapter` so a sampled ratio token appends ratio + toy image context tokens, switches the request to `dit_step`, records ratio metadata, and leaves those new tokens uncomputed until a later cache-commit step.
+- Updated `docs/uad/plan_uad.md` Step 2 to explicitly map HunyuanImage3 tokenizer/sampler rules, ignored text-mask metadata, AR KV reuse metadata, and later-step obligations.
+- Added Step 2 tests in `tests/uad/test_step2_phase_switch.py`.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check vllm_omni/uad vllm_omni/model_executor/models/hunyuan_image3/hunyuan_image3_uad.py tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad vllm_omni/model_executor/models/hunyuan_image3/hunyuan_image3_uad.py tests/uad`.
+- Passed: `git diff --check -- PROGRESS.md docs/uad/plan_uad.md vllm_omni/uad vllm_omni/model_executor/models/hunyuan_image3/hunyuan_image3_uad.py tests/uad`.
+- Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py -q`.
+
+Environment note:
+
+- `uv run --extra dev` initially resolved `torch==2.12.0+cu130`, which was ABI-incompatible with the installed `vllm==0.20.0` extension. The local `.venv` was corrected with `uv pip install 'torch==2.11.0' 'torchaudio==2.11.0' 'torchvision==0.26.0'`, matching vLLM metadata, and validation was then run with `uv run --no-sync`.
+
+Commit and push:
+
+- Step 2 is committed and pushed to the current branch upstream `fork/uad`.

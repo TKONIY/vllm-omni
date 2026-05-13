@@ -45,6 +45,8 @@ class UADShadowScheduler:
         for request in requests:
             if request.finished:
                 continue
+            if request.phase == "dit_step":
+                continue
 
             token_ids = request.pending_token_ids()
             if not token_ids:

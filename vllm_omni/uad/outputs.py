@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from vllm_omni.uad.request import UADToken
+from vllm_omni.uad.request import UADPhaseUpdate, UADToken
 
 
 @dataclass
@@ -11,6 +11,7 @@ class UADModelOutput:
     new_engine_tokens: list[UADToken] = field(default_factory=list)
     new_materialized_tokens: list[UADToken] = field(default_factory=list)
     num_computed_tokens_delta: int = 0
+    phase_update: UADPhaseUpdate | None = None
     finished: bool = False
 
 
