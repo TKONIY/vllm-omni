@@ -40,6 +40,8 @@ class UADEngine:
         request.advance_computed_tokens(output.num_computed_tokens_delta)
         request.append_engine_tokens(output.new_engine_tokens)
         request.append_materialized_tokens(output.new_materialized_tokens)
+        if output.phase_update is not None:
+            request.apply_phase_update(output.phase_update)
         request.finished = output.finished
 
 

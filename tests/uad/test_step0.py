@@ -6,7 +6,6 @@ from vllm_omni.model_executor.models.hunyuan_image3.hunyuan_image3_uad import (
     HunyuanImage3UADForConditionalGeneration,
 )
 from vllm_omni.uad.engine import AsyncUADEngine, UADEngine
-from vllm_omni.uad.omni.adapter.hunyuan_image3 import HunyuanImage3UADAdapter
 from vllm_omni.uad.runner import UADRunner
 
 pytestmark = pytest.mark.cpu
@@ -14,7 +13,7 @@ pytestmark = pytest.mark.cpu
 
 def test_uad_engine_step0_routes_through_hunyuan_uad_entrypoint() -> None:
     model = HunyuanImage3UADForConditionalGeneration(vocab_size=100)
-    engine = UADEngine(runner=UADRunner(adapter=HunyuanImage3UADAdapter(model=model)))
+    engine = UADEngine(runner=UADRunner(model=model))
 
     request = engine.add_request("req-0", [10, 11])
     output = engine.step()
@@ -30,7 +29,7 @@ def test_uad_engine_step0_routes_through_hunyuan_uad_entrypoint() -> None:
 
 def test_uad_engine_step0_decode_computes_previous_sampled_token() -> None:
     model = HunyuanImage3UADForConditionalGeneration(vocab_size=100)
-    engine = UADEngine(runner=UADRunner(adapter=HunyuanImage3UADAdapter(model=model)))
+    engine = UADEngine(runner=UADRunner(model=model))
 
     request = engine.add_request("req-0", [7])
     engine.step()

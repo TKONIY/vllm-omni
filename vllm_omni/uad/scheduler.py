@@ -45,6 +45,20 @@ class UADShadowScheduler:
         for request in requests:
             if request.finished:
                 continue
+            if request.phase == "dit_step":
+                if request.dit_step_index >= request.total_dit_steps:
+                    continue
+                num_scheduled_tokens = request.image_context_token_count or len(request.pending_token_ids())
+                items.append(
+                    UADScheduleItem(
+                        request_id=request.request_id,
+                        phase="dit_step",
+                        token_ids=[],
+                        num_scheduled_tokens=num_scheduled_tokens,
+                        num_computed_tokens=request.num_computed_tokens,
+                    )
+                )
+                continue
 
             token_ids = request.pending_token_ids()
             if not token_ids:
@@ -66,7 +80,7 @@ class UADShadowScheduler:
 
 
 class UADToyScheduler(UADShadowScheduler):
-    """Token-budget-free scheduler used only for Step 0/1 smoke tests."""
+    """Token-budget-free scheduler used only for UAD toy smoke tests."""
 
     def schedule(
         self,
