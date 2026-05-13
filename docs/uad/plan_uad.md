@@ -24,9 +24,19 @@ FFN trace 由 `UAD_TRACE_FFN=1` 打开，汇总脚本是
 |---|---|---|
 | Step 0：Toy HunyuanImage3 UAD 入口 | 已完成并推送 | commit `62c4bb08` |
 | Step 1：UAD scheduler shadow item | 已完成并推送 | commit `0ddbf3b6` |
-| 下一步 | Step 2 | 实现 toy phase switch 和统一 token 账本 |
+| Step 2：HunyuanImage3 toy phase switch | 已完成并推送 | commit `375086c3` |
+| 下一步 | Step 3 | runner-first toy DiT step；先收掉单独翻译层脚手架 |
 
-当前工作区还有未提交的 motivation 实验改动：
+当前实现工作区使用独立 worktree：
+
+```text
+~/code/vllm-omni-uad-code
+```
+
+这个 worktree 只保留已提交的 UAD 实现线，不混入 motivation 实验临时改动。motivation
+实验如果继续做，应在单独 step 中整理脚本和 trace hook，避免污染 engine 实现审核面。
+
+此前 motivation 实验涉及的文件类型包括：
 
 - `vllm_omni/utils/uad_trace.py`：FFN/MoE JSONL tracer。
 - `vllm_omni/model_executor/models/hunyuan_image3/hunyuan_image3.py`：AR MoE tracing hook。
@@ -38,8 +48,8 @@ FFN trace 由 `UAD_TRACE_FFN=1` 打开，汇总脚本是
 - `docs/uad/script/`：motivation sweep、stage config 生成、FFN/MoE saturation 和汇总脚本。
 - `artifacts/uad_motivation/`：本地实验输出，不应随实现 step 提交。
 
-这些 motivation 改动还没有作为一个 step 提交。除非专门整理 motivation 实验，否则实现线
-继续从 Step 2 开始。
+这些 motivation 改动不属于 Step 2/3。除非专门整理 motivation 实验，否则实现线继续从
+runner-first Step 3 开始。
 
 ## 1. Motivation 实验计划
 
@@ -308,12 +318,11 @@ vllm_omni/uad/
   __init__.py
   request.py          # UADRequestState / UADPhase / UADToken
   scheduler.py        # UADScheduleItem / UADSchedulerOutput
-  runner.py           # UAD runner facade
+  runner.py           # UADRunner: input build / model execute / output process
   outputs.py          # UADModelOutput / UADPhaseUpdate
   engine.py           # UADEngine / AsyncUADEngine
   omni/
-    adapter/
-      hunyuan_image3.py   # HunyuanImage3UADAdapter
+    hunyuan_image3.py     # HunyuanImage3 runner helpers / special-token rules
 
 vllm_omni/model_executor/models/hunyuan_image3/
   hunyuan_image3_uad.py   # HunyuanImage3UADForConditionalGeneration
@@ -416,7 +425,7 @@ RoPE/position 不能用默认 1D append 近似：
   absolute token layout 和 mRoPE/2D RoPE position。不能只用
   `num_computed_tokens + arange(num_image_tokens)` 当作普通 1D positions。
 - 第一版最稳妥的做法：DiT denoise 保持原 diffusion position/mask 体系；final commit 时
-  通过 UAD adapter 生成同一批 image context tokens 及其 mRoPE positions，再写入 vLLM
+  通过 UAD runner 的 HunyuanImage3 helper 生成同一批 image context tokens 及其 mRoPE positions，再写入 vLLM
   paged KV。后续 turn 的 text tokens 接在这条 unified engine token 序列之后。
 
 ### 2.2 Step 0：Toy HunyuanImage3 UAD 入口
@@ -428,11 +437,11 @@ RoPE/position 不能用默认 1D append 近似：
 |---|---|
 | engine | 新增 `UADEngine` / `AsyncUADEngine`，接入 request add/step/output lifecycle |
 | model | 新增 `HunyuanImage3UADForConditionalGeneration` |
-| adapter | 新增 `HunyuanImage3UADAdapter`，先只实现 toy AR path |
+| runner | 新增 `UADRunner`，先只实现 toy AR path；HunyuanImage3 special-token 规则作为 runner helper，不引入长期独立翻译层 |
 | request | 新增 `UADRequestState`，保存 `engine_tokens` 和 `materialized_tokens` |
 | output | 文本 token 同时进入 `new_engine_tokens` 和 `new_materialized_tokens` |
 | scheduler | 先委托现有 AR scheduler，UAD 只旁路记录 phase |
-| runner | 先复用 AR runner 的 input 构造和 sampling path |
+| 不做 | 不做真实 DiT，不接 paged KV，不做独立翻译层抽象 |
 
 最小 toy 行为：
 
@@ -457,6 +466,10 @@ num_computed_tokens follows existing AR update timing
 - HunyuanImage3 AR-only smoke 能加载模型并跑完 1 个短请求。
 
 退出标准：
+
+- UAD engine / scheduler / runner / request ledger 跑通。
+- 后续实现从 runner 继续扩展；当前 toy 单 item 执行层只是 Step 0/2 脚手架，
+  Step 3 前必须收进 `UADRunner`。
 
 - 新增 UAD 模型入口被实际调用，而不是只在 engine 外层转发到旧模型。
 
@@ -544,12 +557,15 @@ AR sampled ratio token:
   `gen_timestep_scatter_index`、`think_recaption_end_pos`、`uncond_cfg_start_pos`
   接到 UAD request metadata。
 
-### 2.5 Step 3：Toy DiT step 调度
+### 2.5 Step 3：Runner-first toy DiT step 调度
 
-目标：让 scheduler 和 runner 先支持 “DiT step 是一个可调度 work item”。
+目标：先把 Step 0/2 的 toy 单 item 执行职责收进 `UADRunner`，然后让 scheduler 和 runner
+支持 “DiT step 是一个可调度 work item”。
 
 | 内容 | 说明 |
 |---|---|
+| runner cleanup | 删除长期单独翻译层路线；`UADRunner` 直接持有 model 和 HunyuanImage3 special-token helper |
+| model-specific helper | 保留 `<img_ratio_*>`、stage transition、engine-only token 判断等纯 helper，不承担 execute/model-runner 职责 |
 | scheduler | DiT step 仍按 token 数消耗 UAD work budget，但 non-final step 不进入 base `SchedulerOutput.num_scheduled_tokens` |
 | min/max | toy 阶段令 UAD item 的 `min_tokens == max_tokens == image_query_tokens` |
 | runner | 执行 fake DiT step，只更新 `dit_step_index` |
@@ -560,6 +576,7 @@ AR sampled ratio token:
 验证：
 
 - 同一个 engine 里，一个 AR request 和一个 toy DiT request 可以交替执行。
+- `runner.py` 不再通过独立翻译层执行 item；batch/item 执行入口集中在 `UADRunner.execute_model()`。
 - DiT non-final step 只推进 `dit_step_index`。
 - DiT final step 不再重复产生 image tokens，也不会假装已经写入 paged KV。
 - 后续 cache commit item 必须能通过 scheduler output 携带 block ids。
@@ -580,7 +597,7 @@ AR sampled ratio token:
 | step | 一次 UAD DiT item 执行一个独立 denoise timestep；dense scratch K/V 是 request-local state |
 | final | final step 默认 commit generated image context，VAE 只产出 artifact |
 | KV/page table | non-final step 不碰 vLLM paged KV；final commit 前 scheduler 必须 allocate image token slots |
-| position | denoise 保留 diffusion 原生 `position_ids/custom_pos_emb/attention_mask`；final commit 使用 UAD adapter 生成 image context 的 mRoPE positions |
+| position | denoise 保留 diffusion 原生 `position_ids/custom_pos_emb/attention_mask`；final commit 使用 UAD runner helper 生成 image context 的 mRoPE positions |
 | 限制 | 单请求、固定 shape、固定 steps、先不做 CFG parallel/SP |
 
 验证：

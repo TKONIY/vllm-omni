@@ -78,3 +78,23 @@ Environment note:
 Commit and push:
 
 - Step 2 is committed and pushed to the current branch upstream `fork/uad`.
+
+## Design Update: Runner-first UAD Path
+
+Status: completed.
+
+Completed modifications:
+
+- Updated `docs/uad/design_uad.md` so the long-term UAD abstraction starts at `UADRunner`, not a separate model translation layer.
+- Replaced `UADModelAdapter` references with runner-owned input building, model execution, output processing, state-machine updates, and HunyuanImage3 special-token helpers.
+- Updated `docs/uad/plan_uad.md` so Step 3 first folds the Step 0/2 toy single-item execution responsibilities into `UADRunner`, then adds toy DiT step scheduling.
+- Updated the plan status to show Step 2 as completed and the next implementation step as runner-first Step 3.
+
+Validation:
+
+- Passed: `if rg -n "UADModelAdapter|HunyuanImage3UADAdapter" docs/uad/design_uad.md docs/uad/plan_uad.md; then exit 1; else exit 0; fi`.
+- Passed: `git diff --check -- PROGRESS.md docs/uad/design_uad.md docs/uad/plan_uad.md`.
+
+Commit and push:
+
+- Runner-first design update is committed and pushed to the current branch upstream `origin/uad`.

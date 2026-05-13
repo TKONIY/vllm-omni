@@ -20,10 +20,10 @@ parallel 和 SP 留 TODO。
 | 原 vLLM AR engine | UAD engine on AR vLLM |
 |---|---|
 | **1. Request state**<br>`Request` / `CachedRequestState`<br>`prompt_token_ids`<br>`output_token_ids`<br>`num_computed_tokens` | **1. Request state**<br>`UADRequestState`<br>`engine_tokens`<br>`materialized_tokens`<br>`num_computed_tokens`<br>`phase` |
-| **2. Scheduler**<br>`Scheduler` / `OmniGenerationScheduler`<br>`request.num_computed_tokens`<br>`max_num_batched_tokens` | **2. Scheduler**<br>`UADModelAdapter.get_schedule_bounds()`<br>`UADScheduleBounds.min_scheduled_tokens`<br>`UADScheduleBounds.max_scheduled_tokens` |
+| **2. Scheduler**<br>`Scheduler` / `OmniGenerationScheduler`<br>`request.num_computed_tokens`<br>`max_num_batched_tokens` | **2. Scheduler**<br>`UADScheduler`<br>`UADScheduleBounds.min_scheduled_tokens`<br>`UADScheduleBounds.max_scheduled_tokens` |
 | **3. SchedulerOutput**<br>`SchedulerOutput`<br>`NewRequestData` / `CachedRequestData`<br>`num_scheduled_tokens`<br>`new_token_ids` | **3. SchedulerOutput**<br>`UADSchedulerOutput(base, uad_items)`<br>`UADScheduleItem.num_scheduled_tokens`<br>`runner_spec`<br>`state_policy` |
 | **4. Input builder**<br>`InputBatch` / `GPUModelRunner`<br>`token_ids_cpu`<br>`num_computed_tokens_cpu`<br>`block_table` / `slot_mapping` | **4. Input builder**<br>`UADInputs`<br>`input_ids` / `inputs_embeds`<br>`positions`<br>`latents` / `timesteps`<br>`attention_metadata` |
-| **5. Layer execution**<br>`GPUARModelRunner.execute_model()`<br>`input_ids` / `inputs_embeds`<br>`hidden_states` | **5. Layer execution**<br>`UADModelAdapter.forward()`<br>unified hidden buffer<br>shared projection + FFN/MoE |
+| **5. Layer execution**<br>`GPUARModelRunner.execute_model()`<br>`input_ids` / `inputs_embeds`<br>`hidden_states` | **5. Layer execution**<br>`UADRunner.execute_model()`<br>unified hidden buffer<br>shared projection + FFN/MoE |
 | **6. Attention**<br>`PerLayerAttnMetadata`<br>`attn_metadata`<br>`slot_mappings`<br>paged causal | **6. Attention**<br>`attention_metadata` 和 DiT patch plan<br>`out_causal/lse_causal`<br>`out_patch/lse_patch`<br>`shape_bucket` |
 | **7. Output handler**<br>`SamplerOutput`<br>`OmniModelRunnerOutput`<br>`sampled_token_ids` | **7. Output handler**<br>`UADPhaseOutput`<br>`sampled_token_ids` / `denoise_pred`<br>`artifact` |
 | **8. State update**<br>`CachedRequestData.new_token_ids`<br>`InputBatch.token_ids_cpu`<br>`InputBatch.num_computed_tokens_cpu` | **8. State update**<br>`UADPhaseUpdate`<br>`new_engine_tokens`<br>`new_materialized_tokens`<br>`num_new_computed_tokens` |
@@ -35,8 +35,8 @@ parallel 和 SP 留 TODO。
 - `Scheduler`：两者都按 token budget 调度，UAD 只是让 AR/DiT items 同 tick 共存。
 - `SchedulerOutput`：原 AR 只输出每个 request 的 `num_scheduled_tokens`；UAD 保留主输出，
   额外给 runner `uad_items` 描述 phase/input/output。
-- `Runner input builder`：原 AR 准备 token ids/embeds/slot mapping；UAD 在同层补充
-  latents、timesteps 和 phase metadata。
+- `Runner input builder`：原 AR 准备 token ids/embeds/slot mapping；UAD runner 在同层补充
+  latents、timesteps、phase metadata 和模型私有 control-token 规则。
 - `Layer execution`：两者都尽量合并 projection/FFN/MoE；UAD 不按 AR/DiT 拆完整 forward。
 - `Attention`：原 AR 只有 paged causal attention；UAD 先复用 causal base，再给 DiT
   chunk 补 bidirectional patch。
@@ -244,7 +244,7 @@ class UADSchedulerOutput:
 | `UADScheduleBounds` | scheduler 选择 request 前 | scheduler budget packing |
 | `num_scheduled_tokens` | scheduler 选中 request 后 | `SchedulerOutput`、runner input builder |
 | `state_policy` | build schedule item 时 | runner cache/state path |
-| `slot_mapping` | block allocator 或 adapter 准备后 | attention/cache metadata builder |
+| `slot_mapping` | block allocator 或 runner input builder 准备后 | attention/cache metadata builder |
 | `runner_spec` | build schedule item 时 | input builder、output handler、DiT patch bucketing |
 | `uad_items` | 每个 scheduler tick | runner 组 batch |
 
@@ -331,7 +331,7 @@ class UADPhaseOutput:
 | `output_kind` | 处理 |
 |---|---|
 | `sample_tokens` | logits -> sampler -> `new_engine_tokens`，通常也产生 `new_materialized_tokens` |
-| `denoise_pred` | 不走 sampler；adapter 更新 latents/image state |
+| `denoise_pred` | 不走 sampler；runner output processor 更新 latents/image state |
 | `none` | 内部状态迁移或无输出 |
 
 Artifact epilogue 不占 scheduler budget。HunyuanImage3 的 cache/state commit 在 final
@@ -430,17 +430,32 @@ num_new_computed_tokens = commit_until - state.num_computed_tokens
 `num_computed_tokens`。只有 chunk commit 后，该 chunk 才成为后续 chunk 可见的 frozen
 context。
 
-## 11. Adapter 接口
+## 11. Runner-first 接口
 
 ```python
-class UADModelAdapter(Protocol):
+class UADRunner:
     def init_request_state(self, request) -> UADRequestState: ...
-    def get_schedule_bounds(self, state, budget) -> UADScheduleBounds | None: ...
-    def build_schedule_item(self, state, n) -> UADScheduleItem: ...
-    def build_inputs(self, items, runner_state) -> UADInputs: ...
-    def forward(self, inputs, forward_context) -> Any: ...
-    def process_output(self, item, raw, state) -> UADPhaseOutput: ...
+    def get_schedule_bounds(self, state: UADRequestState, budget) -> UADScheduleBounds | None: ...
+    def build_inputs(self, items: list[UADScheduleItem], runner_state) -> UADInputs: ...
+    def execute_model(self, scheduler_output: UADSchedulerOutput, requests) -> list[UADPhaseOutput]: ...
+    def process_outputs(self, raw_outputs, items, requests) -> list[UADPhaseOutput]: ...
 ```
+
+UAD 不再设计独立 `adapter` 层。模型私有逻辑，例如 HunyuanImage3 的
+`</think> -> <recaption>`、`</recaption> -> <answer><boi><img_size_*>`、
+`<img_ratio_*>` phase switch、ignore text mask、CFG boundary metadata，都作为
+runner 内部 helper 或 model-specific runner mixin 存在。
+
+原因：UAD 的长期难点在 runner，而不是简单的模型翻译。真正需要统一的是：
+
+- schedule item 到 batched input 的构造；
+- vLLM block table / slot mapping / paged attention metadata 的复用；
+- AR sample、DiT denoise、cache commit、artifact epilogue 的 output 处理；
+- projection/FFN/MoE 合 batch。
+
+如果再引入 adapter，会把这些本来属于 runner 的职责切碎，后续接 paged KV、TP、quant、
+attention metadata 时反而更绕。第一版之后应把 toy 单 item 执行代码收进 `UADRunner`，
+保留的只是 HunyuanImage3 special-token helper。
 
 ## 12. TODO: CFG Parallel
 
