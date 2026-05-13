@@ -2815,7 +2815,7 @@
     "rows": [
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 16384,
         "top_k": 1,
@@ -2839,7 +2839,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 16384,
         "top_k": 1,
@@ -2863,7 +2863,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 16384,
         "top_k": 1,
@@ -2887,7 +2887,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 16384,
         "top_k": 1,
@@ -2911,7 +2911,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 16384,
         "top_k": 1,
@@ -2935,7 +2935,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 16384,
         "top_k": 1,
@@ -2959,7 +2959,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 16384,
         "top_k": 1,
@@ -2983,7 +2983,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 32768,
         "top_k": 1,
@@ -3007,7 +3007,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 32768,
         "top_k": 1,
@@ -3031,7 +3031,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 32768,
         "top_k": 1,
@@ -3055,7 +3055,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 32768,
         "top_k": 1,
@@ -3079,7 +3079,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 32768,
         "top_k": 1,
@@ -3103,7 +3103,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 32768,
         "top_k": 1,
@@ -3127,7 +3127,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 32768,
         "top_k": 1,
@@ -3151,7 +3151,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 65536,
         "top_k": 1,
@@ -3175,7 +3175,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 65536,
         "top_k": 1,
@@ -3199,7 +3199,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 65536,
         "top_k": 1,
@@ -3223,7 +3223,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 65536,
         "top_k": 1,
@@ -3247,7 +3247,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 65536,
         "top_k": 1,
@@ -3271,7 +3271,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 65536,
         "top_k": 1,
@@ -3295,7 +3295,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 65536,
         "top_k": 1,
@@ -3319,7 +3319,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 2048,
         "top_k": 8,
@@ -3343,7 +3343,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 2048,
         "top_k": 8,
@@ -3367,7 +3367,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 2048,
         "top_k": 8,
@@ -3391,7 +3391,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 2048,
         "top_k": 8,
@@ -3415,7 +3415,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 4096,
         "top_k": 8,
@@ -3439,7 +3439,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 4096,
         "top_k": 8,
@@ -3463,7 +3463,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 4096,
         "top_k": 8,
@@ -3487,7 +3487,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 4096,
         "top_k": 8,
@@ -3511,7 +3511,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 8192,
         "top_k": 8,
@@ -3535,7 +3535,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 8192,
         "top_k": 8,
@@ -3559,7 +3559,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 8192,
         "top_k": 8,
@@ -3583,7 +3583,7 @@
       },
       {
         "model_path": "/home/yangshen/.cache/huggingface/hub/models--tencent--HunyuanImage-3.0-Instruct/snapshots/2ec2c78bee7d4b94157341fba86c4c2c7b1858b2",
-        "layer_id": "15",
+        "layer_id": 15,
         "moe_backend": "auto",
         "input_tokens": 8192,
         "top_k": 8,
@@ -5230,5 +5230,944 @@
         }
       ]
     }
-  }
+  },
+  "topk1_single_expert_series": [
+    {
+      "label": "01. copy_cast :: copy/cast",
+      "category": "copy_cast",
+      "order": 1,
+      "kernel": "copy/cast",
+      "points": [
+        {
+          "tokens": 16,
+          "ms": 0.0010559999999999264
+        },
+        {
+          "tokens": 32,
+          "ms": 0.0010240000000000008
+        },
+        {
+          "tokens": 64,
+          "ms": 0.0010240000000000008
+        },
+        {
+          "tokens": 128,
+          "ms": 0.0009599999999999227
+        },
+        {
+          "tokens": 256,
+          "ms": 0.0011829999999999927
+        },
+        {
+          "tokens": 512,
+          "ms": 0.0011520000000000436
+        },
+        {
+          "tokens": 1024,
+          "ms": 0.0011839999999999691
+        },
+        {
+          "tokens": 2048,
+          "ms": 0.0018239999999998418
+        },
+        {
+          "tokens": 4096,
+          "ms": 0.001919999999999959
+        },
+        {
+          "tokens": 8192,
+          "ms": 0.001919999999999959
+        },
+        {
+          "tokens": 16384,
+          "ms": 0.0022080000000000836
+        },
+        {
+          "tokens": 32768,
+          "ms": 0.002495999999999981
+        },
+        {
+          "tokens": 65536,
+          "ms": 0.0022719999999999915
+        }
+      ]
+    },
+    {
+      "label": "02. copy_cast :: copy/cast",
+      "category": "copy_cast",
+      "order": 2,
+      "kernel": "copy/cast",
+      "points": [
+        {
+          "tokens": 16,
+          "ms": 0.0013120000000001256
+        },
+        {
+          "tokens": 32,
+          "ms": 0.0012799999999999728
+        },
+        {
+          "tokens": 64,
+          "ms": 0.0011520000000000436
+        },
+        {
+          "tokens": 128,
+          "ms": 0.0011839999999999691
+        },
+        {
+          "tokens": 256,
+          "ms": 0.0015679999999999837
+        },
+        {
+          "tokens": 512,
+          "ms": 0.002368000000000052
+        },
+        {
+          "tokens": 1024,
+          "ms": 0.0023369999999999893
+        },
+        {
+          "tokens": 2048,
+          "ms": 0.0023360000000000125
+        },
+        {
+          "tokens": 4096,
+          "ms": 0.0024960000000000945
+        },
+        {
+          "tokens": 8192,
+          "ms": 0.0024640000000000556
+        },
+        {
+          "tokens": 16384,
+          "ms": 0.0024959999999998672
+        },
+        {
+          "tokens": 32768,
+          "ms": 0.002432000000000016
+        },
+        {
+          "tokens": 65536,
+          "ms": 0.002432000000000016
+        }
+      ]
+    },
+    {
+      "label": "03. expert_map_build :: fusedBuildExpertMapsSortFirstTokenKernel",
+      "category": "expert_map_build",
+      "order": 3,
+      "kernel": "fusedBuildExpertMapsSortFirstTokenKernel",
+      "points": [
+        {
+          "tokens": 16,
+          "ms": 0.0017919999999999163
+        },
+        {
+          "tokens": 32,
+          "ms": 0.0016639999999999873
+        },
+        {
+          "tokens": 64,
+          "ms": 0.0016000000000000228
+        },
+        {
+          "tokens": 128,
+          "ms": 0.0018239999999999554
+        },
+        {
+          "tokens": 256,
+          "ms": 0.0026240000000000234
+        }
+      ]
+    },
+    {
+      "label": "03. prefix_sum :: blockExpertPrefixSumKernel",
+      "category": "prefix_sum",
+      "order": 3,
+      "kernel": "blockExpertPrefixSumKernel",
+      "points": [
+        {
+          "tokens": 512,
+          "ms": 0.00147199999999998
+        },
+        {
+          "tokens": 1024,
+          "ms": 0.0015040000000001328
+        },
+        {
+          "tokens": 2048,
+          "ms": 0.001599999999999909
+        },
+        {
+          "tokens": 4096,
+          "ms": 0.0018239999999998418
+        },
+        {
+          "tokens": 8192,
+          "ms": 0.0038400000000001454
+        },
+        {
+          "tokens": 16384,
+          "ms": 0.0067199999999998
+        },
+        {
+          "tokens": 32768,
+          "ms": 0.01155200000000002
+        },
+        {
+          "tokens": 65536,
+          "ms": 0.021823999999999955
+        }
+      ]
+    },
+    {
+      "label": "04. dispatch_expand :: expandInputRowsKernel",
+      "category": "dispatch_expand",
+      "order": 4,
+      "kernel": "expandInputRowsKernel",
+      "points": [
+        {
+          "tokens": 16,
+          "ms": 0.0021119999999998527
+        },
+        {
+          "tokens": 32,
+          "ms": 0.0018559999999999946
+        },
+        {
+          "tokens": 64,
+          "ms": 0.0019840000000000374
+        },
+        {
+          "tokens": 128,
+          "ms": 0.0020480000000000016
+        },
+        {
+          "tokens": 256,
+          "ms": 0.0025599999999999456
+        }
+      ]
+    },
+    {
+      "label": "04. other :: void tensorrt_llm::kernels::cutlass_kernels::globalExpertPrefixSumLargeKernel<1024>(int const*, int*, long*, long, long, long)",
+      "category": "other",
+      "order": 4,
+      "kernel": "void tensorrt_llm::kernels::cutlass_kernels::globalExpertPrefixSumLargeKernel<1024>(int const*, int*, long*, long, long, long)",
+      "points": [
+        {
+          "tokens": 32768,
+          "ms": 0.0021440000000000053
+        },
+        {
+          "tokens": 65536,
+          "ms": 0.0028160000000000307
+        }
+      ]
+    },
+    {
+      "label": "04. prefix_sum :: globalExpertPrefixSumKernel",
+      "category": "prefix_sum",
+      "order": 4,
+      "kernel": "globalExpertPrefixSumKernel",
+      "points": [
+        {
+          "tokens": 512,
+          "ms": 0.00124799999999982
+        },
+        {
+          "tokens": 1024,
+          "ms": 0.001311999999999898
+        },
+        {
+          "tokens": 2048,
+          "ms": 0.0012799999999999728
+        },
+        {
+          "tokens": 4096,
+          "ms": 0.0014079999999999017
+        },
+        {
+          "tokens": 8192,
+          "ms": 0.001311999999999898
+        },
+        {
+          "tokens": 16384,
+          "ms": 0.00169600000000014
+        }
+      ]
+    },
+    {
+      "label": "05. gemm1_gate_up_activation :: fused_moe::run_global<GEMM1_gate_up_activation>",
+      "category": "gemm1_gate_up_activation",
+      "order": 5,
+      "kernel": "fused_moe::run_global<GEMM1_gate_up_activation>",
+      "points": [
+        {
+          "tokens": 16,
+          "ms": 0.03852700000000004
+        },
+        {
+          "tokens": 32,
+          "ms": 0.0408309999999999
+        },
+        {
+          "tokens": 64,
+          "ms": 0.04214300000000003
+        },
+        {
+          "tokens": 128,
+          "ms": 0.049471
+        },
+        {
+          "tokens": 256,
+          "ms": 0.10402999999999997
+        }
+      ]
+    },
+    {
+      "label": "05. prefix_sum :: mergeExpertPrefixSumKernel",
+      "category": "prefix_sum",
+      "order": 5,
+      "kernel": "mergeExpertPrefixSumKernel",
+      "points": [
+        {
+          "tokens": 512,
+          "ms": 0.00105600000000004
+        },
+        {
+          "tokens": 1024,
+          "ms": 0.00105600000000004
+        },
+        {
+          "tokens": 2048,
+          "ms": 0.0011519999999998164
+        },
+        {
+          "tokens": 4096,
+          "ms": 0.0013759999999999764
+        },
+        {
+          "tokens": 8192,
+          "ms": 0.0022719999999999347
+        },
+        {
+          "tokens": 16384,
+          "ms": 0.003680000000000064
+        },
+        {
+          "tokens": 32768,
+          "ms": 0.006240000000000009
+        },
+        {
+          "tokens": 65536,
+          "ms": 0.011775999999999953
+        }
+      ]
+    },
+    {
+      "label": "06. dispatch_expand :: expandInputRowsKernel",
+      "category": "dispatch_expand",
+      "order": 6,
+      "kernel": "expandInputRowsKernel",
+      "points": [
+        {
+          "tokens": 512,
+          "ms": 0.0035520000000001345
+        },
+        {
+          "tokens": 1024,
+          "ms": 0.005536000000000058
+        },
+        {
+          "tokens": 2048,
+          "ms": 0.01942399999999998
+        },
+        {
+          "tokens": 4096,
+          "ms": 0.039327
+        },
+        {
+          "tokens": 8192,
+          "ms": 0.08927999999999997
+        },
+        {
+          "tokens": 16384,
+          "ms": 0.19036800000000018
+        },
+        {
+          "tokens": 32768,
+          "ms": 0.373727
+        },
+        {
+          "tokens": 65536,
+          "ms": 0.7520950000000002
+        }
+      ]
+    },
+    {
+      "label": "06. gemm2_down :: cutlass::Kernel<MoeFCGemm_GEMM2_down>",
+      "category": "gemm2_down",
+      "order": 6,
+      "kernel": "cutlass::Kernel<MoeFCGemm_GEMM2_down>",
+      "points": [
+        {
+          "tokens": 16,
+          "ms": 0.0266880000000001
+        },
+        {
+          "tokens": 32,
+          "ms": 0.02831899999999996
+        },
+        {
+          "tokens": 64,
+          "ms": 0.031263000000000034
+        },
+        {
+          "tokens": 128,
+          "ms": 0.03385499999999979
+        },
+        {
+          "tokens": 256,
+          "ms": 0.05750299999999993
+        }
+      ]
+    },
+    {
+      "label": "07. finalize_combine :: finalizeMoeRoutingKernel",
+      "category": "finalize_combine",
+      "order": 7,
+      "kernel": "finalizeMoeRoutingKernel",
+      "points": [
+        {
+          "tokens": 16,
+          "ms": 0.002175999999999931
+        },
+        {
+          "tokens": 32,
+          "ms": 0.0020480000000000016
+        },
+        {
+          "tokens": 64,
+          "ms": 0.0021119999999999663
+        },
+        {
+          "tokens": 128,
+          "ms": 0.0020799999999999274
+        },
+        {
+          "tokens": 256,
+          "ms": 0.002655999999999949
+        }
+      ]
+    },
+    {
+      "label": "07. gemm1_gate_up_activation :: fused_moe::run_global<GEMM1_gate_up_activation>",
+      "category": "gemm1_gate_up_activation",
+      "order": 7,
+      "kernel": "fused_moe::run_global<GEMM1_gate_up_activation>",
+      "points": [
+        {
+          "tokens": 512,
+          "ms": 0.17087900000000014
+        },
+        {
+          "tokens": 1024,
+          "ms": 0.3254440000000002
+        },
+        {
+          "tokens": 2048,
+          "ms": 0.6001340000000003
+        },
+        {
+          "tokens": 4096,
+          "ms": 1.1505520000000002
+        },
+        {
+          "tokens": 8192,
+          "ms": 2.259983
+        },
+        {
+          "tokens": 16384,
+          "ms": 4.453585
+        },
+        {
+          "tokens": 32768,
+          "ms": 8.261811
+        },
+        {
+          "tokens": 65536,
+          "ms": 16.417051
+        }
+      ]
+    },
+    {
+      "label": "08. gemm2_down :: cutlass::Kernel<MoeFCGemm_GEMM2_down>",
+      "category": "gemm2_down",
+      "order": 8,
+      "kernel": "cutlass::Kernel<MoeFCGemm_GEMM2_down>",
+      "points": [
+        {
+          "tokens": 512,
+          "ms": 0.08812799999999993
+        },
+        {
+          "tokens": 1024,
+          "ms": 0.16636999999999988
+        },
+        {
+          "tokens": 2048,
+          "ms": 0.3010590000000002
+        },
+        {
+          "tokens": 4096,
+          "ms": 0.586011
+        },
+        {
+          "tokens": 8192,
+          "ms": 1.1534160000000002
+        },
+        {
+          "tokens": 16384,
+          "ms": 2.2520240000000005
+        },
+        {
+          "tokens": 32768,
+          "ms": 4.188857
+        },
+        {
+          "tokens": 65536,
+          "ms": 8.365533
+        }
+      ]
+    },
+    {
+      "label": "08. memcpy :: Memcpy DtoD",
+      "category": "memcpy",
+      "order": 8,
+      "kernel": "Memcpy DtoD",
+      "points": [
+        {
+          "tokens": 16,
+          "ms": 0.0009920000000001891
+        },
+        {
+          "tokens": 32,
+          "ms": 0.0009919999999999619
+        },
+        {
+          "tokens": 64,
+          "ms": 0.0010879999999999655
+        },
+        {
+          "tokens": 128,
+          "ms": 0.0011200000000001183
+        },
+        {
+          "tokens": 256,
+          "ms": 0.0013440000000000509
+        }
+      ]
+    },
+    {
+      "label": "09. finalize_combine :: finalizeMoeRoutingKernel",
+      "category": "finalize_combine",
+      "order": 9,
+      "kernel": "finalizeMoeRoutingKernel",
+      "points": [
+        {
+          "tokens": 512,
+          "ms": 0.0037440000000001417
+        },
+        {
+          "tokens": 1024,
+          "ms": 0.005824000000000069
+        },
+        {
+          "tokens": 2048,
+          "ms": 0.009919999999999618
+        },
+        {
+          "tokens": 4096,
+          "ms": 0.020704000000000177
+        },
+        {
+          "tokens": 8192,
+          "ms": 0.04864000000000033
+        },
+        {
+          "tokens": 16384,
+          "ms": 0.1653109999999997
+        },
+        {
+          "tokens": 32768,
+          "ms": 0.349152
+        },
+        {
+          "tokens": 65536,
+          "ms": 0.7142079999999987
+        }
+      ]
+    },
+    {
+      "label": "10. memcpy :: Memcpy DtoD",
+      "category": "memcpy",
+      "order": 10,
+      "kernel": "Memcpy DtoD",
+      "points": [
+        {
+          "tokens": 512,
+          "ms": 0.0020799999999999274
+        },
+        {
+          "tokens": 1024,
+          "ms": 0.003392000000000053
+        },
+        {
+          "tokens": 2048,
+          "ms": 0.0064010000000002945
+        },
+        {
+          "tokens": 4096,
+          "ms": 0.01171199999999999
+        },
+        {
+          "tokens": 8192,
+          "ms": 0.03030500000000029
+        },
+        {
+          "tokens": 16384,
+          "ms": 0.1776319999999996
+        },
+        {
+          "tokens": 32768,
+          "ms": 0.3608310000000001
+        },
+        {
+          "tokens": 65536,
+          "ms": 0.735232
+        }
+      ]
+    }
+  ],
+  "topk1_single_expert_meta": {
+    "16": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 16,
+      "cuda_event_topk1_moe_ms": 0.1428659152984619,
+      "gemm_total_tflops": 18.522725630606413,
+      "end_to_end_tflops": 8.455197654923118
+    },
+    "32": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 32,
+      "cuda_event_topk1_moe_ms": 0.16046464920043946,
+      "gemm_total_tflops": 34.937369544468616,
+      "end_to_end_tflops": 15.055771573602042
+    },
+    "64": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 64,
+      "cuda_event_topk1_moe_ms": 0.17259296417236328,
+      "gemm_total_tflops": 65.82347775386204,
+      "end_to_end_tflops": 27.995568829645872
+    },
+    "128": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 128,
+      "cuda_event_topk1_moe_ms": 0.16058719635009766,
+      "gemm_total_tflops": 115.97432273240074,
+      "end_to_end_tflops": 60.177128909655586
+    },
+    "256": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 256,
+      "cuda_event_topk1_moe_ms": 0.18193824768066405,
+      "gemm_total_tflops": 119.64956282617183,
+      "end_to_end_tflops": 106.23029010328356
+    },
+    "512": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 512,
+      "cuda_event_topk1_moe_ms": 0.28274112701416015,
+      "gemm_total_tflops": 149.24193424888125,
+      "end_to_end_tflops": 136.71412458529286
+    },
+    "1024": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 1024,
+      "cuda_event_topk1_moe_ms": 0.5201161575317382,
+      "gemm_total_tflops": 157.19237623979797,
+      "end_to_end_tflops": 148.63874195887186
+    },
+    "2048": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 2048,
+      "cuda_event_topk1_moe_ms": 0.9550511932373047,
+      "gemm_total_tflops": 171.57126459703963,
+      "end_to_end_tflops": 161.89584783606605
+    },
+    "4096": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 4096,
+      "cuda_event_topk1_moe_ms": 1.8299885559082032,
+      "gemm_total_tflops": 178.0745330356572,
+      "end_to_end_tflops": 168.98337659741745
+    },
+    "8192": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 8192,
+      "cuda_event_topk1_moe_ms": 3.6161199951171876,
+      "gemm_total_tflops": 181.19044700722065,
+      "end_to_end_tflops": 171.03284499936984
+    },
+    "16384": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 16384,
+      "cuda_event_topk1_moe_ms": 7.25939697265625,
+      "gemm_total_tflops": 184.46506219614056,
+      "end_to_end_tflops": 170.39302106045227
+    },
+    "32768": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 32768,
+      "cuda_event_topk1_moe_ms": 13.976654052734375,
+      "gemm_total_tflops": 198.6962597104027,
+      "end_to_end_tflops": 177.00238935312342
+    },
+    "65536": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 65536,
+      "cuda_event_topk1_moe_ms": 27.02946044921875,
+      "gemm_total_tflops": 199.64836293874762,
+      "end_to_end_tflops": 183.052204622716
+    }
+  },
+  "topk1_single_expert_throughput_series": [
+    {
+      "label": "TopK=1 MoE GEMM1 gate/up input tokens/s",
+      "category": "gemm1_gate_up_activation",
+      "points": [
+        {
+          "tokens": 16,
+          "tokens_per_s": 415293.17102291854
+        },
+        {
+          "tokens": 32,
+          "tokens_per_s": 783718.253287945
+        },
+        {
+          "tokens": 64,
+          "tokens_per_s": 1518638.9198680671
+        },
+        {
+          "tokens": 128,
+          "tokens_per_s": 2587374.421378181
+        },
+        {
+          "tokens": 256,
+          "tokens_per_s": 2460828.6071325587
+        },
+        {
+          "tokens": 512,
+          "tokens_per_s": 2996272.2160124974
+        },
+        {
+          "tokens": 1024,
+          "tokens_per_s": 3146470.667764652
+        },
+        {
+          "tokens": 2048,
+          "tokens_per_s": 3412571.1924336883
+        },
+        {
+          "tokens": 4096,
+          "tokens_per_s": 3560030.315883158
+        },
+        {
+          "tokens": 8192,
+          "tokens_per_s": 3624806.027301975
+        },
+        {
+          "tokens": 16384,
+          "tokens_per_s": 3678834.0179877556
+        },
+        {
+          "tokens": 32768,
+          "tokens_per_s": 3966200.630830214
+        },
+        {
+          "tokens": 65536,
+          "tokens_per_s": 3991947.1529935547
+        }
+      ]
+    },
+    {
+      "label": "TopK=1 MoE GEMM2 down input tokens/s",
+      "category": "gemm2_down",
+      "points": [
+        {
+          "tokens": 16,
+          "tokens_per_s": 599520.3836930433
+        },
+        {
+          "tokens": 32,
+          "tokens_per_s": 1129983.4033687646
+        },
+        {
+          "tokens": 64,
+          "tokens_per_s": 2047148.3862713089
+        },
+        {
+          "tokens": 128,
+          "tokens_per_s": 3780830.0103382305
+        },
+        {
+          "tokens": 256,
+          "tokens_per_s": 4451941.637827598
+        },
+        {
+          "tokens": 512,
+          "tokens_per_s": 5809731.299927383
+        },
+        {
+          "tokens": 1024,
+          "tokens_per_s": 6154955.821362029
+        },
+        {
+          "tokens": 2048,
+          "tokens_per_s": 6802653.300515842
+        },
+        {
+          "tokens": 4096,
+          "tokens_per_s": 6989629.88749358
+        },
+        {
+          "tokens": 8192,
+          "tokens_per_s": 7102381.1010077875
+        },
+        {
+          "tokens": 16384,
+          "tokens_per_s": 7275233.30124368
+        },
+        {
+          "tokens": 32768,
+          "tokens_per_s": 7822659.021303426
+        },
+        {
+          "tokens": 65536,
+          "tokens_per_s": 7834049.545916561
+        }
+      ]
+    },
+    {
+      "label": "TopK=1 MoE end-to-end input tokens/s",
+      "category": "topk1_total",
+      "points": [
+        {
+          "tokens": 16,
+          "tokens_per_s": 111993.12282831296
+        },
+        {
+          "tokens": 32,
+          "tokens_per_s": 199420.87032532747
+        },
+        {
+          "tokens": 64,
+          "tokens_per_s": 370814.65230578673
+        },
+        {
+          "tokens": 128,
+          "tokens_per_s": 797074.7538362024
+        },
+        {
+          "tokens": 256,
+          "tokens_per_s": 1407070.8235539803
+        },
+        {
+          "tokens": 512,
+          "tokens_per_s": 1810843.7403744175
+        },
+        {
+          "tokens": 1024,
+          "tokens_per_s": 1968790.9809598906
+        },
+        {
+          "tokens": 2048,
+          "tokens_per_s": 2144387.666862091
+        },
+        {
+          "tokens": 4096,
+          "tokens_per_s": 2238265.3633411387
+        },
+        {
+          "tokens": 8192,
+          "tokens_per_s": 2265411.5491359746
+        },
+        {
+          "tokens": 16384,
+          "tokens_per_s": 2256936.7761142026
+        },
+        {
+          "tokens": 32768,
+          "tokens_per_s": 2344481.00928629
+        },
+        {
+          "tokens": 65536,
+          "tokens_per_s": 2424613.6959753567
+        }
+      ]
+    }
+  ]
 }
