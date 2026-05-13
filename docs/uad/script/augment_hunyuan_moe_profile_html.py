@@ -463,14 +463,27 @@ function renderDenseDetails() {
 function renderTopk1Details() {
   const meta = (report.topk1_single_expert_meta || {})[selectedToken] || {};
   const dense = (report.single_expert_meta || {})[selectedToken] || {};
+  const hidden = meta.hidden_size ?? dense.hidden_size ?? 4096;
+  const intermediate = meta.intermediate_size ?? dense.intermediate_size ?? 3072;
+  const ffnFlops = 2 * selectedToken * hidden * intermediate * 3;
+  const denseE2eTf = dense.cuda_event_dense_ffn_ms ? ffnFlops / (dense.cuda_event_dense_ffn_ms / 1000) / 1e12 : 0;
+  const topk1E2eTf = meta.cuda_event_topk1_moe_ms ? ffnFlops / (meta.cuda_event_topk1_moe_ms / 1000) / 1e12 : 0;
+  const denseGemm1Tf = dense.cuda_event_dense_gemm1_gate_up_ms ? (2 * selectedToken * hidden * intermediate * 2) / (dense.cuda_event_dense_gemm1_gate_up_ms / 1000) / 1e12 : 0;
+  const denseGemm2Tf = dense.cuda_event_dense_gemm2_down_ms ? (2 * selectedToken * hidden * intermediate) / (dense.cuda_event_dense_gemm2_down_ms / 1000) / 1e12 : 0;
+  const topk1VsDenseE2e = denseE2eTf ? topk1E2eTf / denseE2eTf : 0;
+  const topk1VsDenseGemm = denseGemm1Tf && denseGemm2Tf ? (meta.gemm_total_tflops || 0) / ((denseGemm1Tf * 2 + denseGemm2Tf) / 3) : 0;
   document.getElementById("topk1Details").textContent =
     `same expert: layer ${meta.layer_id ?? "__LAYER_ID__"}, expert ${meta.expert_id ?? "__EXPERT_ID__"}\n` +
-    `shape: hidden=${meta.hidden_size ?? 4096}, intermediate=${meta.intermediate_size ?? 3072}\n` +
+    `shape: hidden=${hidden}, intermediate=${intermediate}\n` +
     `top_k=${meta.top_k ?? 1}, rows_for_expert=${meta.rows_for_expert ?? selectedToken}\n` +
     `TopK=1 MoE event total: ${(meta.cuda_event_topk1_moe_ms || 0).toFixed(4)} ms\n` +
     `Dense FFN event total: ${(dense.cuda_event_dense_ffn_ms || 0).toFixed(4)} ms\n` +
     `TopK=1 MoE GEMM total TFLOPs: ${(meta.gemm_total_tflops || 0).toFixed(1)}\n` +
-    `TopK=1 MoE end-to-end TFLOPs: ${(meta.end_to_end_tflops || 0).toFixed(1)}`;
+    `Dense FFN GEMM-equivalent TFLOPs: ${((denseGemm1Tf * 2 + denseGemm2Tf) / 3 || 0).toFixed(1)}\n` +
+    `TopK=1 / Dense GEMM ratio: ${topk1VsDenseGemm ? topk1VsDenseGemm.toFixed(3) : "n/a"}\n` +
+    `TopK=1 MoE end-to-end TFLOPs: ${topk1E2eTf.toFixed(1)}\n` +
+    `Dense FFN end-to-end TFLOPs: ${denseE2eTf.toFixed(1)}\n` +
+    `TopK=1 / Dense end-to-end ratio: ${topk1VsDenseE2e ? topk1VsDenseE2e.toFixed(3) : "n/a"}`;
 }
 function activeExpertsValues() { return [...new Set(activeSweep.rows.map(r => r.active_experts))].sort((a,b) => a-b); }
 function activeMetricLabel() {
