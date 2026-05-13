@@ -39,6 +39,10 @@ def cuda_event_ms(fn, iters: int, device: torch.device, warmup: int = 0) -> floa
 
 
 def canonical_kernel_name(name: str) -> str:
+    if "moe_align_block_size_kernel" in name:
+        return "moe_align_block_size_kernel"
+    if "count_and_sort_expert_tokens_kernel" in name:
+        return "count_and_sort_expert_tokens_kernel"
     if "blockExpertPrefixSumKernel" in name:
         return "blockExpertPrefixSumKernel"
     if "globalExpertPrefixSumKernel" in name:
@@ -53,6 +57,10 @@ def canonical_kernel_name(name: str) -> str:
         return "fused_moe::run_global<GEMM1_gate_up_activation>"
     if "MoeFCGemm" in name:
         return "cutlass::Kernel<MoeFCGemm_GEMM2_down>"
+    if name == "fused_moe_kernel":
+        return "triton::fused_moe_kernel"
+    if "act_and_mul_kernel" in name:
+        return "act_and_mul_kernel"
     if "finalizeMoeRoutingKernel" in name:
         return "finalizeMoeRoutingKernel"
     if "Memcpy DtoD" in name:
@@ -69,6 +77,8 @@ def kernel_category(name: str) -> str:
         return "copy_cast"
     if "PrefixSumKernel" in name:
         return "prefix_sum"
+    if "moe_align_block_size_kernel" in name or "count_and_sort_expert_tokens_kernel" in name:
+        return "expert_map_build"
     if "fusedBuildExpertMapsSortFirstTokenKernel" in name:
         return "expert_map_build"
     if "expandInputRowsKernel" in name:
@@ -77,6 +87,8 @@ def kernel_category(name: str) -> str:
         return "gemm1_gate_up_activation"
     if "GEMM2" in name:
         return "gemm2_down"
+    if "act_and_mul_kernel" in name:
+        return "activation"
     if "finalizeMoeRoutingKernel" in name:
         return "finalize_combine"
     if "Memcpy" in name:
@@ -98,8 +110,17 @@ def profile_once(fn, device: torch.device) -> list[dict[str, Any]]:
         for event in prof.events()
         if getattr(getattr(event, "device_type", None), "name", "") == "CUDA"
     ]
+    triton_moe_kernel_count = 0
     for index, event in enumerate(cuda_events, start=1):
         short = canonical_kernel_name(event.name)
+        if short == "triton::fused_moe_kernel":
+            triton_moe_kernel_count += 1
+            if triton_moe_kernel_count == 1:
+                short = "triton::fused_moe_kernel<GEMM1_gate_up_activation>"
+            elif triton_moe_kernel_count == 2:
+                short = "triton::fused_moe_kernel<GEMM2_down>"
+            else:
+                short = f"triton::fused_moe_kernel<{triton_moe_kernel_count}>"
         category = kernel_category(short)
         rows.append(
             {

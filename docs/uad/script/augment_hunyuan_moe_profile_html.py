@@ -18,6 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--single-expert-csv", required=True)
     parser.add_argument("--active-expert-csv", default=None)
     parser.add_argument("--topk1-single-expert-csv", default=None)
+    parser.add_argument("--backend-sweep-csv", default=None)
     parser.add_argument("--layer-id", type=int, default=15)
     parser.add_argument("--expert-id", type=int, default=0)
     parser.add_argument("--skip-single-expert-profile", action="store_true")
@@ -214,6 +215,126 @@ def add_topk1_data(report: dict[str, Any], rows: list[dict[str, Any]]) -> None:
     report["topk1_single_expert_throughput_series"] = out
 
 
+def first_numeric(rows: list[dict[str, Any]], key: str, default: float) -> float:
+    for row in rows:
+        value = row.get(key)
+        if value not in ("", None):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                pass
+    return default
+
+
+def add_backend_sweep(
+    report: dict[str, Any],
+    rows: list[dict[str, Any]],
+    dense_rows: list[dict[str, Any]],
+) -> None:
+    rows = numeric_rows(rows)
+    dense_rows = numeric_rows(dense_rows)
+    hidden = int(first_numeric(rows, "hidden_size", 4096))
+    intermediate = int(first_numeric(rows, "intermediate_size", 3072))
+    components = [
+        {"key": "gemm1", "label": "GEMM1 gate/up"},
+        {"key": "gemm2", "label": "GEMM2 down"},
+        {"key": "e2e", "label": "end-to-end"},
+    ]
+    tokens = sorted({int(r["tokens"]) for r in rows if r.get("status") == "ok" and r.get("tokens") not in ("", None)})
+    if not tokens:
+        tokens = sorted({int(r["tokens"]) for r in dense_rows if r.get("tokens") not in ("", None)})[-3:]
+
+    points: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    failed_backends: set[str] = set()
+    backend_order = ["dense"]
+
+    for row in rows:
+        backend = str(row.get("backend", ""))
+        if row.get("status") != "ok":
+            if backend and backend not in failed_backends:
+                failures.append(
+                    {
+                        "backend": backend,
+                        "error": str(row.get("error", ""))[-1200:],
+                        "returncode": row.get("returncode", ""),
+                    }
+                )
+                failed_backends.add(backend)
+            continue
+        if backend and backend not in backend_order:
+            backend_order.append(backend)
+
+    def add_point(token: int, backend: str, component: str, ms: float) -> None:
+        if ms <= 0:
+            return
+        if component == "gemm1":
+            flops = 2.0 * token * hidden * intermediate * 2.0
+        elif component == "gemm2":
+            flops = 2.0 * token * hidden * intermediate
+        else:
+            flops = 2.0 * token * hidden * intermediate * 3.0
+        points.append(
+            {
+                "tokens": token,
+                "backend": backend,
+                "component": component,
+                "ms": ms,
+                "tokens_per_s": token / ms * 1000.0,
+                "tflops": flops / (ms / 1000.0) / 1e12,
+            }
+        )
+
+    dense_meta = event_meta_from_rows(dense_rows)
+    for token in tokens:
+        meta = dense_meta.get(str(token), {})
+        add_point(token, "dense", "gemm1", float(meta.get("cuda_event_dense_gemm1_gate_up_ms", 0.0) or 0.0))
+        add_point(token, "dense", "gemm2", float(meta.get("cuda_event_dense_gemm2_down_ms", 0.0) or 0.0))
+        add_point(token, "dense", "e2e", float(meta.get("cuda_event_dense_ffn_ms", 0.0) or 0.0))
+
+    by_backend_token: dict[tuple[str, int], dict[str, float]] = {}
+    for row in rows:
+        if row.get("status") != "ok" or row.get("tokens") in ("", None):
+            continue
+        backend = str(row["backend"])
+        token = int(row["tokens"])
+        if token not in tokens:
+            continue
+        entry = by_backend_token.setdefault(
+            (backend, token),
+            {
+                "gemm1": 0.0,
+                "gemm2": 0.0,
+                "e2e": float(row.get("cuda_event_topk1_moe_ms", 0.0) or 0.0),
+            },
+        )
+        category = row.get("category")
+        if category == "gemm1_gate_up_activation":
+            entry["gemm1"] += float(row.get("time_ms", 0.0) or 0.0)
+        elif category == "gemm2_down":
+            entry["gemm2"] += float(row.get("time_ms", 0.0) or 0.0)
+
+    for (backend, token), values in sorted(by_backend_token.items(), key=lambda kv: (backend_order.index(kv[0][0]), kv[0][1])):
+        add_point(token, backend, "gemm1", values["gemm1"])
+        add_point(token, backend, "gemm2", values["gemm2"])
+        add_point(token, backend, "e2e", values["e2e"])
+
+    report["topk1_backend_sweep"] = {
+        "tokens": tokens,
+        "backend_order": backend_order,
+        "components": components,
+        "metrics": [
+            {"key": "tokens_per_s", "label": "input tokens/s"},
+            {"key": "tflops", "label": "TFLOPs"},
+            {"key": "ms", "label": "latency ms"},
+        ],
+        "points": points,
+        "failures": failures,
+        "hidden_size": hidden,
+        "intermediate_size": intermediate,
+    }
+
+
 def add_active_expert_sweep(report: dict[str, Any], rows: list[dict[str, Any]]) -> None:
     rows = numeric_rows(rows)
     metrics = [
@@ -279,6 +400,10 @@ body { font-family: Arial, sans-serif; margin: 18px; color: #111827; }
 .inlineLegend { margin-top: 8px; max-height: none; }
 .inlineLegend label { display: inline-block; margin-right: 14px; }
 .muted { color: #6b7280; font-size: 12px; }
+.backendControls { margin: 0 0 12px; }
+.backendPlots { display: grid; grid-template-columns: 1fr; gap: 14px; }
+.backendPlot { width: 100%; height: 370px; border: 1px solid #e5e7eb; background: #f9fafb; }
+.backendTable { overflow: auto; max-height: 320px; }
 svg text { font-family: Arial, sans-serif; }
 </style>
 </head>
@@ -290,6 +415,7 @@ svg text { font-family: Arial, sans-serif; }
   <button class="tabBtn" data-tab="denseTab">Single Expert Dense FFN</button>
   <button class="tabBtn" data-tab="activeExpertTab">Active Expert Sweep</button>
   <button class="tabBtn" data-tab="topk1Tab">TopK=1 Same Expert MoE</button>
+  <button class="tabBtn" data-tab="backendTab">TopK=1 Backend Sweep</button>
 </div>
 
 <section id="moeTab" class="tab active">
@@ -332,6 +458,19 @@ svg text { font-family: Arial, sans-serif; }
   </div>
 </section>
 
+<section id="backendTab" class="tab">
+  <div class="panel">
+    <div class="backendControls">
+      <label class="muted">Metric <select id="backendMetric"></select></label>
+    </div>
+    <div id="backendPlots" class="backendPlots"></div>
+  </div>
+  <div class="panel">
+    <h3>Backend sweep values</h3>
+    <div class="backendTable"><pre id="backendDetails" class="muted"></pre></div>
+  </div>
+</section>
+
 <script>
 const report = __PAYLOAD__;
 const tokens = report.tokens || [];
@@ -339,6 +478,8 @@ let selectedToken = tokens[Math.floor(tokens.length / 2)] || 1;
 const activeSweep = report.active_expert_sweep || {rows: [], metrics: [], series: {}};
 let activeMetric = activeSweep.metrics.length ? activeSweep.metrics[0].key : "gemm_total_tflops";
 let selectedActiveExperts = 64;
+const backendSweep = report.topk1_backend_sweep || {tokens: [], backend_order: [], components: [], metrics: [], points: [], failures: []};
+let backendMetric = backendSweep.metrics.length ? backendSweep.metrics[0].key : "tokens_per_s";
 function log2(x) { return Math.log(x) / Math.log(2); }
 function make(tag, attrs={}, text=null) {
   const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
@@ -432,6 +573,110 @@ function formatThroughput(v) {
   if (v >= 1e6) return (v/1e6).toFixed(2) + "M";
   if (v >= 1e3) return (v/1e3).toFixed(0) + "k";
   return v.toFixed(0);
+}
+function formatBackendMetric(v) {
+  if (backendMetric === "tokens_per_s") return formatThroughput(v);
+  if (backendMetric === "tflops") return v.toFixed(1);
+  return v.toFixed(3);
+}
+function backendPointMap(token) {
+  const map = new Map();
+  (backendSweep.points || []).forEach(p => {
+    if (p.tokens === token) map.set(`${p.backend}::${p.component}`, p);
+  });
+  return map;
+}
+function renderBackendBarPlot(svg, token) {
+  clear(svg);
+  const pointMap = backendPointMap(token);
+  const backends = (backendSweep.backend_order || []).filter(b => {
+    if (b === "dense") return true;
+    return (backendSweep.components || []).some(c => pointMap.has(`${b}::${c.key}`));
+  });
+  const components = backendSweep.components || [];
+  const rect = svg.getBoundingClientRect();
+  const w = Math.max(760, rect.width), h = 370, ml = 86, mr = 24, mt = 38, mb = 90;
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  if (!backends.length || !components.length) {
+    svg.appendChild(make("text", {x:24,y:48,fontSize:14,fill:"#6b7280"}, "no backend sweep data"));
+    return;
+  }
+  let ymax = 0;
+  backends.forEach(b => components.forEach(c => {
+    const p = pointMap.get(`${b}::${c.key}`);
+    if (p) ymax = Math.max(ymax, Number(p[backendMetric] || 0));
+  }));
+  ymax = (ymax || 1) * 1.15;
+  const plotW = w - ml - mr;
+  const plotH = h - mt - mb;
+  const groupW = plotW / backends.length;
+  const gap = Math.min(18, groupW * 0.16);
+  const barW = Math.max(5, (groupW - gap) / Math.max(components.length, 1));
+  const sy = y => mt + (1 - y / ymax) * plotH;
+  svg.appendChild(make("rect", {x:ml,y:mt,width:plotW,height:plotH,fill:"#f9fafb",stroke:"#d1d5db"}));
+  for (let i=0;i<=5;i++) {
+    const yv = ymax * i / 5, y = sy(yv);
+    svg.appendChild(make("line", {x1:ml,y1:y,x2:w-mr,y2:y,stroke:"#e5e7eb"}));
+    svg.appendChild(make("text", {x:ml-8,y:y+4,"text-anchor":"end",fontSize:12,fill:"#374151"}, formatBackendMetric(yv)));
+  }
+  backends.forEach((backend, bi) => {
+    const gx = ml + bi * groupW + gap / 2;
+    components.forEach((component, ci) => {
+      const p = pointMap.get(`${backend}::${component.key}`);
+      const value = p ? Number(p[backendMetric] || 0) : 0;
+      const x = gx + ci * barW;
+      const y = sy(value);
+      svg.appendChild(make("rect", {x:x,y:y,width:barW-2,height:mt+plotH-y,fill:color(ci)}));
+    });
+    const tx = ml + bi * groupW + groupW / 2;
+    const text = make("text", {x:tx,y:h-52,"text-anchor":"end",fontSize:11,fill:"#374151",transform:`rotate(-35 ${tx} ${h-52})`}, backend);
+    svg.appendChild(text);
+  });
+  components.forEach((c, i) => {
+    const x = ml + i * 150;
+    svg.appendChild(make("rect", {x:x,y:10,width:10,height:10,fill:color(i)}));
+    svg.appendChild(make("text", {x:x+14,y:20,fontSize:12,fill:"#374151"}, c.label));
+  });
+  svg.appendChild(make("text", {x:w/2,y:24,"text-anchor":"middle",fontSize:15,fontWeight:700}, `${token} input tokens`));
+  const metricLabel = (backendSweep.metrics || []).find(m => m.key === backendMetric)?.label || backendMetric;
+  svg.appendChild(make("text", {x:18,y:mt+plotH/2,transform:`rotate(-90 18 ${mt+plotH/2})`,"text-anchor":"middle",fontSize:13,fontWeight:700}, metricLabel));
+}
+function renderBackendSweep() {
+  const container = document.getElementById("backendPlots");
+  container.innerHTML = "";
+  (backendSweep.tokens || []).forEach(token => {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "backendPlot");
+    container.appendChild(svg);
+    renderBackendBarPlot(svg, token);
+  });
+  const lines = [];
+  const metricLabel = (backendSweep.metrics || []).find(m => m.key === backendMetric)?.label || backendMetric;
+  lines.push(`metric: ${metricLabel}`);
+  lines.push(`shape: hidden=${backendSweep.hidden_size || 4096}, intermediate=${backendSweep.intermediate_size || 3072}`);
+  lines.push("");
+  lines.push("tokens  backend              GEMM1        GEMM2        end-to-end");
+  (backendSweep.tokens || []).forEach(token => {
+    const pointMap = backendPointMap(token);
+    (backendSweep.backend_order || []).forEach(backend => {
+      const vals = (backendSweep.components || []).map(c => {
+        const p = pointMap.get(`${backend}::${c.key}`);
+        return p ? formatBackendMetric(Number(p[backendMetric] || 0)).padStart(10) : "       n/a";
+      });
+      if (vals.some(v => !v.includes("n/a"))) {
+        lines.push(`${String(token).padStart(6)}  ${backend.padEnd(20)}  ${vals.join("  ")}`);
+      }
+    });
+  });
+  if ((backendSweep.failures || []).length) {
+    lines.push("");
+    lines.push("failed backends:");
+    (backendSweep.failures || []).forEach(f => {
+      const firstLine = String(f.error || "").split("\n").find(Boolean) || "no error text";
+      lines.push(`- ${f.backend}: rc=${f.returncode}, ${firstLine}`);
+    });
+  }
+  document.getElementById("backendDetails").textContent = lines.join("\n");
 }
 function renderBars() {
   const svg = document.getElementById("barPlot"); clear(svg);
@@ -544,12 +789,16 @@ function renderAllPlots() {
   renderSeriesPlot("denseThroughputPlot", report.single_expert_throughput_series || [], denseThroughputSelected, "tokens_per_s", "input tokens/s", {formatY: formatThroughput});
   renderSeriesPlot("topk1TimePlot", report.topk1_single_expert_series || [], topk1Selected, "ms", "kernel time (ms)");
   renderSeriesPlot("topk1ThroughputPlot", report.topk1_single_expert_throughput_series || [], topk1ThroughputSelected, "tokens_per_s", "input tokens/s", {formatY: formatThroughput});
-  renderBars(); renderDenseDetails(); renderTopk1Details(); renderActiveExpertPlot();
+  renderBars(); renderDenseDetails(); renderTopk1Details(); renderActiveExpertPlot(); renderBackendSweep();
 }
 const activeMetricSelect = document.getElementById("activeMetric");
 activeSweep.metrics.forEach(metric => { const option = document.createElement("option"); option.value = metric.key; option.textContent = metric.label; activeMetricSelect.appendChild(option); });
 activeMetricSelect.value = activeMetric;
 activeMetricSelect.onchange = () => { activeMetric = activeMetricSelect.value; renderActiveExpertPlot(); };
+const backendMetricSelect = document.getElementById("backendMetric");
+(backendSweep.metrics || []).forEach(metric => { const option = document.createElement("option"); option.value = metric.key; option.textContent = metric.label; backendMetricSelect.appendChild(option); });
+backendMetricSelect.value = backendMetric;
+backendMetricSelect.onchange = () => { backendMetric = backendMetricSelect.value; renderBackendSweep(); };
 renderLegend("moeLegend", report.kernel_series || [], moeSelected, renderAllPlots);
 renderLegend("denseLegend", report.single_expert_series || [], denseSelected, renderAllPlots);
 renderLegend("topk1Legend", report.topk1_single_expert_series || [], topk1Selected, renderAllPlots);
@@ -600,6 +849,9 @@ def main() -> None:
     topk1_rows = read_csv(args.topk1_single_expert_csv)
     if topk1_rows:
         add_topk1_data(report, topk1_rows)
+    backend_rows = read_csv(args.backend_sweep_csv)
+    if backend_rows:
+        add_backend_sweep(report, backend_rows, dense_rows)
     output = Path(args.output_html)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(build_html(report, args.layer_id, args.expert_id))
