@@ -6169,5 +6169,380 @@
         }
       ]
     }
-  ]
+  ],
+  "topk1_backend_sweep": {
+    "tokens": [
+      16384,
+      32768,
+      65536
+    ],
+    "backend_order": [
+      "dense",
+      "auto",
+      "flashinfer_cutlass",
+      "triton"
+    ],
+    "components": [
+      {
+        "key": "gemm1",
+        "label": "GEMM1 gate/up"
+      },
+      {
+        "key": "gemm2",
+        "label": "GEMM2 down"
+      },
+      {
+        "key": "e2e",
+        "label": "end-to-end"
+      }
+    ],
+    "metrics": [
+      {
+        "key": "tokens_per_s",
+        "label": "input tokens/s"
+      },
+      {
+        "key": "tflops",
+        "label": "TFLOPs"
+      },
+      {
+        "key": "ms",
+        "label": "latency ms"
+      }
+    ],
+    "points": [
+      {
+        "tokens": 16384,
+        "backend": "dense",
+        "component": "gemm1",
+        "ms": 2.0653199768066406,
+        "tokens_per_s": 7932911.211817471,
+        "tflops": 399.2764947284504
+      },
+      {
+        "tokens": 16384,
+        "backend": "dense",
+        "component": "gemm2",
+        "ms": 1.008419189453125,
+        "tokens_per_s": 16247211.647058398,
+        "tflops": 408.8744688006218
+      },
+      {
+        "tokens": 16384,
+        "backend": "dense",
+        "component": "e2e",
+        "ms": 3.4290045166015624,
+        "tokens_per_s": 4778063.114433559,
+        "tflops": 360.73168619618036
+      },
+      {
+        "tokens": 32768,
+        "backend": "dense",
+        "component": "gemm1",
+        "ms": 4.082750854492187,
+        "tokens_per_s": 8025961.212878292,
+        "tflops": 403.95985462824325
+      },
+      {
+        "tokens": 32768,
+        "backend": "dense",
+        "component": "gemm2",
+        "ms": 2.022424621582031,
+        "tokens_per_s": 16202334.391265174,
+        "tflops": 407.7450956797265
+      },
+      {
+        "tokens": 32768,
+        "backend": "dense",
+        "component": "e2e",
+        "ms": 6.772544555664062,
+        "tokens_per_s": 4838358.718894693,
+        "tflops": 365.28385190570793
+      },
+      {
+        "tokens": 65536,
+        "backend": "dense",
+        "component": "gemm1",
+        "ms": 8.162825927734374,
+        "tokens_per_s": 8028592.129758889,
+        "tflops": 404.09227301059474
+      },
+      {
+        "tokens": 65536,
+        "backend": "dense",
+        "component": "gemm2",
+        "ms": 4.103289794921875,
+        "tokens_per_s": 15971574.82786267,
+        "tflops": 401.93784112082227
+      },
+      {
+        "tokens": 65536,
+        "backend": "dense",
+        "component": "e2e",
+        "ms": 13.491077880859375,
+        "tokens_per_s": 4857728.980497546,
+        "tflops": 366.746257688702
+      },
+      {
+        "tokens": 16384,
+        "backend": "auto",
+        "component": "gemm1",
+        "ms": 4.441839,
+        "tokens_per_s": 3688562.3274504095,
+        "tflops": 185.6514206912948
+      },
+      {
+        "tokens": 16384,
+        "backend": "auto",
+        "component": "gemm2",
+        "ms": 2.245495,
+        "tokens_per_s": 7296386.765501593,
+        "tflops": 183.61958517654233
+      },
+      {
+        "tokens": 16384,
+        "backend": "auto",
+        "component": "e2e",
+        "ms": 7.25550537109375,
+        "tokens_per_s": 2258147.3187621874,
+        "tflops": 170.4844139701233
+      },
+      {
+        "tokens": 32768,
+        "backend": "auto",
+        "component": "gemm1",
+        "ms": 8.957802000000001,
+        "tokens_per_s": 3658040.2201343584,
+        "tflops": 184.11519272964503
+      },
+      {
+        "tokens": 32768,
+        "backend": "auto",
+        "component": "gemm2",
+        "ms": 4.487253000000001,
+        "tokens_per_s": 7302463.2219311,
+        "tflops": 183.772504209591
+      },
+      {
+        "tokens": 32768,
+        "backend": "auto",
+        "component": "e2e",
+        "ms": 14.490083312988281,
+        "tokens_per_s": 2261408.667721613,
+        "tflops": 170.73063757186975
+      },
+      {
+        "tokens": 65536,
+        "backend": "auto",
+        "component": "gemm1",
+        "ms": 17.213132,
+        "tokens_per_s": 3807325.7092317655,
+        "tflops": 191.62897741840357
+      },
+      {
+        "tokens": 65536,
+        "backend": "auto",
+        "component": "gemm2",
+        "ms": 8.918726000000003,
+        "tokens_per_s": 7348134.699956023,
+        "tflops": 184.92186458738607
+      },
+      {
+        "tokens": 65536,
+        "backend": "auto",
+        "component": "e2e",
+        "ms": 27.286965942382814,
+        "tokens_per_s": 2401732.7590902224,
+        "tflops": 181.3247517308968
+      },
+      {
+        "tokens": 16384,
+        "backend": "flashinfer_cutlass",
+        "component": "gemm1",
+        "ms": 4.450099,
+        "tokens_per_s": 3681715.8449733364,
+        "tflops": 185.30682594522057
+      },
+      {
+        "tokens": 16384,
+        "backend": "flashinfer_cutlass",
+        "component": "gemm2",
+        "ms": 2.248249,
+        "tokens_per_s": 7287449.032558226,
+        "tflops": 183.3946597623306
+      },
+      {
+        "tokens": 16384,
+        "backend": "flashinfer_cutlass",
+        "component": "e2e",
+        "ms": 7.259510040283203,
+        "tokens_per_s": 2256901.624088234,
+        "tflops": 170.39036717135593
+      },
+      {
+        "tokens": 32768,
+        "backend": "flashinfer_cutlass",
+        "component": "gemm1",
+        "ms": 8.250238000000001,
+        "tokens_per_s": 3971764.208499197,
+        "tflops": 199.90543808118016
+      },
+      {
+        "tokens": 32768,
+        "backend": "flashinfer_cutlass",
+        "component": "gemm2",
+        "ms": 4.196077999999999,
+        "tokens_per_s": 7809197.064496896,
+        "tflops": 196.52487890644554
+      },
+      {
+        "tokens": 32768,
+        "backend": "flashinfer_cutlass",
+        "component": "e2e",
+        "ms": 13.917507934570313,
+        "tokens_per_s": 2354444.499263127,
+        "tflops": 177.75460765867197
+      },
+      {
+        "tokens": 65536,
+        "backend": "flashinfer_cutlass",
+        "component": "gemm1",
+        "ms": 16.410663999999997,
+        "tokens_per_s": 3993500.811423597,
+        "tflops": 200.99947712828686
+      },
+      {
+        "tokens": 65536,
+        "backend": "flashinfer_cutlass",
+        "component": "gemm2",
+        "ms": 8.370131999999998,
+        "tokens_per_s": 7829745.098404663,
+        "tflops": 197.0419871113144
+      },
+      {
+        "tokens": 65536,
+        "backend": "flashinfer_cutlass",
+        "component": "e2e",
+        "ms": 27.036972045898438,
+        "tokens_per_s": 2423940.0731984684,
+        "tflops": 183.00134780597932
+      },
+      {
+        "tokens": 16384,
+        "backend": "triton",
+        "component": "gemm1",
+        "ms": 2.358674,
+        "tokens_per_s": 6946275.746457543,
+        "tflops": 349.61750578163833
+      },
+      {
+        "tokens": 16384,
+        "backend": "triton",
+        "component": "gemm2",
+        "ms": 1.240473,
+        "tokens_per_s": 13207865.064374639,
+        "tflops": 332.3868076258008
+      },
+      {
+        "tokens": 16384,
+        "backend": "triton",
+        "component": "e2e",
+        "ms": 4.103139114379883,
+        "tokens_per_s": 3993040.338939654,
+        "tflops": 301.46445118396707
+      },
+      {
+        "tokens": 32768,
+        "backend": "triton",
+        "component": "gemm1",
+        "ms": 4.477765000000001,
+        "tokens_per_s": 7317936.5152034545,
+        "tflops": 368.3238047695669
+      },
+      {
+        "tokens": 32768,
+        "backend": "triton",
+        "component": "gemm2",
+        "ms": 2.3452970000000004,
+        "tokens_per_s": 13971791.205975188,
+        "tflops": 351.61163845431935
+      },
+      {
+        "tokens": 32768,
+        "backend": "triton",
+        "component": "e2e",
+        "ms": 7.950267028808594,
+        "tokens_per_s": 4121622.56704861,
+        "tflops": 311.1720843503206
+      },
+      {
+        "tokens": 65536,
+        "backend": "triton",
+        "component": "gemm1",
+        "ms": 8.986062,
+        "tokens_per_s": 7293072.315770801,
+        "tflops": 367.0723486359208
+      },
+      {
+        "tokens": 65536,
+        "backend": "triton",
+        "component": "gemm2",
+        "ms": 4.687350999999999,
+        "tokens_per_s": 13981457.757270582,
+        "tflops": 351.8549051829062
+      },
+      {
+        "tokens": 65536,
+        "backend": "triton",
+        "component": "e2e",
+        "ms": 16.090922546386718,
+        "tokens_per_s": 4072855.3512748326,
+        "tflops": 307.49028284292183
+      }
+    ],
+    "failures": [
+      {
+        "backend": "flashinfer_trtllm",
+        "error": "  quant_method = UnquantizedFusedMoEMethod(self.moe_config)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/unquantized_fused_moe_method.py\", line 48, in __init__\n    self.unquantized_backend, self.experts_cls = select_unquantized_moe_backend(\n                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py\", line 226, in select_unquantized_moe_backend\n    return _return_or_raise(requested_backend, moe_config, activation_format)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py\", line 215, in _return_or_raise\n    raise ValueError(_make_log_unsupported(backend, reason))\nValueError: Unquantized MoE backend FlashInfer TRTLLM does not support the deployment configuration since kernel does not support current device cuda.",
+        "returncode": 1
+      },
+      {
+        "backend": "deep_gemm",
+        "error": "rs/fused_moe/layer.py\", line 533, in _get_quant_method\n    quant_method = UnquantizedFusedMoEMethod(self.moe_config)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/unquantized_fused_moe_method.py\", line 48, in __init__\n    self.unquantized_backend, self.experts_cls = select_unquantized_moe_backend(\n                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py\", line 219, in select_unquantized_moe_backend\n    requested_backend = map_unquantized_backend(runner_backend)\n                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py\", line 142, in map_unquantized_backend\n    raise ValueError(\nValueError: moe_backend='deep_gemm' is not supported for unquantized MoE. Expected one of ['triton', 'flashinfer_trtllm', 'flashinfer_cutlass', 'aiter'].",
+        "returncode": 1
+      },
+      {
+        "backend": "deep_gemm_mega_moe",
+        "error": "moe/layer.py\", line 533, in _get_quant_method\n    quant_method = UnquantizedFusedMoEMethod(self.moe_config)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/unquantized_fused_moe_method.py\", line 48, in __init__\n    self.unquantized_backend, self.experts_cls = select_unquantized_moe_backend(\n                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py\", line 219, in select_unquantized_moe_backend\n    requested_backend = map_unquantized_backend(runner_backend)\n                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py\", line 142, in map_unquantized_backend\n    raise ValueError(\nValueError: moe_backend='deep_gemm_mega_moe' is not supported for unquantized MoE. Expected one of ['triton', 'flashinfer_trtllm', 'flashinfer_cutlass', 'aiter'].",
+        "returncode": 1
+      },
+      {
+        "backend": "cutlass",
+        "error": "yers/fused_moe/layer.py\", line 533, in _get_quant_method\n    quant_method = UnquantizedFusedMoEMethod(self.moe_config)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/unquantized_fused_moe_method.py\", line 48, in __init__\n    self.unquantized_backend, self.experts_cls = select_unquantized_moe_backend(\n                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py\", line 219, in select_unquantized_moe_backend\n    requested_backend = map_unquantized_backend(runner_backend)\n                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py\", line 142, in map_unquantized_backend\n    raise ValueError(\nValueError: moe_backend='cutlass' is not supported for unquantized MoE. Expected one of ['triton', 'flashinfer_trtllm', 'flashinfer_cutlass', 'aiter'].",
+        "returncode": 1
+      },
+      {
+        "backend": "flashinfer_cutedsl",
+        "error": "moe/layer.py\", line 533, in _get_quant_method\n    quant_method = UnquantizedFusedMoEMethod(self.moe_config)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/unquantized_fused_moe_method.py\", line 48, in __init__\n    self.unquantized_backend, self.experts_cls = select_unquantized_moe_backend(\n                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py\", line 219, in select_unquantized_moe_backend\n    requested_backend = map_unquantized_backend(runner_backend)\n                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py\", line 142, in map_unquantized_backend\n    raise ValueError(\nValueError: moe_backend='flashinfer_cutedsl' is not supported for unquantized MoE. Expected one of ['triton', 'flashinfer_trtllm', 'flashinfer_cutlass', 'aiter'].",
+        "returncode": 1
+      },
+      {
+        "backend": "marlin",
+        "error": "ayers/fused_moe/layer.py\", line 533, in _get_quant_method\n    quant_method = UnquantizedFusedMoEMethod(self.moe_config)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/unquantized_fused_moe_method.py\", line 48, in __init__\n    self.unquantized_backend, self.experts_cls = select_unquantized_moe_backend(\n                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py\", line 219, in select_unquantized_moe_backend\n    requested_backend = map_unquantized_backend(runner_backend)\n                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py\", line 142, in map_unquantized_backend\n    raise ValueError(\nValueError: moe_backend='marlin' is not supported for unquantized MoE. Expected one of ['triton', 'flashinfer_trtllm', 'flashinfer_cutlass', 'aiter'].",
+        "returncode": 1
+      },
+      {
+        "backend": "aiter",
+        "error": "thod\n    quant_method = UnquantizedFusedMoEMethod(self.moe_config)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/unquantized_fused_moe_method.py\", line 48, in __init__\n    self.unquantized_backend, self.experts_cls = select_unquantized_moe_backend(\n                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py\", line 226, in select_unquantized_moe_backend\n    return _return_or_raise(requested_backend, moe_config, activation_format)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py\", line 215, in _return_or_raise\n    raise ValueError(_make_log_unsupported(backend, reason))\nValueError: Unquantized MoE backend ROCm AITER does not support the deployment configuration since kernel does not support current device cuda.",
+        "returncode": 1
+      },
+      {
+        "backend": "emulation",
+        "error": "rs/fused_moe/layer.py\", line 533, in _get_quant_method\n    quant_method = UnquantizedFusedMoEMethod(self.moe_config)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/unquantized_fused_moe_method.py\", line 48, in __init__\n    self.unquantized_backend, self.experts_cls = select_unquantized_moe_backend(\n                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py\", line 219, in select_unquantized_moe_backend\n    requested_backend = map_unquantized_backend(runner_backend)\n                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py\", line 142, in map_unquantized_backend\n    raise ValueError(\nValueError: moe_backend='emulation' is not supported for unquantized MoE. Expected one of ['triton', 'flashinfer_trtllm', 'flashinfer_cutlass', 'aiter'].",
+        "returncode": 1
+      }
+    ],
+    "hidden_size": 4096,
+    "intermediate_size": 3072
+  }
 }
