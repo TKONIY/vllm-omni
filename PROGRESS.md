@@ -124,3 +124,20 @@ Validation:
 Commit and push:
 
 - Step 3 is committed and pushed to the current branch upstream `origin/uad-code`.
+
+## HunyuanImage3 UAD State Helper Comments
+
+Status: completed.
+
+Completed modifications:
+
+- Added method-level comments/docstrings to `vllm_omni/uad/omni/hunyuan_image3.py`.
+- Documented how each helper maps to the original HunyuanImage3 tokenizer/sampler rules.
+- Documented the current UAD boundary: pure state-machine helper only, no logits masking, no real DiT/VAE execution, and toy image-context placeholders only.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
+- Passed: `git diff --check -- vllm_omni/uad/omni/hunyuan_image3.py`.
+- Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py -q`.
