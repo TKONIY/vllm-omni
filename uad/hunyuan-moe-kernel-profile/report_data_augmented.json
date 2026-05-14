@@ -8575,5 +8575,900 @@
         ]
       }
     ]
-  }
+  },
+  "topk1_triton_single_expert_series": [
+    {
+      "label": "01. copy_cast :: copy/cast",
+      "category": "copy_cast",
+      "order": 1,
+      "kernel": "copy/cast",
+      "points": [
+        {
+          "tokens": 16,
+          "ms": 0.00105600000000004
+        },
+        {
+          "tokens": 32,
+          "ms": 0.0010879999999999655
+        },
+        {
+          "tokens": 64,
+          "ms": 0.0010240000000000008
+        },
+        {
+          "tokens": 128,
+          "ms": 0.0010240000000000008
+        },
+        {
+          "tokens": 256,
+          "ms": 0.001216000000000008
+        },
+        {
+          "tokens": 512,
+          "ms": 0.001216000000000008
+        },
+        {
+          "tokens": 1024,
+          "ms": 0.001216000000000122
+        },
+        {
+          "tokens": 2048,
+          "ms": 0.0017920000000000301
+        },
+        {
+          "tokens": 4096,
+          "ms": 0.001824000000000069
+        },
+        {
+          "tokens": 8192,
+          "ms": 0.0018559999999999946
+        },
+        {
+          "tokens": 16384,
+          "ms": 0.0021760000000000447
+        },
+        {
+          "tokens": 32768,
+          "ms": 0.0022080000000000836
+        },
+        {
+          "tokens": 65536,
+          "ms": 0.0023039999999999736
+        }
+      ]
+    },
+    {
+      "label": "02. copy_cast :: copy/cast",
+      "category": "copy_cast",
+      "order": 2,
+      "kernel": "copy/cast",
+      "points": [
+        {
+          "tokens": 16,
+          "ms": 0.001311999999999898
+        },
+        {
+          "tokens": 32,
+          "ms": 0.0013120000000000117
+        },
+        {
+          "tokens": 64,
+          "ms": 0.0011839999999999691
+        },
+        {
+          "tokens": 128,
+          "ms": 0.0012799999999999728
+        },
+        {
+          "tokens": 256,
+          "ms": 0.0016639999999999873
+        },
+        {
+          "tokens": 512,
+          "ms": 0.0024639999999999987
+        },
+        {
+          "tokens": 1024,
+          "ms": 0.0023999999999998636
+        },
+        {
+          "tokens": 2048,
+          "ms": 0.002432000000000016
+        },
+        {
+          "tokens": 4096,
+          "ms": 0.0025909999999998946
+        },
+        {
+          "tokens": 8192,
+          "ms": 0.0025599999999999456
+        },
+        {
+          "tokens": 16384,
+          "ms": 0.002495999999999981
+        },
+        {
+          "tokens": 32768,
+          "ms": 0.00252800000000002
+        },
+        {
+          "tokens": 65536,
+          "ms": 0.00252800000000002
+        }
+      ]
+    },
+    {
+      "label": "03. expert_map_build :: moe_align_block_size_kernel",
+      "category": "expert_map_build",
+      "order": 3,
+      "kernel": "moe_align_block_size_kernel",
+      "points": [
+        {
+          "tokens": 1024,
+          "ms": 0.0033279999999999746
+        },
+        {
+          "tokens": 2048,
+          "ms": 0.003679999999999836
+        },
+        {
+          "tokens": 4096,
+          "ms": 0.004416000000000167
+        },
+        {
+          "tokens": 8192,
+          "ms": 0.00569600000000014
+        },
+        {
+          "tokens": 16384,
+          "ms": 0.008254999999999882
+        },
+        {
+          "tokens": 32768,
+          "ms": 0.013920000000000073
+        },
+        {
+          "tokens": 65536,
+          "ms": 0.024864000000000032
+        }
+      ]
+    },
+    {
+      "label": "03. other :: void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<int>, std::array<char*, 1ul> >(int, at::native::FillFunctor<int>, std::array<char*, 1ul>)",
+      "category": "other",
+      "order": 3,
+      "kernel": "void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<int>, std::array<char*, 1ul> >(int, at::native::FillFunctor<int>, std::array<char*, 1ul>)",
+      "points": [
+        {
+          "tokens": 16,
+          "ms": 0.0008959999999999581
+        }
+      ]
+    },
+    {
+      "label": "03. other :: void vllm::moe::moe_align_block_size_small_batch_expert_kernel<int, 256>(int const*, int*, int*, int*, int*, int, int, unsigned long, int, int, bool)",
+      "category": "other",
+      "order": 3,
+      "kernel": "void vllm::moe::moe_align_block_size_small_batch_expert_kernel<int, 256>(int const*, int*, int*, int*, int*, int, int, unsigned long, int, int, bool)",
+      "points": [
+        {
+          "tokens": 32,
+          "ms": 0.0075199999999999816
+        },
+        {
+          "tokens": 64,
+          "ms": 0.007711999999999989
+        },
+        {
+          "tokens": 128,
+          "ms": 0.008031000000000062
+        },
+        {
+          "tokens": 256,
+          "ms": 0.00876800000000003
+        },
+        {
+          "tokens": 512,
+          "ms": 0.010048999999999978
+        }
+      ]
+    },
+    {
+      "label": "04. expert_map_build :: count_and_sort_expert_tokens_kernel",
+      "category": "expert_map_build",
+      "order": 4,
+      "kernel": "count_and_sort_expert_tokens_kernel",
+      "points": [
+        {
+          "tokens": 1024,
+          "ms": 0.00169600000000014
+        },
+        {
+          "tokens": 2048,
+          "ms": 0.0023360000000000125
+        },
+        {
+          "tokens": 4096,
+          "ms": 0.0036159999999999855
+        },
+        {
+          "tokens": 8192,
+          "ms": 0.005920000000000073
+        },
+        {
+          "tokens": 16384,
+          "ms": 0.010143000000000029
+        },
+        {
+          "tokens": 32768,
+          "ms": 0.020544000000000097
+        },
+        {
+          "tokens": 65536,
+          "ms": 0.03744
+        }
+      ]
+    },
+    {
+      "label": "04. gemm1_gate_up_activation :: triton::fused_moe_kernel<GEMM1_gate_up_activation>",
+      "category": "gemm1_gate_up_activation",
+      "order": 4,
+      "kernel": "triton::fused_moe_kernel<GEMM1_gate_up_activation>",
+      "points": [
+        {
+          "tokens": 16,
+          "ms": 0.133981
+        },
+        {
+          "tokens": 32,
+          "ms": 0.031135999999999966
+        },
+        {
+          "tokens": 64,
+          "ms": 0.02953600000000006
+        },
+        {
+          "tokens": 128,
+          "ms": 0.04559900000000005
+        },
+        {
+          "tokens": 256,
+          "ms": 0.07814300000000003
+        },
+        {
+          "tokens": 512,
+          "ms": 0.12329700000000003
+        }
+      ]
+    },
+    {
+      "label": "05. activation :: act_and_mul_kernel",
+      "category": "activation",
+      "order": 5,
+      "kernel": "act_and_mul_kernel",
+      "points": [
+        {
+          "tokens": 16,
+          "ms": 0.0015360000000000582
+        },
+        {
+          "tokens": 32,
+          "ms": 0.0015679999999999837
+        },
+        {
+          "tokens": 64,
+          "ms": 0.001599999999999909
+        },
+        {
+          "tokens": 128,
+          "ms": 0.0017590000000000145
+        },
+        {
+          "tokens": 256,
+          "ms": 0.002432000000000016
+        },
+        {
+          "tokens": 512,
+          "ms": 0.00294399999999996
+        }
+      ]
+    },
+    {
+      "label": "05. gemm1_gate_up_activation :: triton::fused_moe_kernel<GEMM1_gate_up_activation>",
+      "category": "gemm1_gate_up_activation",
+      "order": 5,
+      "kernel": "triton::fused_moe_kernel<GEMM1_gate_up_activation>",
+      "points": [
+        {
+          "tokens": 1024,
+          "ms": 0.2184000000000001
+        },
+        {
+          "tokens": 2048,
+          "ms": 0.3653059999999998
+        },
+        {
+          "tokens": 4096,
+          "ms": 0.6556089999999999
+        },
+        {
+          "tokens": 8192,
+          "ms": 1.2223920000000004
+        },
+        {
+          "tokens": 16384,
+          "ms": 2.249847
+        },
+        {
+          "tokens": 32768,
+          "ms": 4.571528
+        },
+        {
+          "tokens": 65536,
+          "ms": 9.006322
+        }
+      ]
+    },
+    {
+      "label": "06. activation :: act_and_mul_kernel",
+      "category": "activation",
+      "order": 6,
+      "kernel": "act_and_mul_kernel",
+      "points": [
+        {
+          "tokens": 1024,
+          "ms": 0.004160000000000082
+        },
+        {
+          "tokens": 2048,
+          "ms": 0.006976000000000113
+        },
+        {
+          "tokens": 4096,
+          "ms": 0.014688000000000102
+        },
+        {
+          "tokens": 8192,
+          "ms": 0.062302999999999886
+        },
+        {
+          "tokens": 16384,
+          "ms": 0.17584000000000014
+        },
+        {
+          "tokens": 32768,
+          "ms": 0.38627000000000045
+        },
+        {
+          "tokens": 65536,
+          "ms": 0.7971830000000009
+        }
+      ]
+    },
+    {
+      "label": "06. gemm2_down :: triton::fused_moe_kernel<GEMM2_down>",
+      "category": "gemm2_down",
+      "order": 6,
+      "kernel": "triton::fused_moe_kernel<GEMM2_down>",
+      "points": [
+        {
+          "tokens": 16,
+          "ms": 0.07177500000000009
+        },
+        {
+          "tokens": 32,
+          "ms": 0.01676800000000003
+        },
+        {
+          "tokens": 64,
+          "ms": 0.02057499999999993
+        },
+        {
+          "tokens": 128,
+          "ms": 0.03731099999999992
+        },
+        {
+          "tokens": 256,
+          "ms": 0.038624000000000026
+        },
+        {
+          "tokens": 512,
+          "ms": 0.06947299999999995
+        }
+      ]
+    },
+    {
+      "label": "07. gemm2_down :: triton::fused_moe_kernel<GEMM2_down>",
+      "category": "gemm2_down",
+      "order": 7,
+      "kernel": "triton::fused_moe_kernel<GEMM2_down>",
+      "points": [
+        {
+          "tokens": 1024,
+          "ms": 0.11491200000000003
+        },
+        {
+          "tokens": 2048,
+          "ms": 0.17705399999999985
+        },
+        {
+          "tokens": 4096,
+          "ms": 0.34726000000000024
+        },
+        {
+          "tokens": 8192,
+          "ms": 0.6259160000000001
+        },
+        {
+          "tokens": 16384,
+          "ms": 1.17561
+        },
+        {
+          "tokens": 32768,
+          "ms": 2.3830590000000003
+        },
+        {
+          "tokens": 65536,
+          "ms": 4.752377
+        }
+      ]
+    },
+    {
+      "label": "07. other :: void at::native::reduce_kernel<128, 4, at::native::ReduceOp<c10::BFloat16, at::native::func_wrapper_t<c10::BFloat16, at::native::sum_functor<c10::BFloat16, float, c10::BFloat16>::o",
+      "category": "other",
+      "order": 7,
+      "kernel": "void at::native::reduce_kernel<128, 4, at::native::ReduceOp<c10::BFloat16, at::native::func_wrapper_t<c10::BFloat16, at::native::sum_functor<c10::BFloat16, float, c10::BFloat16>::o",
+      "points": [
+        {
+          "tokens": 16,
+          "ms": 0.002751999999999953
+        },
+        {
+          "tokens": 32,
+          "ms": 0.0023359999999997853
+        },
+        {
+          "tokens": 64,
+          "ms": 0.0026229999999999335
+        },
+        {
+          "tokens": 128,
+          "ms": 0.00326400000000001
+        },
+        {
+          "tokens": 256,
+          "ms": 0.0050880000000000794
+        },
+        {
+          "tokens": 512,
+          "ms": 0.00758400000000006
+        }
+      ]
+    },
+    {
+      "label": "08. memcpy :: Memcpy DtoD",
+      "category": "memcpy",
+      "order": 8,
+      "kernel": "Memcpy DtoD",
+      "points": [
+        {
+          "tokens": 16,
+          "ms": 0.0009279999999998836
+        },
+        {
+          "tokens": 32,
+          "ms": 0.0009600000000000363
+        },
+        {
+          "tokens": 64,
+          "ms": 0.0010880000000000791
+        },
+        {
+          "tokens": 128,
+          "ms": 0.001120999999999981
+        },
+        {
+          "tokens": 256,
+          "ms": 0.0014080000000000154
+        },
+        {
+          "tokens": 512,
+          "ms": 0.0020799999999999274
+        }
+      ]
+    },
+    {
+      "label": "08. other :: void at::native::reduce_kernel<128, 4, at::native::ReduceOp<c10::BFloat16, at::native::func_wrapper_t<c10::BFloat16, at::native::sum_functor<c10::BFloat16, float, c10::BFloat16>::o",
+      "category": "other",
+      "order": 8,
+      "kernel": "void at::native::reduce_kernel<128, 4, at::native::ReduceOp<c10::BFloat16, at::native::func_wrapper_t<c10::BFloat16, at::native::sum_functor<c10::BFloat16, float, c10::BFloat16>::o",
+      "points": [
+        {
+          "tokens": 1024,
+          "ms": 0.012353000000000065
+        },
+        {
+          "tokens": 2048,
+          "ms": 0.023134999999999992
+        },
+        {
+          "tokens": 4096,
+          "ms": 0.04233500000000004
+        },
+        {
+          "tokens": 8192,
+          "ms": 0.08591900000000033
+        },
+        {
+          "tokens": 16384,
+          "ms": 0.18195100000000003
+        },
+        {
+          "tokens": 32768,
+          "ms": 0.37484599999999957
+        },
+        {
+          "tokens": 65536,
+          "ms": 0.7596779999999999
+        }
+      ]
+    },
+    {
+      "label": "09. memcpy :: Memcpy DtoD",
+      "category": "memcpy",
+      "order": 9,
+      "kernel": "Memcpy DtoD",
+      "points": [
+        {
+          "tokens": 1024,
+          "ms": 0.0034239999999999783
+        },
+        {
+          "tokens": 2048,
+          "ms": 0.006304000000000087
+        },
+        {
+          "tokens": 4096,
+          "ms": 0.011679999999999836
+        },
+        {
+          "tokens": 8192,
+          "ms": 0.03302399999999989
+        },
+        {
+          "tokens": 16384,
+          "ms": 0.16342299999999976
+        },
+        {
+          "tokens": 32768,
+          "ms": 0.3445420000000013
+        },
+        {
+          "tokens": 65536,
+          "ms": 0.7183339999999989
+        }
+      ]
+    }
+  ],
+  "topk1_triton_single_expert_meta": {
+    "16": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 16,
+      "cuda_event_topk1_moe_ms": 0.22717599868774413,
+      "gemm_total_tflops": 5.87083512509963,
+      "end_to_end_tflops": 5.317285096038483
+    },
+    "32": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 32,
+      "cuda_event_topk1_moe_ms": 0.20017600059509277,
+      "gemm_total_tflops": 50.432513026052106,
+      "end_to_end_tflops": 12.068974786277277
+    },
+    "64": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 64,
+      "cuda_event_topk1_moe_ms": 0.19513440132141113,
+      "gemm_total_tflops": 96.42270575322786,
+      "end_to_end_tflops": 24.761590858811967
+    },
+    "128": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 128,
+      "cuda_event_topk1_moe_ms": 0.21622719764709472,
+      "gemm_total_tflops": 116.55622260282239,
+      "end_to_end_tflops": 44.692233544885156
+    },
+    "256": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 256,
+      "cuda_event_topk1_moe_ms": 0.19803839921951294,
+      "gemm_total_tflops": 165.52067649250208,
+      "end_to_end_tflops": 97.59396616096085
+    },
+    "512": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 512,
+      "cuda_event_topk1_moe_ms": 0.25101919174194337,
+      "gemm_total_tflops": 200.52241357057633,
+      "end_to_end_tflops": 153.99103708268814
+    },
+    "1024": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 1024,
+      "cuda_event_topk1_moe_ms": 0.38023838996887205,
+      "gemm_total_tflops": 231.94307834101375,
+      "end_to_end_tflops": 203.31826918983347
+    },
+    "2048": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 2048,
+      "cuda_event_topk1_moe_ms": 0.6169312000274658,
+      "gemm_total_tflops": 285.085225046095,
+      "end_to_end_tflops": 250.6257142597365
+    },
+    "4096": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 4096,
+      "cuda_event_topk1_moe_ms": 1.1077728271484375,
+      "gemm_total_tflops": 308.35298061062815,
+      "end_to_end_tflops": 279.15258231059977
+    },
+    "8192": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 8192,
+      "cuda_event_topk1_moe_ms": 2.082057571411133,
+      "gemm_total_tflops": 334.6170068105531,
+      "end_to_end_tflops": 297.050042763622
+    },
+    "16384": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 16384,
+      "cuda_event_topk1_moe_ms": 4.153696060180664,
+      "gemm_total_tflops": 361.1052718653307,
+      "end_to_end_tflops": 297.79515961844334
+    },
+    "32768": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 32768,
+      "cuda_event_topk1_moe_ms": 8.053749084472656,
+      "gemm_total_tflops": 355.7222251294002,
+      "end_to_end_tflops": 307.1738561194554
+    },
+    "65536": {
+      "layer_id": 15,
+      "expert_id": 0,
+      "top_k": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 3072,
+      "rows_for_expert": 65536,
+      "cuda_event_topk1_moe_ms": 16.100921630859375,
+      "gemm_total_tflops": 359.6126585073196,
+      "end_to_end_tflops": 307.2993235063597
+    }
+  },
+  "topk1_triton_single_expert_throughput_series": [
+    {
+      "label": "TopK=1 Triton MoE GEMM1 gate/up input tokens/s",
+      "category": "gemm1_gate_up_activation",
+      "points": [
+        {
+          "tokens": 16,
+          "tokens_per_s": 119419.91774953167
+        },
+        {
+          "tokens": 32,
+          "tokens_per_s": 1027749.2291880792
+        },
+        {
+          "tokens": 64,
+          "tokens_per_s": 2166847.2372697685
+        },
+        {
+          "tokens": 128,
+          "tokens_per_s": 2807079.1026118966
+        },
+        {
+          "tokens": 256,
+          "tokens_per_s": 3276045.199186106
+        },
+        {
+          "tokens": 512,
+          "tokens_per_s": 4152574.677404964
+        },
+        {
+          "tokens": 1024,
+          "tokens_per_s": 4688644.688644687
+        },
+        {
+          "tokens": 2048,
+          "tokens_per_s": 5606258.862433141
+        },
+        {
+          "tokens": 4096,
+          "tokens_per_s": 6247626.252842777
+        },
+        {
+          "tokens": 8192,
+          "tokens_per_s": 6701614.539362166
+        },
+        {
+          "tokens": 16384,
+          "tokens_per_s": 7282272.972339897
+        },
+        {
+          "tokens": 32768,
+          "tokens_per_s": 7167844.099390839
+        },
+        {
+          "tokens": 65536,
+          "tokens_per_s": 7276666.323944446
+        }
+      ]
+    },
+    {
+      "label": "TopK=1 Triton MoE GEMM2 down input tokens/s",
+      "category": "gemm2_down",
+      "points": [
+        {
+          "tokens": 16,
+          "tokens_per_s": 222918.8436084985
+        },
+        {
+          "tokens": 32,
+          "tokens_per_s": 1908396.9465648823
+        },
+        {
+          "tokens": 64,
+          "tokens_per_s": 3110571.0814094883
+        },
+        {
+          "tokens": 128,
+          "tokens_per_s": 3430623.6766637256
+        },
+        {
+          "tokens": 256,
+          "tokens_per_s": 6628003.314001652
+        },
+        {
+          "tokens": 512,
+          "tokens_per_s": 7369769.550760732
+        },
+        {
+          "tokens": 1024,
+          "tokens_per_s": 8911166.805903645
+        },
+        {
+          "tokens": 2048,
+          "tokens_per_s": 11567092.525444224
+        },
+        {
+          "tokens": 4096,
+          "tokens_per_s": 11795196.682600925
+        },
+        {
+          "tokens": 8192,
+          "tokens_per_s": 13088018.200525306
+        },
+        {
+          "tokens": 16384,
+          "tokens_per_s": 13936594.61896377
+        },
+        {
+          "tokens": 32768,
+          "tokens_per_s": 13750393.926461743
+        },
+        {
+          "tokens": 65536,
+          "tokens_per_s": 13790151.749324601
+        }
+      ]
+    },
+    {
+      "label": "TopK=1 Triton MoE end-to-end input tokens/s",
+      "category": "topk1_triton_total",
+      "points": [
+        {
+          "tokens": 16,
+          "tokens_per_s": 70429.97540418948
+        },
+        {
+          "tokens": 32,
+          "tokens_per_s": 159859.32331982293
+        },
+        {
+          "tokens": 64,
+          "tokens_per_s": 327979.0727140104
+        },
+        {
+          "tokens": 128,
+          "tokens_per_s": 591969.9343692615
+        },
+        {
+          "tokens": 256,
+          "tokens_per_s": 1292678.5967212366
+        },
+        {
+          "tokens": 512,
+          "tokens_per_s": 2039684.680868362
+        },
+        {
+          "tokens": 1024,
+          "tokens_per_s": 2693047.380312727
+        },
+        {
+          "tokens": 2048,
+          "tokens_per_s": 3319657.037784477
+        },
+        {
+          "tokens": 4096,
+          "tokens_per_s": 3697509.001501398
+        },
+        {
+          "tokens": 8192,
+          "tokens_per_s": 3934569.395431174
+        },
+        {
+          "tokens": 16384,
+          "tokens_per_s": 3944438.8233084586
+        },
+        {
+          "tokens": 32768,
+          "tokens_per_s": 4068664.128508243
+        },
+        {
+          "tokens": 65536,
+          "tokens_per_s": 4070326.0038476484
+        }
+      ]
+    }
+  ]
 }
