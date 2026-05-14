@@ -86,10 +86,10 @@ vllm_omni/uad/
   request.py          # UADRequestState / UADPhase / UADToken
   scheduler.py        # UADSchedulerOutput / UADToyScheduler.update_from_output()
   runner.py           # UADRunner.execute_model()
-  state_machine.py    # UADModelStateMachine protocol
   outputs.py          # UADRunnerOutput / UADModelOutput / UADStepOutput
   engine.py           # UADEngine shell
-  omni/
+  state/
+    base.py           # UADModelStateMachine base class
     hunyuan_image3.py # HunyuanImage3 state machine and token rules
   model/
     hunyuan_image3.py # HunyuanImage3UADModel toy unified model shell

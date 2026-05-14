@@ -241,6 +241,10 @@ class UADModelStateMachine:
     ) -> UADModelOutput: ...
 ```
 
+通用基类在 `vllm_omni/uad/state/base.py`。具体模型只继承该基类并实现
+`update_request_state()`；HunyuanImage3 的实现位于
+`vllm_omni/uad/state/hunyuan_image3.py`。
+
 HunyuanImage3 state machine 当前负责：
 
 - 识别 `<img_ratio_*>`。

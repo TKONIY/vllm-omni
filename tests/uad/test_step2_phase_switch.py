@@ -4,8 +4,9 @@ import pytest
 
 from vllm_omni.uad.engine import UADEngine
 from vllm_omni.uad.model.hunyuan_image3 import HunyuanImage3UADForConditionalGeneration
-from vllm_omni.uad.omni.hunyuan_image3 import HunyuanImage3UADStateConfig, HunyuanImage3UADStateMachine
 from vllm_omni.uad.runner import UADRunner
+from vllm_omni.uad.state.base import UADModelStateMachine
+from vllm_omni.uad.state.hunyuan_image3 import HunyuanImage3UADStateConfig, HunyuanImage3UADStateMachine
 
 pytestmark = pytest.mark.cpu
 
@@ -14,6 +15,10 @@ def _build_engine(state_config: HunyuanImage3UADStateConfig) -> UADEngine:
     model = HunyuanImage3UADForConditionalGeneration(vocab_size=300)
     state_machine = HunyuanImage3UADStateMachine(config=state_config)
     return UADEngine(runner=UADRunner(model=model), state_machine=state_machine)
+
+
+def test_step2_hunyuan_state_machine_inherits_uad_base_class() -> None:
+    assert isinstance(HunyuanImage3UADStateMachine(), UADModelStateMachine)
 
 
 def test_step2_ratio_token_switches_request_to_dit_phase() -> None:

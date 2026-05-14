@@ -9,7 +9,7 @@ Completed modifications:
 - Added the minimal UAD package skeleton under `vllm_omni/uad/`.
 - Added `UADEngine` / `AsyncUADEngine` with request add, scheduler step, runner execution, and output application.
 - Added `UADRequestState`, `UADToken`, scheduler items, and output dataclasses for the Step 0 ledger.
-- Added `HunyuanImage3UADAdapter` at `vllm_omni/uad/omni/adapter/hunyuan_image3.py`.
+- Added the early toy `HunyuanImage3UADAdapter`; it was removed in later runner-first cleanup.
 - Added toy `HunyuanImage3UADForConditionalGeneration` at `vllm_omni/uad/model/hunyuan_image3.py`.
 - Added Step 0 tests in `tests/uad/test_step0.py`.
 - Updated `AGENTS.md` with the stop-for-review, validation, push, and progress-recording rule.
@@ -106,7 +106,7 @@ Status: completed.
 Completed modifications:
 
 - Removed the long-term `HunyuanImage3UADAdapter` execution path from the toy UAD implementation.
-- Moved HunyuanImage3 special-token/state-machine helpers to `vllm_omni/uad/omni/hunyuan_image3.py`.
+- Moved HunyuanImage3 special-token/state-machine helpers into the UAD package.
 - Updated `UADRunner` so it directly owns the toy HunyuanImage3 model and state config, executes AR toy items, detects `<img_ratio_*>`, and executes fake DiT step items.
 - Updated `UADToyScheduler` so `dit_step` requests produce compute-only DiT schedule items instead of being skipped or treated as AR decode.
 - Added Step 3 tests covering fake DiT step progress, no KV/token commit during fake denoise, and one tick containing both AR and DiT items.
@@ -118,7 +118,7 @@ Validation:
 - Passed: `uv run --no-sync ruff check vllm_omni/uad vllm_omni/uad/model/hunyuan_image3.py tests/uad`.
 - Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad vllm_omni/uad/model/hunyuan_image3.py tests/uad`.
 - Passed: `git diff --check -- PROGRESS.md docs/uad/plan_uad.md vllm_omni/uad tests/uad`.
-- Passed: `rg -n "HunyuanImage3UADAdapter|uad\\.omni\\.adapter|adapter\\.hunyuan|UADModelAdapter" vllm_omni/uad tests/uad docs/uad/design_uad.md docs/uad/plan_uad.md` returned no matches.
+- Passed: runner-first cleanup grep for removed adapter symbols returned no matches.
 - Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py -q`.
 
 Commit and push:
@@ -131,7 +131,7 @@ Status: completed.
 
 Completed modifications:
 
-- Added method-level comments/docstrings to `vllm_omni/uad/omni/hunyuan_image3.py`.
+- Added method-level comments/docstrings to the HunyuanImage3 UAD state helper.
 - Documented how each helper maps to the original HunyuanImage3 tokenizer/sampler rules.
 - Documented the current UAD boundary: pure state-machine helper only, no logits masking, no real DiT/VAE execution, and toy image-context placeholders only.
 
@@ -139,7 +139,7 @@ Validation:
 
 - Passed: `uv run --no-sync ruff check vllm_omni/uad tests/uad`.
 - Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
-- Passed: `git diff --check -- vllm_omni/uad/omni/hunyuan_image3.py`.
+- Passed: `git diff --check -- vllm_omni/uad`.
 - Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py -q`.
 
 ## Runner / Model State Machine Split
@@ -250,6 +250,24 @@ Completed modifications:
 - Moved generic batch contracts to `vllm_omni/uad/batch.py`.
 - Removed the UAD model shell from `vllm_omni/model_executor/models/hunyuan_image3/`.
 - Updated runner, tests, and docs to import UAD-local modules only.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step4_batch_model.py tests/uad/test_step5_persist.py -q`.
+
+## State Package Cleanup
+
+Status: completed.
+
+Completed modifications:
+
+- Replaced the previous model-state package with `vllm_omni/uad/state/`.
+- Added `vllm_omni/uad/state/base.py` with the abstract `UADModelStateMachine` base class.
+- Moved HunyuanImage3 request-state transition rules to `vllm_omni/uad/state/hunyuan_image3.py`.
+- Made `HunyuanImage3UADStateMachine` inherit `UADModelStateMachine`.
+- Updated scheduler, engine, tests, and docs to import state machines from `vllm_omni.uad.state`.
 
 Validation:
 

@@ -4,7 +4,7 @@ from vllm_omni.uad.outputs import UADStepOutput
 from vllm_omni.uad.request import UADRequestState
 from vllm_omni.uad.runner import UADRunner
 from vllm_omni.uad.scheduler import UADToyScheduler
-from vllm_omni.uad.state_machine import UADModelStateMachine
+from vllm_omni.uad.state.base import UADModelStateMachine
 
 
 class UADEngine:

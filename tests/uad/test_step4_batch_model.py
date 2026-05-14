@@ -4,8 +4,8 @@ import pytest
 
 from vllm_omni.uad.engine import UADEngine
 from vllm_omni.uad.model.hunyuan_image3 import HunyuanImage3UADModel
-from vllm_omni.uad.omni.hunyuan_image3 import HunyuanImage3UADStateConfig, HunyuanImage3UADStateMachine
 from vllm_omni.uad.runner import UADRunner
+from vllm_omni.uad.state.hunyuan_image3 import HunyuanImage3UADStateConfig, HunyuanImage3UADStateMachine
 
 pytestmark = pytest.mark.cpu
 

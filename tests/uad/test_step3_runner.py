@@ -4,10 +4,11 @@ import pytest
 
 from vllm_omni.uad.engine import UADEngine
 from vllm_omni.uad.model.hunyuan_image3 import HunyuanImage3UADForConditionalGeneration
-from vllm_omni.uad.omni.hunyuan_image3 import HunyuanImage3UADStateConfig, HunyuanImage3UADStateMachine
 from vllm_omni.uad.outputs import UADModelOutput, UADRunnerOutput
 from vllm_omni.uad.request import UADRequestState
 from vllm_omni.uad.runner import UADRunner
+from vllm_omni.uad.state.base import UADModelStateMachine
+from vllm_omni.uad.state.hunyuan_image3 import HunyuanImage3UADStateConfig, HunyuanImage3UADStateMachine
 
 pytestmark = pytest.mark.cpu
 
@@ -26,7 +27,7 @@ def _build_engine() -> UADEngine:
     return UADEngine(runner=UADRunner(model=model), state_machine=state_machine)
 
 
-class RecordingStateMachine:
+class RecordingStateMachine(UADModelStateMachine):
     def __init__(self) -> None:
         self.sampled_tokens: list[int] = []
 

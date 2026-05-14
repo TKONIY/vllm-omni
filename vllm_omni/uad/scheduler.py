@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from vllm_omni.uad.omni.hunyuan_image3 import HunyuanImage3UADStateMachine
 from vllm_omni.uad.outputs import UADModelOutput, UADRunnerOutput, UADRunnerStepOutput, UADStepOutput
 from vllm_omni.uad.request import UADPhase, UADRequestState
-from vllm_omni.uad.state_machine import UADModelStateMachine
+from vllm_omni.uad.state.base import UADModelStateMachine
+from vllm_omni.uad.state.hunyuan_image3 import HunyuanImage3UADStateMachine
 
 
 @dataclass(frozen=True)

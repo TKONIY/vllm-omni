@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from vllm_omni.uad.outputs import UADModelOutput, UADRunnerOutput
 from vllm_omni.uad.request import UADPhaseUpdate, UADRequestState, UADToken
+from vllm_omni.uad.state.base import UADModelStateMachine
 
 
 @dataclass(frozen=True)
@@ -198,7 +199,7 @@ class HunyuanImage3UADStateConfig:
 
 
 @dataclass
-class HunyuanImage3UADStateMachine:
+class HunyuanImage3UADStateMachine(UADModelStateMachine):
     """HunyuanImage3-specific UAD phase and output-ledger policy.
 
     `UADRunner` should not know that HunyuanImage3 uses `<img_ratio_*>` as
