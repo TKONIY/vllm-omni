@@ -64,8 +64,6 @@ class UADRunner:
             token_end = len(token_ids)
 
             input_kind = "token_ids" if item.phase in ("ar_prefill", "ar_decode") else "latent_timestep"
-            uses_prefix_attention = True
-            uses_chunk_bidirectional_attention = item.phase == "dit_step"
             batch_items.append(
                 UADBatchItem(
                     request_id=item.request_id,
@@ -77,8 +75,6 @@ class UADRunner:
                     num_computed_tokens=item.num_computed_tokens,
                     persist=item.persist,
                     input_kind=input_kind,
-                    uses_prefix_attention=uses_prefix_attention,
-                    uses_chunk_bidirectional_attention=uses_chunk_bidirectional_attention,
                     dit_step_index=item.dit_step_index,
                     total_dit_steps=item.total_dit_steps,
                 )
