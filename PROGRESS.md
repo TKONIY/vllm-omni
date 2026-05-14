@@ -291,6 +291,26 @@ Validation:
 - Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad/batch.py tests/uad`.
 - Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step4_batch_model.py tests/uad/test_step5_persist.py -q`.
 
+## Batch Attention Plan Cleanup
+
+Status: completed.
+
+Completed modifications:
+
+- Replaced the single-value attention selector with independent `uses_prefix_attention`
+  and `uses_chunk_bidirectional_attention` flags.
+- Made DiT items express both required attention paths: paged prefix attention
+  plus chunk-local bidirectional attention.
+- Renamed batch attention counters from causal/bidirectional to
+  prefix/chunk-bidirectional.
+- Updated Step 4 tests and design docs to state that DiT attention paths are merged later with LSE.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step4_batch_model.py tests/uad/test_step5_persist.py -q`.
+
 ## Plan Future Steps Detail
 
 Status: completed.

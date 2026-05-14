@@ -54,8 +54,8 @@ class HunyuanImage3UADModel(nn.Module):
             num_ffn_tokens=batch_inputs.num_ffn_tokens,
             num_ar_tokens=batch_inputs.num_ar_tokens,
             num_dit_tokens=batch_inputs.num_dit_tokens,
-            num_causal_attention_tokens=batch_inputs.num_causal_attention_tokens,
-            num_bidirectional_attention_tokens=batch_inputs.num_bidirectional_attention_tokens,
+            num_prefix_attention_tokens=batch_inputs.num_prefix_attention_tokens,
+            num_chunk_bidirectional_attention_tokens=batch_inputs.num_chunk_bidirectional_attention_tokens,
         )
         self.last_batch_outputs = batch_outputs
         return batch_outputs

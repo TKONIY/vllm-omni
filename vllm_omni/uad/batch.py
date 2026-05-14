@@ -8,7 +8,6 @@ import torch
 from vllm_omni.uad.request import UADPhase
 
 UADInputKind = Literal["token_ids", "latent_timestep"]
-UADAttentionKind = Literal["causal_paged", "dit_chunk_bidirectional"]
 
 
 @dataclass(frozen=True)
@@ -30,7 +29,13 @@ class UADBatchItem:
             and advance request `num_computed_tokens`.
         input_kind: Input recipe for this item. AR uses token IDs; DiT uses
             latent/timestep slots.
-        attention_kind: Attention recipe needed by this item.
+        uses_prefix_attention: Whether the item reads the persisted prefix
+            through paged attention. AR uses causal paged self-attention; DiT
+            uses read-only prefix paged attention with causal disabled.
+        uses_chunk_bidirectional_attention: Whether the item also needs a
+            chunk-local bidirectional attention path. DiT denoise items set
+            this in addition to `uses_prefix_attention`; the two attention
+            results are later merged with LSE.
         dit_step_index: Current DiT denoise step for DiT items.
         total_dit_steps: Total denoise steps for DiT items.
     """
@@ -44,7 +49,8 @@ class UADBatchItem:
     num_computed_tokens: int
     persist: bool
     input_kind: UADInputKind
-    attention_kind: UADAttentionKind
+    uses_prefix_attention: bool
+    uses_chunk_bidirectional_attention: bool
     dit_step_index: int | None = None
     total_dit_steps: int | None = None
 
@@ -88,30 +94,37 @@ class UADBatchInputs:
         return int(self.token_item_indices.numel())
 
     @property
-    def causal_attention_item_indices(self) -> tuple[int, ...]:
-        """Item indices participating in the base causal prefix attention path."""
-        return tuple(range(len(self.items)))
-
-    @property
-    def bidirectional_attention_item_indices(self) -> tuple[int, ...]:
-        """Item indices requiring extra DiT chunk-local bidirectional attention."""
+    def prefix_attention_item_indices(self) -> tuple[int, ...]:
+        """Item indices participating in paged prefix attention."""
         return tuple(
             index
             for index, item in enumerate(self.items)
-            if item.attention_kind == "dit_chunk_bidirectional"
+            if item.uses_prefix_attention
         )
 
     @property
-    def num_causal_attention_tokens(self) -> int:
-        """Flattened token count covered by the base causal attention path."""
-        return self.num_ffn_tokens
+    def chunk_bidirectional_attention_item_indices(self) -> tuple[int, ...]:
+        """Item indices requiring DiT chunk-local bidirectional attention."""
+        return tuple(
+            index
+            for index, item in enumerate(self.items)
+            if item.uses_chunk_bidirectional_attention
+        )
 
     @property
-    def num_bidirectional_attention_tokens(self) -> int:
+    def num_prefix_attention_tokens(self) -> int:
+        """Flattened token count covered by paged prefix attention."""
+        return sum(
+            self.items[index].num_tokens
+            for index in self.prefix_attention_item_indices
+        )
+
+    @property
+    def num_chunk_bidirectional_attention_tokens(self) -> int:
         """Flattened token count covered by DiT chunk-local bidirectional work."""
         return sum(
             self.items[index].num_tokens
-            for index in self.bidirectional_attention_item_indices
+            for index in self.chunk_bidirectional_attention_item_indices
         )
 
 
@@ -143,14 +156,15 @@ class UADBatchOutputs:
         num_ffn_tokens: Total token slots exposed to shared FFN/MoE work.
         num_ar_tokens: Token slots using AR token-id inputs.
         num_dit_tokens: Token slots using DiT latent/timestep inputs.
-        num_causal_attention_tokens: Token slots covered by causal attention.
-        num_bidirectional_attention_tokens: Token slots covered by DiT
-            chunk-local bidirectional attention.
+        num_prefix_attention_tokens: Token slots covered by paged prefix
+            attention.
+        num_chunk_bidirectional_attention_tokens: Token slots covered by DiT
+            chunk-local bidirectional attention before LSE merge.
     """
 
     item_outputs: tuple[UADBatchItemOutput, ...]
     num_ffn_tokens: int
     num_ar_tokens: int
     num_dit_tokens: int
-    num_causal_attention_tokens: int
-    num_bidirectional_attention_tokens: int
+    num_prefix_attention_tokens: int
+    num_chunk_bidirectional_attention_tokens: int

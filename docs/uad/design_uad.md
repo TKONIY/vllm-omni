@@ -195,7 +195,8 @@ class UADBatchItem:
     num_computed_tokens: int
     persist: bool
     input_kind: Literal["token_ids", "latent_timestep"]
-    attention_kind: Literal["causal_paged", "dit_chunk_bidirectional"]
+    uses_prefix_attention: bool
+    uses_chunk_bidirectional_attention: bool
     dit_step_index: int | None
     total_dit_steps: int | None
 
@@ -210,6 +211,11 @@ class UADBatchInputs:
 AR item 的 `input_token_ids` 是真实 token id；DiT item 当前用 fake latent slots
 占位，真实实现会替换成 latent/timestep recipe。`output_index` 是 runner scatter
 回 scheduler item 顺序的唯一依据。这些通用 batch dataclass 不放在任何具体模型文件里。
+
+`uses_prefix_attention` 和 `uses_chunk_bidirectional_attention` 不是互斥枚举。DiT
+denoise item 两者都为 `True`：先对已持久化 prefix 做 paged attention
+（读取 prefix，`causal=False`），再对当前 DiT chunk 做 bidirectional attention，
+两路结果后续用 LSE merge。AR item 只需要 prefix/base paged attention。
 
 ### HunyuanImage3UADModel
 

@@ -48,7 +48,7 @@ def test_step4_runner_calls_hunyuan_uad_model_once_for_mixed_tick() -> None:
     assert [token.token_id for token in ar_request.materialized_tokens] == [11]
 
 
-def test_step4_batch_metadata_exposes_causal_and_dit_attention_work() -> None:
+def test_step4_batch_metadata_exposes_prefix_and_dit_chunk_attention_work() -> None:
     engine, runner, _ = _build_engine()
     dit_request = engine.add_request("req-dit", [49])
     engine.step()
@@ -58,12 +58,16 @@ def test_step4_batch_metadata_exposes_causal_and_dit_attention_work() -> None:
     batch_inputs = runner.last_batch_inputs
 
     assert batch_inputs is not None
-    assert batch_inputs.causal_attention_item_indices == (0, 1)
-    assert batch_inputs.bidirectional_attention_item_indices == (0,)
-    assert batch_inputs.num_causal_attention_tokens == batch_inputs.num_ffn_tokens
-    assert batch_inputs.num_bidirectional_attention_tokens == dit_request.image_context_token_count
+    assert batch_inputs.prefix_attention_item_indices == (0, 1)
+    assert batch_inputs.chunk_bidirectional_attention_item_indices == (0,)
+    assert batch_inputs.num_prefix_attention_tokens == batch_inputs.num_ffn_tokens
+    assert batch_inputs.num_chunk_bidirectional_attention_tokens == dit_request.image_context_token_count
     assert batch_inputs.items[0].input_kind == "latent_timestep"
+    assert batch_inputs.items[0].uses_prefix_attention is True
+    assert batch_inputs.items[0].uses_chunk_bidirectional_attention is True
     assert batch_inputs.items[1].input_kind == "token_ids"
+    assert batch_inputs.items[1].uses_prefix_attention is True
+    assert batch_inputs.items[1].uses_chunk_bidirectional_attention is False
     assert batch_inputs.items[0].dit_step_index == 0
     assert batch_inputs.items[0].total_dit_steps == 2
     assert batch_inputs.token_positions.tolist() == [1, 2, 3, 4, 0, 1]
