@@ -1,0 +1,70 @@
+INFO 05-14 01:13:32 [nixl_utils.py:20] Setting UCX_RCACHE_MAX_UNRELEASED to '1024' to avoid a rare memory leak in UCX when using NIXL.
+WARNING 05-14 01:13:32 [nixl_utils.py:34] NIXL is not available
+WARNING 05-14 01:13:32 [nixl_utils.py:44] NIXL agent config is not available
+INFO 05-14 01:13:32 [nixl_utils.py:20] Setting UCX_RCACHE_MAX_UNRELEASED to '1024' to avoid a rare memory leak in UCX when using NIXL.
+WARNING 05-14 01:13:32 [nixl_utils.py:34] NIXL is not available
+WARNING 05-14 01:13:32 [nixl_utils.py:44] NIXL agent config is not available
+INFO 05-14 01:13:32 [parallel.py:732] Using external launcher for distributed inference.
+INFO 05-14 01:13:32 [parallel.py:792] Disabling V1 multiprocessing for external launcher.
+INFO 05-14 01:13:32 [parallel.py:732] Using external launcher for distributed inference.
+INFO 05-14 01:13:32 [parallel.py:792] Disabling V1 multiprocessing for external launcher.
+INFO 05-14 01:13:32 [scheduler.py:239] Chunked prefill is enabled with max_num_batched_tokens=65536.
+INFO 05-14 01:13:32 [vllm.py:840] Asynchronous scheduling is enabled.
+INFO 05-14 01:13:32 [kernel.py:205] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'])
+INFO 05-14 01:13:33 [parallel_state.py:1402] world_size=2 rank=0 local_rank=0 distributed_init_method=env:// backend=nccl
+INFO 05-14 01:13:33 [scheduler.py:239] Chunked prefill is enabled with max_num_batched_tokens=65536.
+INFO 05-14 01:13:33 [vllm.py:840] Asynchronous scheduling is enabled.
+INFO 05-14 01:13:33 [kernel.py:205] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'])
+INFO 05-14 01:13:33 [parallel_state.py:1402] world_size=2 rank=1 local_rank=1 distributed_init_method=env:// backend=nccl
+INFO 05-14 01:13:33 [pynccl.py:111] vLLM is using nccl==2.28.9
+WARNING 05-14 01:13:34 [symm_mem.py:66] SymmMemCommunicator: Device capability 12.0 not supported, communicator is not available.
+WARNING 05-14 01:13:34 [symm_mem.py:66] SymmMemCommunicator: Device capability 12.0 not supported, communicator is not available.
+INFO 05-14 01:13:34 [parallel_state.py:1715] rank 0 in world size 2 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, EP rank 0, EPLB rank N/A
+INFO 05-14 01:13:34 [layer.py:408] [EP Rank 0/2] Expert parallelism is enabled. Expert placement strategy: linear. Local/global number of experts: 32/64. Experts local to global index map: 0->0, 1->1, 2->2, 3->3, 4->4, 5->5, 6->6, 7->7, 8->8, 9->9, 10->10, 11->11, 12->12, 13->13, 14->14, 15->15, 16->16, 17->17, 18->18, 19->19, 20->20, 21->21, 22->22, 23->23, 24->24, 25->25, 26->26, 27->27, 28->28, 29->29, 30->30, 31->31.
+INFO 05-14 01:13:34 [unquantized.py:213] Using TRITON Unquantized MoE backend out of potential backends: ['FlashInfer TRTLLM', 'FlashInfer CUTLASS', 'TRITON', 'BATCHED_TRITON'].
+INFO 05-14 01:13:34 [unquantized.py:343] Using MoEPrepareAndFinalizeNoDPEPModular
+WARNING 05-14 01:13:34 [fused_moe.py:1091] Using default MoE config. Performance might be sub-optimal! Config file not found at /mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/configs/E=32,N=3072,device_name=NVIDIA_RTX_PRO_6000_Blackwell_Server_Edition.json
+mode=topk8_balanced backend=triton tokens=    16 event_max=1.6882ms
+mode=topk8_balanced backend=triton tokens=    32 event_max=1.6815ms
+mode=topk8_balanced backend=triton tokens=    64 event_max=1.7047ms
+mode=topk8_balanced backend=triton tokens=   128 event_max=1.7897ms
+mode=topk8_balanced backend=triton tokens=   256 event_max=1.8849ms
+mode=topk8_balanced backend=triton tokens=   512 event_max=2.0475ms
+mode=topk8_balanced backend=triton tokens=  1024 event_max=2.3937ms
+mode=topk8_balanced backend=triton tokens=  2048 event_max=3.1969ms
+mode=topk8_balanced backend=triton tokens=  4096 event_max=5.8939ms
+mode=topk8_balanced backend=triton tokens=  8192 event_max=11.6979ms
+mode=topk8_balanced backend=triton tokens= 16384 event_max=23.3060ms
+mode=topk8_balanced backend=triton tokens= 32768 event_max=46.3616ms
+mode=topk8_balanced backend=triton tokens= 65536 event_max=92.4553ms
+Wrote artifacts/uad_ep2_profile/full_20260514T011240Z/topk8_balanced_triton.json
+
+
+*****************************************
+Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+*****************************************
+
+Fetching 86 files:   0%|          | 0/86 [00:00<?, ?it/s]
+Fetching 86 files: 100%|██████████| 86/86 [00:00<00:00, 15479.13it/s]
+
+Fetching 86 files:   0%|          | 0/86 [00:00<?, ?it/s]
+Fetching 86 files: 100%|██████████| 86/86 [00:00<00:00, 13755.49it/s]
+/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  return func(*args, **kwargs)
+[rank0]:[W514 01:13:35.900996230 ProcessGroupNCCL.cpp:5188] Guessing device ID based on global rank. This can cause a hang if rank to GPU mapping is heterogeneous. You can specify device_id in init_process_group()
+/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/torch/profiler/profiler.py:224: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/torch/profiler/profiler.py:224: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  return func(*args, **kwargs)
+/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  return func(*args, **kwargs)
+/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  return func(*args, **kwargs)
+/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  return func(*args, **kwargs)
+/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+  return func(*args, **kwargs)
+/usr/lib/python3.12/multiprocessing/resource_tracker.py:254: UserWarning: resource_tracker: There appear to be 1 leaked shared_memory objects to clean up at shutdown
+  warnings.warn('resource_tracker: There appear to be %d '

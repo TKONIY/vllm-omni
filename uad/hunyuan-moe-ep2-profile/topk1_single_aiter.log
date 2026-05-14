@@ -1,0 +1,126 @@
+INFO 05-14 01:16:30 [nixl_utils.py:20] Setting UCX_RCACHE_MAX_UNRELEASED to '1024' to avoid a rare memory leak in UCX when using NIXL.
+WARNING 05-14 01:16:30 [nixl_utils.py:34] NIXL is not available
+WARNING 05-14 01:16:30 [nixl_utils.py:44] NIXL agent config is not available
+INFO 05-14 01:16:30 [nixl_utils.py:20] Setting UCX_RCACHE_MAX_UNRELEASED to '1024' to avoid a rare memory leak in UCX when using NIXL.
+WARNING 05-14 01:16:30 [nixl_utils.py:34] NIXL is not available
+WARNING 05-14 01:16:30 [nixl_utils.py:44] NIXL agent config is not available
+INFO 05-14 01:16:30 [parallel.py:732] Using external launcher for distributed inference.
+INFO 05-14 01:16:30 [parallel.py:792] Disabling V1 multiprocessing for external launcher.
+INFO 05-14 01:16:30 [parallel.py:732] Using external launcher for distributed inference.
+INFO 05-14 01:16:30 [parallel.py:792] Disabling V1 multiprocessing for external launcher.
+INFO 05-14 01:16:31 [scheduler.py:239] Chunked prefill is enabled with max_num_batched_tokens=65536.
+INFO 05-14 01:16:31 [vllm.py:840] Asynchronous scheduling is enabled.
+INFO 05-14 01:16:31 [kernel.py:205] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'])
+INFO 05-14 01:16:31 [scheduler.py:239] Chunked prefill is enabled with max_num_batched_tokens=65536.
+INFO 05-14 01:16:31 [vllm.py:840] Asynchronous scheduling is enabled.
+INFO 05-14 01:16:31 [kernel.py:205] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'])
+INFO 05-14 01:16:31 [parallel_state.py:1402] world_size=2 rank=1 local_rank=1 distributed_init_method=env:// backend=nccl
+INFO 05-14 01:16:31 [parallel_state.py:1402] world_size=2 rank=0 local_rank=0 distributed_init_method=env:// backend=nccl
+INFO 05-14 01:16:31 [pynccl.py:111] vLLM is using nccl==2.28.9
+WARNING 05-14 01:16:32 [symm_mem.py:66] SymmMemCommunicator: Device capability 12.0 not supported, communicator is not available.
+WARNING 05-14 01:16:32 [symm_mem.py:66] SymmMemCommunicator: Device capability 12.0 not supported, communicator is not available.
+INFO 05-14 01:16:32 [parallel_state.py:1715] rank 0 in world size 2 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, EP rank 0, EPLB rank N/A
+INFO 05-14 01:16:32 [layer.py:408] [EP Rank 0/2] Expert parallelism is enabled. Expert placement strategy: linear. Local/global number of experts: 32/64. Experts local to global index map: 0->0, 1->1, 2->2, 3->3, 4->4, 5->5, 6->6, 7->7, 8->8, 9->9, 10->10, 11->11, 12->12, 13->13, 14->14, 15->15, 16->16, 17->17, 18->18, 19->19, 20->20, 21->21, 22->22, 23->23, 24->24, 25->25, 26->26, 27->27, 28->28, 29->29, 30->30, 31->31.
+
+
+*****************************************
+Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+*****************************************
+
+Fetching 86 files:   0%|          | 0/86 [00:00<?, ?it/s]
+Fetching 86 files: 100%|██████████| 86/86 [00:00<00:00, 15625.98it/s]
+
+Fetching 86 files:   0%|          | 0/86 [00:00<?, ?it/s]
+Fetching 86 files: 100%|██████████| 86/86 [00:00<00:00, 16149.27it/s]
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/docs/uad/script/profile_hunyuan_moe_ep2_case.py", line 390, in <module>
+[rank0]:     main()
+[rank0]:   File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/docs/uad/script/profile_hunyuan_moe_ep2_case.py", line 260, in main
+[rank0]:     moe = create_ep_fused_moe(
+[rank0]:           ^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/docs/uad/script/profile_hunyuan_moe_ep2_case.py", line 124, in create_ep_fused_moe
+[rank0]:     moe = FusedMoE(
+[rank0]:           ^^^^^^^^^
+[rank0]:   File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/layer.py", line 539, in __init__
+[rank0]:     self.quant_method: FusedMoEMethodBase = _get_quant_method()
+[rank0]:                                             ^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/layer.py", line 533, in _get_quant_method
+[rank0]:     quant_method = UnquantizedFusedMoEMethod(self.moe_config)
+[rank0]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/unquantized_fused_moe_method.py", line 48, in __init__
+[rank0]:     self.unquantized_backend, self.experts_cls = select_unquantized_moe_backend(
+[rank0]:                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py", line 226, in select_unquantized_moe_backend
+[rank0]:     return _return_or_raise(requested_backend, moe_config, activation_format)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py", line 215, in _return_or_raise
+[rank0]:     raise ValueError(_make_log_unsupported(backend, reason))
+[rank0]: ValueError: Unquantized MoE backend ROCm AITER does not support the deployment configuration since kernel does not support current device cuda.
+[rank1]: Traceback (most recent call last):
+[rank1]:   File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/docs/uad/script/profile_hunyuan_moe_ep2_case.py", line 390, in <module>
+[rank1]:     main()
+[rank1]:   File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/docs/uad/script/profile_hunyuan_moe_ep2_case.py", line 260, in main
+[rank1]:     moe = create_ep_fused_moe(
+[rank1]:           ^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/docs/uad/script/profile_hunyuan_moe_ep2_case.py", line 124, in create_ep_fused_moe
+[rank1]:     moe = FusedMoE(
+[rank1]:           ^^^^^^^^^
+[rank1]:   File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/layer.py", line 539, in __init__
+[rank1]:     self.quant_method: FusedMoEMethodBase = _get_quant_method()
+[rank1]:                                             ^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/layer.py", line 533, in _get_quant_method
+[rank1]:     quant_method = UnquantizedFusedMoEMethod(self.moe_config)
+[rank1]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/unquantized_fused_moe_method.py", line 48, in __init__
+[rank1]:     self.unquantized_backend, self.experts_cls = select_unquantized_moe_backend(
+[rank1]:                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py", line 226, in select_unquantized_moe_backend
+[rank1]:     return _return_or_raise(requested_backend, moe_config, activation_format)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/oracle/unquantized.py", line 215, in _return_or_raise
+[rank1]:     raise ValueError(_make_log_unsupported(backend, reason))
+[rank1]: ValueError: Unquantized MoE backend ROCm AITER does not support the deployment configuration since kernel does not support current device cuda.
+[rank0]:[W514 01:16:32.744234021 ProcessGroupNCCL.cpp:1575] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
+/usr/lib/python3.12/multiprocessing/resource_tracker.py:254: UserWarning: resource_tracker: There appear to be 1 leaked shared_memory objects to clean up at shutdown
+  warnings.warn('resource_tracker: There appear to be %d '
+W0514 01:16:33.748000 2027813 .venv/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/api.py:1012] Sending process 2027997 closing signal SIGTERM
+E0514 01:16:33.813000 2027813 .venv/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/api.py:986] failed (exitcode: 1) local_rank: 0 (pid: 2027996) of binary: /mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/bin/python
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/torch/distributed/run.py", line 994, in <module>
+    main()
+  File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 362, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/torch/distributed/run.py", line 990, in main
+    run(args)
+  File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/torch/distributed/run.py", line 981, in run
+    elastic_launch(
+  File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/torch/distributed/launcher/api.py", line 170, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/.venv/lib/python3.12/site-packages/torch/distributed/launcher/api.py", line 317, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+============================================================
+/mnt/raid0nvme0/yangshen/code/vllm-omni-uad/docs/uad/script/profile_hunyuan_moe_ep2_case.py FAILED
+------------------------------------------------------------
+Failures:
+[1]:
+  time      : 2026-05-14_01:16:33
+  host      : gala2
+  rank      : 1 (local_rank: 1)
+  exitcode  : 1 (pid: 2027997)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-05-14_01:16:33
+  host      : gala2
+  rank      : 0 (local_rank: 0)
+  exitcode  : 1 (pid: 2027996)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================
