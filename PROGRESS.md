@@ -248,3 +248,19 @@ Validation:
 - Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
 - Passed: `git diff --check -- vllm_omni/uad tests/uad docs/uad/design_uad.md docs/uad/plan_uad.md`.
 - Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py -q`.
+
+## UAD Runner / Model Shell Docs
+
+Status: completed.
+
+Completed modifications:
+
+- Rewrote `docs/uad/design_uad.md` so `UADRunner` is the batch-first orchestrator and
+  `HunyuanImage3UADModel` is the single shared-weight model shell.
+- Updated `docs/uad/plan_uad.md` Step 4 to a unified batch executor shell instead of the old
+  per-request DiT framing.
+- Kept the state machine as request-state logic only; it does not own batch packing or model forward.
+
+Validation:
+
+- Passed: `git diff --check -- PROGRESS.md docs/uad/design_uad.md docs/uad/plan_uad.md`.

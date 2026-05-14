@@ -13,7 +13,7 @@
 - scheduler 仍按 token budget 做调度；不同 phase 只是影响一个 request 本 tick 能调度
   什么 work item。
 - runner 不识别模型私有 token，不调用模型状态机。runner 只根据 scheduler output 构造
-  batch、执行模型、返回 raw output。
+  batch、执行统一的 HunyuanImage3UADModel、返回 raw output。
 - 模型私有规则由 state machine 表达，例如 HunyuanImage3 的 `<img_ratio_*>`、control
   token、AR -> DiT phase switch。
 - request state 的更新发生在 scheduler 的 `update_from_output()`，对齐 vLLM 原本
@@ -27,6 +27,7 @@
 | `Scheduler.schedule()` | `UADScheduler.schedule()` |
 | `SchedulerOutput` | `UADSchedulerOutput` |
 | `GPUModelRunner.execute_model(scheduler_output)` | `UADRunner.execute_model(uad_scheduler_output)` |
+| 具体 `nn.Module` model | `HunyuanImage3UADModel.forward(uad_batch_inputs)` |
 | `ModelRunnerOutput.sampled_token_ids` | `UADRunnerOutput.sampled_token` / denoise raw output |
 | `Scheduler.update_from_output(...)` | `UADScheduler.update_from_output(...)` |
 | `EngineCoreOutput(new_token_ids=...)` | `UADStepOutput(new_engine_tokens, new_materialized_tokens, ...)` |
@@ -155,7 +156,8 @@ detokenize / 返回 artifact。
 
 ## 5. Runner
 
-`UADRunner` 只负责执行 scheduler 已经选中的 work：
+`UADRunner` 是 batch-first 的执行编排层，负责把 mixed AR + DiT items 打成一个
+layer-wise batch，再调用 `HunyuanImage3UADModel`：
 
 ```python
 class UADRunner:
@@ -164,11 +166,11 @@ class UADRunner:
 
 runner 可以：
 
-- 按 phase 把 `scheduled_items` 分组。
-- 为 AR 构造 token ids/embeds/positions/attention metadata。
-- 为 DiT 构造 latents/timesteps/positions/attention metadata。
-- 合并可共享的 projection/FFN/MoE batch。
-- 返回 raw `UADRunnerOutput`。
+- pack mixed AR + DiT items 成 `UADBatchInputs`。
+- 为 attention 构造 phase / mask / position metadata。
+- 为 DiT 构造 latents / timesteps / image-shape metadata。
+- 让 AR + DiT hidden tokens 进入同一个 FFN / MoE batch。
+- 保持 item 顺序可还原，并返回 raw `UADRunnerOutput`。
 
 runner 不可以：
 
@@ -176,6 +178,18 @@ runner 不可以：
 - 决定 token 是否应该 materialize。
 - 修改 `UADRequestState`。
 - 调用 state machine。
+
+### HunyuanImage3UADModel
+
+`HunyuanImage3UADModel` 是一个共享 HunyuanImage3 权重空间里的单一 `nn.Module`。
+
+- 它拥有共享 backbone、attention、FFN/MoE、norm、RoPE、token embedding、timestep
+  embedding 和权重加载逻辑。
+- 它消费 runner 构造的 batch 输入，不消费 request state。
+- AR 只是 token 输入 recipe；DiT 只是 latent + timestep 输入 recipe。
+- 它返回 raw logits / sampled-token 辅助信息 / denoise prediction，不做 request 更新。
+- 它不认识 `persist` / `materialized_tokens` / scheduler token budget。
+- 它的职责是让同一个 layer pass 里，AR 和 DiT token 都能参与 attention 和 FFN/MoE 批处理。
 
 ## 6. State Machine
 
@@ -197,6 +211,7 @@ HunyuanImage3 state machine 当前负责：
 - 在 AR -> DiT 时 append toy image context tokens。
 - 设置 `phase="dit_step"`、`dit_step_index`、`total_dit_steps`。
 - 对 fake DiT step 只推进 `dit_step_index`。
+- 它不负责 batch packing，也不负责 model forward。
 
 state machine 返回的是 request state delta：
 
@@ -239,7 +254,9 @@ DiT step raw output:
 
 后续真实 HunyuanImage3 接入时：
 
-- AR phase 复用现有 HunyuanImage3 AR model/sampler 逻辑。
+- AR phase 走同一个 `HunyuanImage3UADModel` 的 token recipe。
+- DiT phase 走同一个 `HunyuanImage3UADModel` 的 latent + timestep recipe。
+- UADRunner 在同一个 batch 里同时 pack AR / DiT items，并把 FFN/MoE 合成一个 shared batch。
 - DiT non-final step 使用 dense scratch K/V，不写 vLLM paged KV。
 - DiT 读取 text/prefix context 时使用 read-only paged-prefix attention。
 - DiT final `dit_step(persist=True)` 默认写 vLLM paged KV，支持原生 multiturn。
