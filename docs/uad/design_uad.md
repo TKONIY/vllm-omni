@@ -182,6 +182,8 @@ runner 不可以：
 当前 toy shell 已经固定如下执行契约：
 
 ```python
+# vllm_omni/uad/batch.py
+
 @dataclass
 class UADBatchItem:
     request_id: str
@@ -207,11 +209,12 @@ class UADBatchInputs:
 
 AR item 的 `input_token_ids` 是真实 token id；DiT item 当前用 fake latent slots
 占位，真实实现会替换成 latent/timestep recipe。`output_index` 是 runner scatter
-回 scheduler item 顺序的唯一依据。
+回 scheduler item 顺序的唯一依据。这些通用 batch dataclass 不放在任何具体模型文件里。
 
 ### HunyuanImage3UADModel
 
-`HunyuanImage3UADModel` 是一个共享 HunyuanImage3 权重空间里的单一 `nn.Module`。
+`HunyuanImage3UADModel` 位于 `vllm_omni/uad/model/hunyuan_image3.py`，是一个
+research-only 的单一 `nn.Module` shell。当前不注册到 `model_executor`。
 
 - 它拥有共享 backbone、attention、FFN/MoE、norm、RoPE、token embedding、timestep
   embedding 和权重加载逻辑。

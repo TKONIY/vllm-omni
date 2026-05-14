@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from vllm_omni.model_executor.models.hunyuan_image3.hunyuan_image3_uad import (
-    HunyuanImage3UADForConditionalGeneration,
-)
 from vllm_omni.uad.engine import UADEngine
+from vllm_omni.uad.model.hunyuan_image3 import HunyuanImage3UADForConditionalGeneration
 from vllm_omni.uad.omni.hunyuan_image3 import HunyuanImage3UADStateConfig, HunyuanImage3UADStateMachine
 from vllm_omni.uad.outputs import UADModelOutput, UADRunnerOutput
 from vllm_omni.uad.request import UADRequestState

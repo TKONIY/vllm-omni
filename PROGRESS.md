@@ -10,15 +10,15 @@ Completed modifications:
 - Added `UADEngine` / `AsyncUADEngine` with request add, scheduler step, runner execution, and output application.
 - Added `UADRequestState`, `UADToken`, scheduler items, and output dataclasses for the Step 0 ledger.
 - Added `HunyuanImage3UADAdapter` at `vllm_omni/uad/omni/adapter/hunyuan_image3.py`.
-- Added toy `HunyuanImage3UADForConditionalGeneration` at `vllm_omni/model_executor/models/hunyuan_image3/hunyuan_image3_uad.py`.
+- Added toy `HunyuanImage3UADForConditionalGeneration` at `vllm_omni/uad/model/hunyuan_image3.py`.
 - Added Step 0 tests in `tests/uad/test_step0.py`.
 - Updated `AGENTS.md` with the stop-for-review, validation, push, and progress-recording rule.
 
 Validation:
 
-- Passed: `ruff check vllm_omni/uad vllm_omni/model_executor/models/hunyuan_image3/hunyuan_image3_uad.py tests/uad/test_step0.py`.
-- Passed: `python -m compileall -q vllm_omni/uad vllm_omni/model_executor/models/hunyuan_image3/hunyuan_image3_uad.py tests/uad/test_step0.py`.
-- Passed: `git diff --check -- AGENTS.md PROGRESS.md vllm_omni/uad vllm_omni/model_executor/models/hunyuan_image3 tests/uad/test_step0.py`.
+- Passed: `ruff check vllm_omni/uad vllm_omni/uad/model/hunyuan_image3.py tests/uad/test_step0.py`.
+- Passed: `python -m compileall -q vllm_omni/uad vllm_omni/uad/model/hunyuan_image3.py tests/uad/test_step0.py`.
+- Passed: `git diff --check -- AGENTS.md PROGRESS.md vllm_omni/uad vllm_omni/uad/model tests/uad/test_step0.py`.
 - Blocked: `pytest tests/uad/test_step0.py -q` in the current Python 3.13 environment because global pytest setup imports `torch`, which is not installed.
 
 Commit and push:
@@ -66,9 +66,9 @@ Completed modifications:
 
 Validation:
 
-- Passed: `uv run --no-sync ruff check vllm_omni/uad vllm_omni/model_executor/models/hunyuan_image3/hunyuan_image3_uad.py tests/uad`.
-- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad vllm_omni/model_executor/models/hunyuan_image3/hunyuan_image3_uad.py tests/uad`.
-- Passed: `git diff --check -- PROGRESS.md docs/uad/plan_uad.md vllm_omni/uad vllm_omni/model_executor/models/hunyuan_image3/hunyuan_image3_uad.py tests/uad`.
+- Passed: `uv run --no-sync ruff check vllm_omni/uad vllm_omni/uad/model/hunyuan_image3.py tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad vllm_omni/uad/model/hunyuan_image3.py tests/uad`.
+- Passed: `git diff --check -- PROGRESS.md docs/uad/plan_uad.md vllm_omni/uad vllm_omni/uad/model/hunyuan_image3.py tests/uad`.
 - Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py -q`.
 
 Environment note:
@@ -115,8 +115,8 @@ Completed modifications:
 
 Validation:
 
-- Passed: `uv run --no-sync ruff check vllm_omni/uad vllm_omni/model_executor/models/hunyuan_image3/hunyuan_image3_uad.py tests/uad`.
-- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad vllm_omni/model_executor/models/hunyuan_image3/hunyuan_image3_uad.py tests/uad`.
+- Passed: `uv run --no-sync ruff check vllm_omni/uad vllm_omni/uad/model/hunyuan_image3.py tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad vllm_omni/uad/model/hunyuan_image3.py tests/uad`.
 - Passed: `git diff --check -- PROGRESS.md docs/uad/plan_uad.md vllm_omni/uad tests/uad`.
 - Passed: `rg -n "HunyuanImage3UADAdapter|uad\\.omni\\.adapter|adapter\\.hunyuan|UADModelAdapter" vllm_omni/uad tests/uad docs/uad/design_uad.md docs/uad/plan_uad.md` returned no matches.
 - Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py -q`.
@@ -236,8 +236,25 @@ Completed modifications:
 
 Validation:
 
-- Passed: `uv run --no-sync ruff check vllm_omni/uad vllm_omni/model_executor/models/hunyuan_image3/hunyuan_image3_uad.py tests/uad`.
-- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad vllm_omni/model_executor/models/hunyuan_image3/hunyuan_image3_uad.py tests/uad`.
+- Passed: `uv run --no-sync ruff check vllm_omni/uad vllm_omni/uad/model/hunyuan_image3.py tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad vllm_omni/uad/model/hunyuan_image3.py tests/uad`.
+- Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step4_batch_model.py tests/uad/test_step5_persist.py -q`.
+
+## Step 4 Cleanup: Keep UAD Code Under `vllm_omni/uad`
+
+Status: completed.
+
+Completed modifications:
+
+- Moved the toy HunyuanImage3 UAD model shell to `vllm_omni/uad/model/hunyuan_image3.py`.
+- Moved generic batch contracts to `vllm_omni/uad/batch.py`.
+- Removed the UAD model shell from `vllm_omni/model_executor/models/hunyuan_image3/`.
+- Updated runner, tests, and docs to import UAD-local modules only.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
 - Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step4_batch_model.py tests/uad/test_step5_persist.py -q`.
 
 ## Plan Future Steps Detail

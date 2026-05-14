@@ -82,6 +82,7 @@ scheduler.schedule()
 
 ```text
 vllm_omni/uad/
+  batch.py            # UADBatchItem / UADBatchInputs / UADBatchOutputs
   request.py          # UADRequestState / UADPhase / UADToken
   scheduler.py        # UADSchedulerOutput / UADToyScheduler.update_from_output()
   runner.py           # UADRunner.execute_model()
@@ -90,13 +91,12 @@ vllm_omni/uad/
   engine.py           # UADEngine shell
   omni/
     hunyuan_image3.py # HunyuanImage3 state machine and token rules
-
-vllm_omni/model_executor/models/hunyuan_image3/
-  hunyuan_image3_uad.py # HunyuanImage3UADModel (shared-weight unified model shell)
+  model/
+    hunyuan_image3.py # HunyuanImage3UADModel toy unified model shell
 ```
 
-`HunyuanImage3UADModel` 放在原 HunyuanImage3 model 目录下，方便后续接 loader、TP、quant
-和原 model executor 约定。
+当前 research 实现全部放在 `vllm_omni/uad/` 下，不注册到原 `model_executor`。
+后续真正接 loader、TP、quant 时，再决定是否进入 production model registry。
 
 ## 4. 已实现 Toy 语义
 

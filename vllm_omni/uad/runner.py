@@ -2,12 +2,8 @@ from __future__ import annotations
 
 import torch
 
-from vllm_omni.model_executor.models.hunyuan_image3.hunyuan_image3_uad import (
-    HunyuanImage3UADModel,
-    UADBatchInputs,
-    UADBatchItem,
-    UADBatchOutputs,
-)
+from vllm_omni.uad.batch import UADBatchInputs, UADBatchItem, UADBatchOutputs
+from vllm_omni.uad.model.hunyuan_image3 import HunyuanImage3UADModel
 from vllm_omni.uad.outputs import UADRunnerOutput, UADRunnerStepOutput
 from vllm_omni.uad.request import UADToken
 from vllm_omni.uad.scheduler import UADScheduleItem, UADSchedulerOutput
