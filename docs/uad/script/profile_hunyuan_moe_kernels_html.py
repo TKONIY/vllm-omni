@@ -63,6 +63,10 @@ def canonical_kernel_name(name: str) -> str:
         return "act_and_mul_kernel"
     if "finalizeMoeRoutingKernel" in name:
         return "finalizeMoeRoutingKernel"
+    if "cross_device_reduce" in name:
+        return "cross_device_reduce"
+    if "nccl" in name.lower():
+        return "NCCL"
     if "Memcpy DtoD" in name:
         return "Memcpy DtoD"
     if name.startswith("Memset"):
@@ -91,6 +95,8 @@ def kernel_category(name: str) -> str:
         return "activation"
     if "finalizeMoeRoutingKernel" in name:
         return "finalize_combine"
+    if "cross_device_reduce" in name or "NCCL" in name:
+        return "comm"
     if "Memcpy" in name:
         return "memcpy"
     if "Memset" in name:
