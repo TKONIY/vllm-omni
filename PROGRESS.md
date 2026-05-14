@@ -275,6 +275,22 @@ Validation:
 - Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
 - Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step4_batch_model.py tests/uad/test_step5_persist.py -q`.
 
+## Batch Contract Field Documentation
+
+Status: completed.
+
+Completed modifications:
+
+- Added attribute documentation for `UADBatchItem`, `UADBatchInputs`,
+  `UADBatchItemOutput`, and `UADBatchOutputs`.
+- Added property docstrings for derived AR/DiT/FFN/attention token counters.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check vllm_omni/uad/batch.py tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad/batch.py tests/uad`.
+- Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step4_batch_model.py tests/uad/test_step5_persist.py -q`.
+
 ## Plan Future Steps Detail
 
 Status: completed.
