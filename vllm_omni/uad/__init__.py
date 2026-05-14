@@ -2,10 +2,12 @@
 
 from vllm_omni.uad.engine import AsyncUADEngine, UADEngine
 from vllm_omni.uad.request import UADPhase, UADPhaseUpdate, UADRequestState, UADToken
+from vllm_omni.uad.state_machine import UADModelStateMachine
 
 __all__ = [
     "AsyncUADEngine",
     "UADEngine",
+    "UADModelStateMachine",
     "UADPhase",
     "UADPhaseUpdate",
     "UADRequestState",

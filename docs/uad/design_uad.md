@@ -439,12 +439,18 @@ class UADRunner:
     def build_inputs(self, items: list[UADScheduleItem], runner_state) -> UADInputs: ...
     def execute_model(self, scheduler_output: UADSchedulerOutput, requests) -> list[UADPhaseOutput]: ...
     def process_outputs(self, raw_outputs, items, requests) -> list[UADPhaseOutput]: ...
+
+class UADModelStateMachine:
+    def on_ar_token_sampled(self, request, sampled_token, num_scheduled_tokens) -> UADPhaseOutput: ...
+    def on_dit_step_completed(self, request, num_scheduled_tokens) -> UADPhaseOutput: ...
 ```
 
 UAD 不再设计独立 `adapter` 层。模型私有逻辑，例如 HunyuanImage3 的
 `</think> -> <recaption>`、`</recaption> -> <answer><boi><img_size_*>`、
 `<img_ratio_*>` phase switch、ignore text mask、CFG boundary metadata，都作为
-runner 内部 helper 或 model-specific runner mixin 存在。
+model-specific state machine 存在。`UADRunner` 只负责执行 scheduled item、构造
+batched input、调用 AR/DiT 模块、把 raw output 交给 state machine；它不识别
+`<img_ratio_*>` 这类模型私有 token。
 
 原因：UAD 的长期难点在 runner，而不是简单的模型翻译。真正需要统一的是：
 
@@ -455,7 +461,7 @@ runner 内部 helper 或 model-specific runner mixin 存在。
 
 如果再引入 adapter，会把这些本来属于 runner 的职责切碎，后续接 paged KV、TP、quant、
 attention metadata 时反而更绕。第一版之后应把 toy 单 item 执行代码收进 `UADRunner`，
-保留的只是 HunyuanImage3 special-token helper。
+保留的模型私有部分是轻量 state machine，而不是执行 adapter。
 
 ## 12. TODO: CFG Parallel
 

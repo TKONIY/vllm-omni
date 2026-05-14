@@ -6,7 +6,7 @@ from vllm_omni.model_executor.models.hunyuan_image3.hunyuan_image3_uad import (
     HunyuanImage3UADForConditionalGeneration,
 )
 from vllm_omni.uad.engine import UADEngine
-from vllm_omni.uad.omni.hunyuan_image3 import HunyuanImage3UADStateConfig
+from vllm_omni.uad.omni.hunyuan_image3 import HunyuanImage3UADStateConfig, HunyuanImage3UADStateMachine
 from vllm_omni.uad.runner import UADRunner
 from vllm_omni.uad.scheduler import UADToyScheduler
 
@@ -15,7 +15,8 @@ pytestmark = pytest.mark.cpu
 
 def _build_engine(state_config: HunyuanImage3UADStateConfig) -> UADEngine:
     model = HunyuanImage3UADForConditionalGeneration(vocab_size=300)
-    return UADEngine(runner=UADRunner(model=model, state_config=state_config))
+    state_machine = HunyuanImage3UADStateMachine(config=state_config)
+    return UADEngine(runner=UADRunner(model=model, state_machine=state_machine))
 
 
 def test_step2_ratio_token_switches_request_to_dit_phase() -> None:

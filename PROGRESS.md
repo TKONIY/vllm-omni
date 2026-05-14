@@ -141,3 +141,21 @@ Validation:
 - Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
 - Passed: `git diff --check -- vllm_omni/uad/omni/hunyuan_image3.py`.
 - Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py -q`.
+
+## Runner / Model State Machine Split
+
+Status: completed.
+
+Completed modifications:
+
+- Added `UADModelStateMachine` as the generic model-specific phase/output-ledger protocol.
+- Added `HunyuanImage3UADStateMachine` so HunyuanImage3 owns `<img_ratio_*>`, engine-only token, toy image-context, and toy DiT-step state rules.
+- Updated `UADRunner` to delegate sampled AR token semantics and DiT step completion to the state machine instead of inspecting HunyuanImage3 tokens directly.
+- Updated Step 2/3 tests and docs to describe the runner/state-machine split.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
+- Passed: `git diff --check -- vllm_omni/uad tests/uad docs/uad/design_uad.md docs/uad/plan_uad.md`.
+- Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py -q`.

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from vllm_omni.uad.request import UADToken
+from vllm_omni.uad.outputs import UADModelOutput
+from vllm_omni.uad.request import UADPhaseUpdate, UADRequestState, UADToken
 
 
 @dataclass(frozen=True)
@@ -194,3 +195,101 @@ class HunyuanImage3UADStateConfig:
         if self.eoi_token_id is not None:
             tokens.append(UADToken(modality="image", token_id=self.eoi_token_id))
         return tokens
+
+
+@dataclass
+class HunyuanImage3UADStateMachine:
+    """HunyuanImage3-specific UAD phase and output-ledger policy.
+
+    `UADRunner` should not know that HunyuanImage3 uses `<img_ratio_*>` as
+    its AR-to-DiT boundary. The runner only passes sampled tokens here; this
+    class decides whether the token is visible text, engine-only structure,
+    or a phase switch into DiT.
+    """
+
+    config: HunyuanImage3UADStateConfig = field(default_factory=HunyuanImage3UADStateConfig)
+
+    @classmethod
+    def from_tokenizer(
+        cls,
+        tokenizer,
+        *,
+        image_base_size: int = 1024,
+        toy_image_context_token_count: int = 4,
+        toy_total_dit_steps: int = 2,
+    ) -> HunyuanImage3UADStateMachine:
+        """Build the HunyuanImage3 state machine from the production tokenizer."""
+        return cls(
+            config=HunyuanImage3UADStateConfig.from_tokenizer(
+                tokenizer,
+                image_base_size=image_base_size,
+                toy_image_context_token_count=toy_image_context_token_count,
+                toy_total_dit_steps=toy_total_dit_steps,
+            )
+        )
+
+    def on_ar_token_sampled(
+        self,
+        *,
+        request: UADRequestState,
+        sampled_token: UADToken,
+        num_scheduled_tokens: int,
+    ) -> UADModelOutput:
+        """Apply HunyuanImage3 AR-token semantics after runner sampling.
+
+        Ratio-token detection, engine-only filtering, and toy image-context
+        insertion are all HunyuanImage3 model policy. The generic runner only
+        executes the AR item and delegates the sampled token here.
+        """
+        ratio_index = self.config.ratio_index(sampled_token.token_id)
+        if ratio_index is not None:
+            image_context_tokens = self.config.build_toy_image_context_tokens()
+            return UADModelOutput(
+                request_id=request.request_id,
+                new_engine_tokens=[sampled_token] + image_context_tokens,
+                new_materialized_tokens=[],
+                num_computed_tokens_delta=num_scheduled_tokens,
+                phase_update=UADPhaseUpdate(
+                    phase="dit_step",
+                    dit_step_index=0,
+                    total_dit_steps=self.config.toy_total_dit_steps,
+                    image_ratio_token_id=sampled_token.token_id,
+                    image_ratio_index=ratio_index,
+                    image_context_token_count=len(image_context_tokens),
+                    pending_image_context_commit=True,
+                ),
+                finished=False,
+            )
+
+        materialized_tokens = []
+        if not self.config.is_engine_only_token(sampled_token.token_id):
+            materialized_tokens.append(sampled_token)
+        return UADModelOutput(
+            request_id=request.request_id,
+            new_engine_tokens=[sampled_token],
+            new_materialized_tokens=materialized_tokens,
+            num_computed_tokens_delta=num_scheduled_tokens,
+            finished=False,
+        )
+
+    def on_dit_step_completed(
+        self,
+        *,
+        request: UADRequestState,
+        num_scheduled_tokens: int,
+    ) -> UADModelOutput:
+        """Advance HunyuanImage3's current toy DiT denoise-step state."""
+        if request.total_dit_steps <= 0:
+            raise ValueError(f"request {request.request_id} entered dit_step without total_dit_steps")
+
+        next_step_index = min(request.dit_step_index + 1, request.total_dit_steps)
+        return UADModelOutput(
+            request_id=request.request_id,
+            num_computed_tokens_delta=0,
+            phase_update=UADPhaseUpdate(
+                phase="dit_step",
+                dit_step_index=next_step_index,
+                pending_image_context_commit=True,
+            ),
+            finished=False,
+        )

@@ -320,10 +320,11 @@ vllm_omni/uad/
   request.py          # UADRequestState / UADPhase / UADToken
   scheduler.py        # UADScheduleItem / UADSchedulerOutput
   runner.py           # UADRunner: input build / model execute / output process
+  state_machine.py    # UADModelStateMachine protocol for model-specific phase/output policy
   outputs.py          # UADModelOutput / UADPhaseUpdate
   engine.py           # UADEngine / AsyncUADEngine
   omni/
-    hunyuan_image3.py     # HunyuanImage3 runner helpers / special-token rules
+    hunyuan_image3.py     # HunyuanImage3 state machine / special-token rules
 
 vllm_omni/model_executor/models/hunyuan_image3/
   hunyuan_image3_uad.py   # HunyuanImage3UADForConditionalGeneration
@@ -438,7 +439,7 @@ RoPE/position 不能用默认 1D append 近似：
 |---|---|
 | engine | 新增 `UADEngine` / `AsyncUADEngine`，接入 request add/step/output lifecycle |
 | model | 新增 `HunyuanImage3UADForConditionalGeneration` |
-| runner | 新增 `UADRunner`，先只实现 toy AR path；HunyuanImage3 special-token 规则作为 runner helper，不引入长期独立翻译层 |
+| runner | 新增 `UADRunner`，先只实现 toy AR path；模型私有 phase 规则由 `UADModelStateMachine` 承担，不引入长期独立翻译层 |
 | request | 新增 `UADRequestState`，保存 `engine_tokens` 和 `materialized_tokens` |
 | output | 文本 token 同时进入 `new_engine_tokens` 和 `new_materialized_tokens` |
 | scheduler | 先委托现有 AR scheduler，UAD 只旁路记录 phase |
@@ -515,7 +516,7 @@ HunyuanImage3 现有实现需要对应的规则：
 
 | 内容 | 说明 |
 |---|---|
-| 检测 | toy sampler 产出 `<img_ratio_*>` |
+| 检测 | toy sampler 产出 token 后交给 `HunyuanImage3UADStateMachine`，由模型状态机识别 `<img_ratio_*>` |
 | engine tokens | append sampled ratio token，再 append toy `<img>` payload 和可选 `<eoi>`，表示未来要 commit 的 image context |
 | materialized tokens | 普通文本 token 对外可见；Hunyuan 结构 token、image/control token、ratio token 不进入 `materialized_tokens` |
 | phase | `ar_decode -> dit_step` |
@@ -565,8 +566,8 @@ AR sampled ratio token:
 
 | 内容 | 说明 |
 |---|---|
-| runner cleanup | 删除长期单独翻译层路线；`UADRunner` 直接持有 model 和 HunyuanImage3 special-token helper |
-| model-specific helper | 保留 `<img_ratio_*>`、stage transition、engine-only token 判断等纯 helper，不承担 execute/model-runner 职责 |
+| runner cleanup | 删除长期单独翻译层路线；`UADRunner` 直接持有 model 和 model-specific state machine |
+| model-specific state machine | HunyuanImage3 在 `HunyuanImage3UADStateMachine` 中定义 `<img_ratio_*>`、stage transition、engine-only token 判断等 phase/output-ledger 规则；runner 不识别这些 token |
 | scheduler | DiT step 仍按 token 数消耗 UAD work budget，但 non-final step 不进入 base `SchedulerOutput.num_scheduled_tokens` |
 | min/max | toy 阶段令 UAD item 的 `min_tokens == max_tokens == image_query_tokens` |
 | runner | 执行 fake DiT step，只更新 `dit_step_index` |
@@ -578,6 +579,8 @@ AR sampled ratio token:
 
 - 同一个 engine 里，一个 AR request 和一个 toy DiT request 可以交替执行。
 - `runner.py` 不再通过独立翻译层执行 item；batch/item 执行入口集中在 `UADRunner.execute_model()`。
+- `runner.py` 不直接识别 HunyuanImage3 ratio/control token；AR token 语义委托给
+  `UADModelStateMachine`。
 - DiT non-final step 只推进 `dit_step_index`。
 - DiT final step 不再重复产生 image tokens，也不会假装已经写入 paged KV。
 - 后续 cache commit item 必须能通过 scheduler output 携带 block ids。
