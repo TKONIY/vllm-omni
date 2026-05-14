@@ -20,9 +20,10 @@ worktree: ~/code/vllm-omni-uad-code
 | Step 1 | 完成 | `UADScheduleItem` / `UADSchedulerOutput` |
 | Step 2 | 完成 | HunyuanImage3 toy AR -> DiT phase switch |
 | Step 3 | 完成 | runner 消费完整 scheduler output；state update 移到 scheduler `update_from_output()` |
+| Step 4 | 完成 | `UADRunner` pack mixed batch；`HunyuanImage3UADModel` 一次 forward；按 item 顺序 scatter |
 | Step 5 foundation | 完成 | toy final `dit_step(persist=True)` 推进 pending engine context |
 
-下一步：Step 4 接 HunyuanImage3 UAD batch executor shell。
+下一步：Step 5 的真实 paged-KV slot 分配和 final DiT persist 路径。
 
 ## 1. Motivation 实验计划
 
@@ -141,20 +142,23 @@ DiT chunk 内 full attention 使用 dense K/V，两路 attention 通过 LSE merg
 
 ## 6. Step 4：HunyuanImage3 UAD batch executor shell
 
+状态：已完成 toy shell。
+
 目标：建立一个统一的 HunyuanImage3 UAD batch shell，让同一个 tick 里的 AR 和 DiT items
 能进入同一次 runner/model forward；先允许 fake compute，但 batch packing、attention metadata、
 FFN/MoE 合批和输出 scatter 必须是真实的。
 
-范围：
+已完成范围：
 
 - 定义 `HunyuanImage3UADModel`：一个共享权重的 `nn.Module`，AR 和 DiT 只是不同输入 recipe。
-- 定义 `UADBatchInputs` / `UADBatchOutputs`：承载 mixed AR + DiT spans、phase masks、position /
-  timestep / latent metadata。
+- 定义 `UADBatchInputs` / `UADBatchOutputs`：承载 mixed AR + DiT item metadata、position、
+  DiT step metadata、attention grouping 和 FFN/MoE token count。
 - `UADRunner` 把 `UADSchedulerOutput` pack 成上述 batch，调用 model，并保留 request 顺序。
-- attention 可以按 phase / masking 分子路径，但 FFN/MoE 必须吃合并后的 token batch。
+- attention metadata 记录所有 item 的 causal work，并额外标记 DiT chunk bidirectional work。
+- FFN/MoE token count 来自同一个 flattened token-slot batch。
 - 先不接真实 KV 写入、CFG parallel、SP、真实 output processor。
 
-验证：
+已验证：
 
 - 同一 tick 能同时 pack AR 和 DiT items。
 - attention metadata 和 FFN/MoE batch 都能看到两类 token。

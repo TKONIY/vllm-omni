@@ -179,6 +179,36 @@ runner 不可以：
 - 修改 `UADRequestState`。
 - 调用 state machine。
 
+当前 toy shell 已经固定如下执行契约：
+
+```python
+@dataclass
+class UADBatchItem:
+    request_id: str
+    phase: UADPhase
+    output_index: int
+    num_tokens: int
+    token_start: int
+    token_end: int
+    num_computed_tokens: int
+    persist: bool
+    input_kind: Literal["token_ids", "latent_timestep"]
+    attention_kind: Literal["causal_paged", "dit_chunk_bidirectional"]
+    dit_step_index: int | None
+    total_dit_steps: int | None
+
+@dataclass
+class UADBatchInputs:
+    items: tuple[UADBatchItem, ...]
+    input_token_ids: torch.Tensor
+    token_item_indices: torch.Tensor
+    token_positions: torch.Tensor
+```
+
+AR item 的 `input_token_ids` 是真实 token id；DiT item 当前用 fake latent slots
+占位，真实实现会替换成 latent/timestep recipe。`output_index` 是 runner scatter
+回 scheduler item 顺序的唯一依据。
+
 ### HunyuanImage3UADModel
 
 `HunyuanImage3UADModel` 是一个共享 HunyuanImage3 权重空间里的单一 `nn.Module`。
@@ -190,6 +220,10 @@ runner 不可以：
 - 它返回 raw logits / sampled-token 辅助信息 / denoise prediction，不做 request 更新。
 - 它不认识 `persist` / `materialized_tokens` / scheduler token budget。
 - 它的职责是让同一个 layer pass 里，AR 和 DiT token 都能参与 attention 和 FFN/MoE 批处理。
+
+当前 Step 4 版本只做 fake compute：AR 输出仍然是最后一个 token `+1`，DiT 输出只表示
+scheduled item 完成；但 model forward 已经是 batch-first，一次 forward 可以同时覆盖
+AR 和 DiT item。
 
 ## 6. State Machine
 

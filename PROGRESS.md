@@ -217,6 +217,29 @@ Validation:
 - Passed: `git diff --check -- PROGRESS.md vllm_omni/uad tests/uad docs/uad/design_uad.md docs/uad/plan_uad.md`.
 - Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step5_persist.py -q`.
 
+## Step 4: HunyuanImage3 UAD Batch Executor Shell
+
+Status: completed.
+
+Completed modifications:
+
+- Added `HunyuanImage3UADModel` as the toy shared-weight model shell and kept
+  `HunyuanImage3UADForConditionalGeneration` as a compatibility alias.
+- Added `UADBatchItem`, `UADBatchInputs`, `UADBatchItemOutput`, and `UADBatchOutputs`.
+- Updated `UADRunner.execute_model()` to pack a full `UADSchedulerOutput` into one mixed
+  batch, call `HunyuanImage3UADModel` once, and scatter raw outputs back by scheduler item order.
+- Added DiT runner metadata (`dit_step_index`, `total_dit_steps`) to `UADScheduleItem` so the
+  runner does not read request state directly.
+- Added Step 4 tests for mixed AR + DiT batch packing, attention/FFN token metadata, and output
+  scatter order.
+- Updated `docs/uad/design_uad.md` and `docs/uad/plan_uad.md` with the implemented batch shell.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check vllm_omni/uad vllm_omni/model_executor/models/hunyuan_image3/hunyuan_image3_uad.py tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad vllm_omni/model_executor/models/hunyuan_image3/hunyuan_image3_uad.py tests/uad`.
+- Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step4_batch_model.py tests/uad/test_step5_persist.py -q`.
+
 ## Plan Future Steps Detail
 
 Status: completed.

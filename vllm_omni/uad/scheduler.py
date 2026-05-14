@@ -29,6 +29,10 @@ class UADScheduleItem:
     - AR prefill/decode: `persist=True`; scheduled tokens write paged KV.
     - DiT non-final denoise: `persist=False`; only diffusion state changes.
     - DiT final context write: `persist=True`; image context becomes reusable.
+
+    `dit_step_index` and `total_dit_steps` are runner metadata for DiT items.
+    They come from scheduler/request state because the runner should not read
+    request objects directly.
     """
 
     request_id: str
@@ -37,6 +41,8 @@ class UADScheduleItem:
     num_scheduled_tokens: int
     num_computed_tokens: int
     persist: bool = True
+    dit_step_index: int | None = None
+    total_dit_steps: int | None = None
 
 
 @dataclass
@@ -87,6 +93,8 @@ class UADShadowScheduler:
                         num_scheduled_tokens=num_scheduled_tokens,
                         num_computed_tokens=request.num_computed_tokens,
                         persist=is_final_dit_step,
+                        dit_step_index=request.dit_step_index,
+                        total_dit_steps=request.total_dit_steps,
                     )
                 )
                 continue
