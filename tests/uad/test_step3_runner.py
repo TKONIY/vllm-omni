@@ -45,7 +45,6 @@ class RecordingStateMachine:
             request_id=request.request_id,
             new_engine_tokens=[sampled_token],
             new_materialized_tokens=[sampled_token],
-            num_computed_tokens_delta=runner_output.num_scheduled_tokens,
             finished=False,
         )
 
@@ -109,6 +108,7 @@ def test_step3_scheduler_update_delegates_runner_outputs_to_state_machine() -> N
     assert state_machine.sampled_tokens == [50]
     assert [token.token_id for token in output.outputs[0].new_engine_tokens] == [50]
     assert [token.token_id for token in request.materialized_tokens] == [50]
+    assert request.num_computed_tokens == 1
     assert request.phase == "ar_decode"
 
 

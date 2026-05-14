@@ -22,6 +22,7 @@ def test_step1_shadow_scheduler_builds_prefill_item() -> None:
     assert item.token_ids == [10, 11, 12]
     assert item.num_scheduled_tokens == 3
     assert item.num_computed_tokens == 0
+    assert item.persist is True
 
 
 def test_step1_shadow_scheduler_builds_decode_item() -> None:
@@ -37,6 +38,7 @@ def test_step1_shadow_scheduler_builds_decode_item() -> None:
     assert item.token_ids == [8]
     assert item.num_scheduled_tokens == 1
     assert item.num_computed_tokens == 1
+    assert item.persist is True
 
 
 def test_step1_shadow_scheduler_skips_finished_requests() -> None:

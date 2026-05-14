@@ -210,3 +210,22 @@ Completed modifications:
 Validation:
 
 - Passed: `git diff --check -- PROGRESS.md docs/uad/plan_uad.md`.
+
+## UAD ScheduleItem Persist Semantics
+
+Status: completed.
+
+Completed modifications:
+
+- Added `UADScheduleItem.persist` as the scheduler-owned context persistence bit.
+- Documented every `UADScheduleItem` field in code and in `docs/uad/design_uad.md`, with AR/DiT examples.
+- Updated scheduler state application so `persist=True` advances `num_computed_tokens`; model state machines no longer return a computed-token delta.
+- Marked current toy AR schedule items as `persist=True` and toy DiT denoise items as `persist=False`.
+- Updated `docs/uad/plan_uad.md` Step 5 to use final `dit_step(persist=True)` instead of adding another phase.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
+- Passed: `git diff --check -- vllm_omni/uad tests/uad docs/uad/design_uad.md docs/uad/plan_uad.md`.
+- Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py -q`.

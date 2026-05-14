@@ -11,11 +11,32 @@ from vllm_omni.uad.state_machine import UADModelStateMachine
 
 @dataclass(frozen=True)
 class UADScheduleItem:
+    """One request's work item for a scheduler tick.
+
+    `request_id` identifies the request. `phase` selects the runner path.
+    `token_ids` are the logical input token ids when the item is token-backed
+    AR work; DiT denoise items can leave this empty because their input comes
+    from latent/timestep state. `num_scheduled_tokens` is the token budget cost
+    of this item. `num_computed_tokens` snapshots the reusable context prefix
+    length before execution.
+
+    `persist` is the hard context-commit bit. If it is true and execution
+    succeeds, the item must write reusable engine context/KV and advance the
+    request's `num_computed_tokens`. If it is false, the item is transient
+    compute and must not advance `num_computed_tokens`.
+
+    Examples:
+    - AR prefill/decode: `persist=True`; scheduled tokens write paged KV.
+    - DiT non-final denoise: `persist=False`; only diffusion state changes.
+    - DiT final context write: `persist=True`; image context becomes reusable.
+    """
+
     request_id: str
     phase: UADPhase
     token_ids: list[int]
     num_scheduled_tokens: int
     num_computed_tokens: int
+    persist: bool = True
 
 
 @dataclass
@@ -59,6 +80,7 @@ class UADShadowScheduler:
                         token_ids=[],
                         num_scheduled_tokens=num_scheduled_tokens,
                         num_computed_tokens=request.num_computed_tokens,
+                        persist=False,
                     )
                 )
                 continue
@@ -117,21 +139,34 @@ class UADToyScheduler(UADShadowScheduler):
         scheduler_output: UADSchedulerOutput,
         runner_output: UADRunnerStepOutput,
     ) -> UADStepOutput:
-        outputs = [self._process_runner_output(output) for output in runner_output.outputs]
-        for output in outputs:
-            self._apply_model_output(output)
+        if len(scheduler_output.scheduled_items) != len(runner_output.outputs):
+            raise ValueError(
+                "scheduler/runner output length mismatch: "
+                f"{len(scheduler_output.scheduled_items)} scheduled items vs {len(runner_output.outputs)} outputs"
+            )
+
+        item_outputs = list(zip(scheduler_output.scheduled_items, runner_output.outputs, strict=True))
+        outputs = [self._process_runner_output(item, output) for item, output in item_outputs]
+        for item, output in zip(scheduler_output.scheduled_items, outputs, strict=True):
+            self._apply_model_output(item, output)
         return UADStepOutput(outputs=outputs)
 
-    def _process_runner_output(self, output: UADRunnerOutput) -> UADModelOutput:
+    def _process_runner_output(self, item: UADScheduleItem, output: UADRunnerOutput) -> UADModelOutput:
+        if item.request_id != output.request_id or item.phase != output.phase:
+            raise ValueError(
+                "scheduler/runner output item mismatch: "
+                f"scheduled ({item.request_id}, {item.phase}) but got ({output.request_id}, {output.phase})"
+            )
         request = self.requests[output.request_id]
         return self.state_machine.update_request_state(
             request=request,
             runner_output=output,
         )
 
-    def _apply_model_output(self, output: UADModelOutput) -> None:
+    def _apply_model_output(self, item: UADScheduleItem, output: UADModelOutput) -> None:
         request = self.requests[output.request_id]
-        request.advance_computed_tokens(output.num_computed_tokens_delta)
+        if item.persist:
+            request.advance_computed_tokens(item.num_scheduled_tokens)
         request.append_engine_tokens(output.new_engine_tokens)
         request.append_materialized_tokens(output.new_materialized_tokens)
         if output.phase_update is not None:

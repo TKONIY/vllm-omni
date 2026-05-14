@@ -246,12 +246,10 @@ class HunyuanImage3UADStateMachine:
             return self._update_from_ar_token(
                 request=request,
                 sampled_token=runner_output.sampled_token,
-                num_scheduled_tokens=runner_output.num_scheduled_tokens,
             )
         if runner_output.phase == "dit_step":
             return self._update_from_dit_step(
                 request=request,
-                num_scheduled_tokens=runner_output.num_scheduled_tokens,
             )
         raise NotImplementedError(f"unsupported HunyuanImage3 UAD phase: {runner_output.phase}")
 
@@ -260,7 +258,6 @@ class HunyuanImage3UADStateMachine:
         *,
         request: UADRequestState,
         sampled_token: UADToken,
-        num_scheduled_tokens: int,
     ) -> UADModelOutput:
         """Apply HunyuanImage3 AR-token semantics after runner sampling."""
         ratio_index = self.config.ratio_index(sampled_token.token_id)
@@ -270,7 +267,6 @@ class HunyuanImage3UADStateMachine:
                 request_id=request.request_id,
                 new_engine_tokens=[sampled_token] + image_context_tokens,
                 new_materialized_tokens=[],
-                num_computed_tokens_delta=num_scheduled_tokens,
                 phase_update=UADPhaseUpdate(
                     phase="dit_step",
                     dit_step_index=0,
@@ -290,7 +286,6 @@ class HunyuanImage3UADStateMachine:
             request_id=request.request_id,
             new_engine_tokens=[sampled_token],
             new_materialized_tokens=materialized_tokens,
-            num_computed_tokens_delta=num_scheduled_tokens,
             finished=False,
         )
 
@@ -298,7 +293,6 @@ class HunyuanImage3UADStateMachine:
         self,
         *,
         request: UADRequestState,
-        num_scheduled_tokens: int,
     ) -> UADModelOutput:
         """Advance HunyuanImage3's current toy DiT denoise-step state."""
         if request.total_dit_steps <= 0:
@@ -307,7 +301,6 @@ class HunyuanImage3UADStateMachine:
         next_step_index = min(request.dit_step_index + 1, request.total_dit_steps)
         return UADModelOutput(
             request_id=request.request_id,
-            num_computed_tokens_delta=0,
             phase_update=UADPhaseUpdate(
                 phase="dit_step",
                 dit_step_index=next_step_index,

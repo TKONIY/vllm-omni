@@ -69,6 +69,7 @@ def test_step2_scheduler_marks_dit_phase_as_dit_work_not_ar_decode() -> None:
     assert item.token_ids == []
     assert item.num_scheduled_tokens == request.image_context_token_count
     assert item.num_computed_tokens == request.num_computed_tokens
+    assert item.persist is False
 
 
 def test_step2_normal_text_token_still_materializes() -> None:

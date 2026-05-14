@@ -35,7 +35,6 @@ class UADModelOutput:
     request_id: str
     new_engine_tokens: list[UADToken] = field(default_factory=list)
     new_materialized_tokens: list[UADToken] = field(default_factory=list)
-    num_computed_tokens_delta: int = 0
     phase_update: UADPhaseUpdate | None = None
     finished: bool = False
 

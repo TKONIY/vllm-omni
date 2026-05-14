@@ -103,6 +103,7 @@ class UADScheduleItem:
     token_ids: list[int]
     num_scheduled_tokens: int
     num_computed_tokens: int
+    persist: bool
 
 class UADScheduler:
     def add_request(...) -> UADRequestState: ...
@@ -114,17 +115,43 @@ class UADScheduler:
     ) -> UADStepOutput: ...
 ```
 
+字段语义：
+
+- `request_id`：本 item 属于哪条 request。
+- `phase`：runner 执行路径，当前是 `ar_prefill` / `ar_decode` / `dit_step`。
+- `token_ids`：token-backed AR work 的输入 token ids。DiT denoise 的输入来自
+  latent/timestep state，可以为空。
+- `num_scheduled_tokens`：scheduler token budget 里本 item 占用的 token 数。
+- `num_computed_tokens`：调度时 request 已经写入 reusable context/KV 的
+  `engine_tokens` 前缀长度。
+- `persist`：context commit bit。`persist=True` 表示本 item 成功执行后必须写入可复用
+  engine context/KV，并推进 `num_computed_tokens`；`persist=False` 表示 transient compute，
+  不推进 `num_computed_tokens`。
+
+例子：
+
+| Work item | `persist` | 结果 |
+|---|---:|---|
+| AR prefill | `True` | prompt/context tokens 写 paged KV，推进 `num_computed_tokens` |
+| AR decode | `True` | 本轮 scheduled token 写 paged KV，推进 `num_computed_tokens` |
+| DiT non-final denoise | `False` | 只更新 diffusion runtime state，不推进 `num_computed_tokens` |
+| DiT final image-context write | `True` | image context 写 paged KV，推进 `num_computed_tokens` |
+
+注意：`persist` 是 engine context 语义；`materialized_tokens` 是 serving/output 语义。
+前者决定后续 token 能否 attend 到该 context，后者决定是否对用户 streaming /
+detokenize / 返回 artifact。
+
 当前 MVP 的 token 规则：
 
-| Phase | scheduled item | `num_scheduled_tokens` | KV 行为 |
+| Phase | scheduled item | `num_scheduled_tokens` | `persist` |
 |---|---|---:|---|
-| `ar_prefill` | prompt/context chunk | `len(pending_tokens)` toy；后续接 chunked prefill | 写 paged KV |
-| `ar_decode` | 上一步 sampled token | `1` toy | 写 paged KV |
-| `dit_step` | 一个 denoise step | `image_context_token_count` toy | non-final 不写 paged KV |
+| `ar_prefill` | prompt/context chunk | `len(pending_tokens)` toy；后续接 chunked prefill | `True` |
+| `ar_decode` | 上一步 sampled token | `1` toy | `True` |
+| `dit_step` | 一个 denoise step | `image_context_token_count` toy | non-final `False`，final `True` |
 
-真实实现里，DiT final image-context commit 必须作为会写 paged KV 的 item，通过 vLLM
-`KVCacheManager.allocate_slots()` 分配 slots。non-final DiT denoise step 只消耗 UAD work
-budget，不伪装成 base `SchedulerOutput.num_scheduled_tokens`。
+真实实现里，DiT final `dit_step(persist=True)` 必须通过 vLLM
+`KVCacheManager.allocate_slots()` 分配 slots 并写 paged KV。non-final
+`dit_step(persist=False)` 只消耗 UAD work budget，不推进 `num_computed_tokens`。
 
 ## 5. Runner
 
@@ -179,12 +206,13 @@ class UADModelOutput:
     request_id: str
     new_engine_tokens: list[UADToken]
     new_materialized_tokens: list[UADToken]
-    num_computed_tokens_delta: int
     phase_update: UADPhaseUpdate | None
     finished: bool
 ```
 
-`UADScheduler.update_from_output()` 负责应用这个 delta。
+`UADScheduler.update_from_output()` 负责应用这个 delta。`num_computed_tokens` 不由
+state machine 直接返回；它由 scheduler 根据对应 `UADScheduleItem.persist` 和
+`num_scheduled_tokens` 推进。
 
 ## 7. HunyuanImage3 MVP
 
@@ -213,7 +241,7 @@ DiT step raw output:
 - AR phase 复用现有 HunyuanImage3 AR model/sampler 逻辑。
 - DiT non-final step 使用 dense scratch K/V，不写 vLLM paged KV。
 - DiT 读取 text/prefix context 时使用 read-only paged-prefix attention。
-- DiT final image-context commit 默认写 vLLM paged KV，支持原生 multiturn。
+- DiT final `dit_step(persist=True)` 默认写 vLLM paged KV，支持原生 multiturn。
 - VAE/artifact decode 只 materialize image artifact，不推进 `num_computed_tokens`。
 
 ## 8. Attention 与 KV
@@ -228,8 +256,8 @@ KV 约束：
 
 - scheduler 负责决定哪些 token 会写 paged KV，并在 forward 前完成 slot allocation。
 - runner 只消费 scheduler output 中的 block/slot metadata。
-- non-final DiT denoise step 不写 paged KV。
-- final image-context commit 必须写 paged KV，避免 multiturn 只能靠外部 artifact。
+- `persist=False` 的 DiT denoise step 不写 paged KV。
+- final `dit_step(persist=True)` 必须写 paged KV，避免 multiturn 只能靠外部 artifact。
 
 ## 9. TODO
 
