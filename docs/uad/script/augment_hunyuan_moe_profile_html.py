@@ -19,6 +19,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--single-expert-csv", required=True)
     parser.add_argument("--active-expert-csv", default=None)
     parser.add_argument("--topk1-single-expert-csv", default=None)
+    parser.add_argument("--topk1-triton-single-expert-csv", default=None)
     parser.add_argument("--backend-sweep-csv", default=None)
     parser.add_argument("--layer-id", type=int, default=15)
     parser.add_argument("--expert-id", type=int, default=0)
@@ -175,12 +176,21 @@ def add_dense_data(report: dict[str, Any], rows: list[dict[str, Any]]) -> None:
     report["single_expert_throughput_series"] = out
 
 
-def add_topk1_data(report: dict[str, Any], rows: list[dict[str, Any]]) -> None:
+def add_topk1_like_data(
+    report: dict[str, Any],
+    rows: list[dict[str, Any]],
+    *,
+    series_key: str,
+    meta_key: str,
+    throughput_key: str,
+    label_prefix: str,
+    total_category: str,
+) -> None:
     rows = numeric_rows(rows)
-    report["topk1_single_expert_series"] = build_series_from_rows(rows)
-    report["topk1_single_expert_meta"] = event_meta_from_rows(rows)
+    report[series_key] = build_series_from_rows(rows)
+    report[meta_key] = event_meta_from_rows(rows)
     by_category: dict[str, dict[int, float]] = {}
-    for series in report["topk1_single_expert_series"]:
+    for series in report[series_key]:
         for point in series["points"]:
             by_category.setdefault(series["category"], {})
             by_category[series["category"]][int(point["tokens"])] = (
@@ -188,8 +198,8 @@ def add_topk1_data(report: dict[str, Any], rows: list[dict[str, Any]]) -> None:
             )
     out = []
     for category, label in {
-        "gemm1_gate_up_activation": "TopK=1 MoE GEMM1 gate/up input tokens/s",
-        "gemm2_down": "TopK=1 MoE GEMM2 down input tokens/s",
+        "gemm1_gate_up_activation": f"{label_prefix} GEMM1 gate/up input tokens/s",
+        "gemm2_down": f"{label_prefix} GEMM2 down input tokens/s",
     }.items():
         out.append(
             {
@@ -204,16 +214,40 @@ def add_topk1_data(report: dict[str, Any], rows: list[dict[str, Any]]) -> None:
         )
     out.append(
         {
-            "label": "TopK=1 MoE end-to-end input tokens/s",
-            "category": "topk1_total",
+            "label": f"{label_prefix} end-to-end input tokens/s",
+            "category": total_category,
             "points": [
                 {"tokens": int(token), "tokens_per_s": int(token) / float(meta["cuda_event_topk1_moe_ms"]) * 1000.0}
-                for token, meta in sorted(report["topk1_single_expert_meta"].items(), key=lambda kv: int(kv[0]))
+                for token, meta in sorted(report[meta_key].items(), key=lambda kv: int(kv[0]))
                 if "cuda_event_topk1_moe_ms" in meta and float(meta["cuda_event_topk1_moe_ms"]) > 0
             ],
         }
     )
-    report["topk1_single_expert_throughput_series"] = out
+    report[throughput_key] = out
+
+
+def add_topk1_data(report: dict[str, Any], rows: list[dict[str, Any]]) -> None:
+    add_topk1_like_data(
+        report,
+        rows,
+        series_key="topk1_single_expert_series",
+        meta_key="topk1_single_expert_meta",
+        throughput_key="topk1_single_expert_throughput_series",
+        label_prefix="TopK=1 MoE",
+        total_category="topk1_total",
+    )
+
+
+def add_topk1_triton_data(report: dict[str, Any], rows: list[dict[str, Any]]) -> None:
+    add_topk1_like_data(
+        report,
+        rows,
+        series_key="topk1_triton_single_expert_series",
+        meta_key="topk1_triton_single_expert_meta",
+        throughput_key="topk1_triton_single_expert_throughput_series",
+        label_prefix="TopK=1 Triton MoE",
+        total_category="topk1_triton_total",
+    )
 
 
 def first_numeric(rows: list[dict[str, Any]], key: str, default: float) -> float:
@@ -417,6 +451,7 @@ svg text { font-family: Arial, sans-serif; }
   <button class="tabBtn" data-tab="denseTab">Single Expert Dense FFN</button>
   <button class="tabBtn" data-tab="activeExpertTab">Active Expert Sweep</button>
   <button class="tabBtn" data-tab="topk1Tab">TopK=1 Same Expert Auto/FI CUTLASS</button>
+  <button class="tabBtn" data-tab="topk1TritonTab">TopK=1 Same Expert Triton</button>
   <button class="tabBtn" data-tab="backendTab">TopK=1 Backend Sweep</button>
 </div>
 
@@ -468,6 +503,17 @@ svg text { font-family: Arial, sans-serif; }
   <div class="layout">
     <div class="panel"><h3>TopK=1 Same Expert Auto/FI CUTLASS Input Token/s</h3><svg id="topk1ThroughputPlot" class="plot"></svg><div id="topk1ThroughputLegend" class="legend inlineLegend"></div></div>
     <div class="panel"><pre id="topk1Details" class="muted"></pre></div>
+  </div>
+</section>
+
+<section id="topk1TritonTab" class="tab">
+  <div class="layout">
+    <div class="panel"><h3>TopK=1 Same Expert Triton Kernel Time</h3><svg id="topk1TritonTimePlot" class="plot"></svg></div>
+    <div class="panel"><button id="topk1TritonAllBtn">All</button> <button id="topk1TritonNoneBtn">None</button> <button id="topk1TritonMainBtn">Main</button><div id="topk1TritonLegend" class="legend"></div></div>
+  </div>
+  <div class="layout">
+    <div class="panel"><h3>TopK=1 Same Expert Triton Input Token/s</h3><svg id="topk1TritonThroughputPlot" class="plot"></svg><div id="topk1TritonThroughputLegend" class="legend inlineLegend"></div></div>
+    <div class="panel"><pre id="topk1TritonDetails" class="muted"></pre></div>
   </div>
 </section>
 
@@ -577,14 +623,17 @@ const denseMainCats = new Set(["dense_gemm1_gate_up","dense_silu","dense_mul","d
 const denseThroughputMainCats = new Set(["dense_gemm1_gate_up","dense_gemm2_down","dense_total"]);
 const topk1MainCats = new Set(["prefix_sum","expert_map_build","dispatch_expand","gemm1_gate_up_activation","gemm2_down","finalize_combine"]);
 const topk1ThroughputMainCats = new Set(["gemm1_gate_up_activation","gemm2_down","topk1_total"]);
+const topk1TritonThroughputMainCats = new Set(["gemm1_gate_up_activation","gemm2_down","topk1_triton_total"]);
 const moeSelected = new Set((report.kernel_series || []).filter(s => moeMainCats.has(s.category)).map(s => s.label));
 const moeTritonSelected = new Set((moeTriton.kernel_series || []).filter(s => moeMainCats.has(s.category)).map(s => s.label));
 const denseSelected = new Set((report.single_expert_series || []).filter(s => denseMainCats.has(s.category)).map(s => s.label));
 const topk1Selected = new Set((report.topk1_single_expert_series || []).filter(s => topk1MainCats.has(s.category)).map(s => s.label));
+const topk1TritonSelected = new Set((report.topk1_triton_single_expert_series || []).filter(s => topk1MainCats.has(s.category)).map(s => s.label));
 const moeThroughputSelected = new Set((report.moe_throughput_series || []).map(s => s.label));
 const moeTritonThroughputSelected = new Set((moeTriton.moe_throughput_series || []).map(s => s.label));
 const denseThroughputSelected = new Set((report.single_expert_throughput_series || []).filter(s => denseThroughputMainCats.has(s.category)).map(s => s.label));
 const topk1ThroughputSelected = new Set((report.topk1_single_expert_throughput_series || []).filter(s => topk1ThroughputMainCats.has(s.category)).map(s => s.label));
+const topk1TritonThroughputSelected = new Set((report.topk1_triton_single_expert_throughput_series || []).filter(s => topk1TritonThroughputMainCats.has(s.category)).map(s => s.label));
 function formatThroughput(v) {
   if (v >= 1e6) return (v/1e6).toFixed(2) + "M";
   if (v >= 1e3) return (v/1e3).toFixed(0) + "k";
@@ -769,6 +818,28 @@ function renderTopk1Details() {
     `Dense FFN end-to-end TFLOPs: ${denseE2eTf.toFixed(1)}\n` +
     `TopK=1 / Dense end-to-end ratio: ${topk1VsDenseE2e ? topk1VsDenseE2e.toFixed(3) : "n/a"}`;
 }
+function renderTopk1TritonDetails() {
+  const meta = (report.topk1_triton_single_expert_meta || {})[selectedToken] || {};
+  const dense = (report.single_expert_meta || {})[selectedToken] || {};
+  const hidden = meta.hidden_size ?? dense.hidden_size ?? 4096;
+  const intermediate = meta.intermediate_size ?? dense.intermediate_size ?? 3072;
+  const ffnFlops = 2 * selectedToken * hidden * intermediate * 3;
+  const denseE2eTf = dense.cuda_event_dense_ffn_ms ? ffnFlops / (dense.cuda_event_dense_ffn_ms / 1000) / 1e12 : 0;
+  const tritonE2eTf = meta.cuda_event_topk1_moe_ms ? ffnFlops / (meta.cuda_event_topk1_moe_ms / 1000) / 1e12 : 0;
+  const tritonVsDenseE2e = denseE2eTf ? tritonE2eTf / denseE2eTf : 0;
+  document.getElementById("topk1TritonDetails").textContent =
+    `same expert: layer ${meta.layer_id ?? "__LAYER_ID__"}, expert ${meta.expert_id ?? "__EXPERT_ID__"}\n` +
+    `backend: triton\n` +
+    `shape: hidden=${hidden}, intermediate=${intermediate}\n` +
+    `top_k=${meta.top_k ?? 1}, rows_for_expert=${meta.rows_for_expert ?? selectedToken}\n` +
+    `TopK=1 Triton MoE event total: ${(meta.cuda_event_topk1_moe_ms || 0).toFixed(4)} ms\n` +
+    `TopK=1 Triton MoE input tokens/s: ${meta.cuda_event_topk1_moe_ms ? (selectedToken / meta.cuda_event_topk1_moe_ms * 1000).toFixed(2) : "n/a"}\n` +
+    `TopK=1 Triton MoE GEMM total TFLOPs: ${(meta.gemm_total_tflops || 0).toFixed(1)}\n` +
+    `TopK=1 Triton MoE end-to-end TFLOPs: ${tritonE2eTf.toFixed(1)}\n` +
+    `Dense FFN event total: ${(dense.cuda_event_dense_ffn_ms || 0).toFixed(4)} ms\n` +
+    `Dense FFN end-to-end TFLOPs: ${denseE2eTf.toFixed(1)}\n` +
+    `Triton MoE / Dense end-to-end ratio: ${tritonVsDenseE2e ? tritonVsDenseE2e.toFixed(3) : "n/a"}`;
+}
 function activeExpertsValues() { return [...new Set(activeSweep.rows.map(r => r.active_experts))].sort((a,b) => a-b); }
 function activeMetricLabel() {
   const metric = activeSweep.metrics.find(m => m.key === activeMetric);
@@ -830,7 +901,9 @@ function renderAllPlots() {
   renderSeriesPlot("denseThroughputPlot", report.single_expert_throughput_series || [], denseThroughputSelected, "tokens_per_s", "input tokens/s", {formatY: formatThroughput});
   renderSeriesPlot("topk1TimePlot", report.topk1_single_expert_series || [], topk1Selected, "ms", "kernel time (ms)");
   renderSeriesPlot("topk1ThroughputPlot", report.topk1_single_expert_throughput_series || [], topk1ThroughputSelected, "tokens_per_s", "input tokens/s", {formatY: formatThroughput});
-  renderBars(); renderTritonBars(); renderDenseDetails(); renderTopk1Details(); renderActiveExpertPlot(); renderBackendSweep();
+  renderSeriesPlot("topk1TritonTimePlot", report.topk1_triton_single_expert_series || [], topk1TritonSelected, "ms", "kernel time (ms)");
+  renderSeriesPlot("topk1TritonThroughputPlot", report.topk1_triton_single_expert_throughput_series || [], topk1TritonThroughputSelected, "tokens_per_s", "input tokens/s", {formatY: formatThroughput});
+  renderBars(); renderTritonBars(); renderDenseDetails(); renderTopk1Details(); renderTopk1TritonDetails(); renderActiveExpertPlot(); renderBackendSweep();
 }
 const activeMetricSelect = document.getElementById("activeMetric");
 activeSweep.metrics.forEach(metric => { const option = document.createElement("option"); option.value = metric.key; option.textContent = metric.label; activeMetricSelect.appendChild(option); });
@@ -844,10 +917,12 @@ renderLegend("moeLegend", report.kernel_series || [], moeSelected, renderAllPlot
 renderLegend("moeTritonLegend", moeTriton.kernel_series || [], moeTritonSelected, renderAllPlots);
 renderLegend("denseLegend", report.single_expert_series || [], denseSelected, renderAllPlots);
 renderLegend("topk1Legend", report.topk1_single_expert_series || [], topk1Selected, renderAllPlots);
+renderLegend("topk1TritonLegend", report.topk1_triton_single_expert_series || [], topk1TritonSelected, renderAllPlots);
 renderLegend("moeThroughputLegend", report.moe_throughput_series || [], moeThroughputSelected, renderAllPlots);
 renderLegend("moeTritonThroughputLegend", moeTriton.moe_throughput_series || [], moeTritonThroughputSelected, renderAllPlots);
 renderLegend("denseThroughputLegend", report.single_expert_throughput_series || [], denseThroughputSelected, renderAllPlots);
 renderLegend("topk1ThroughputLegend", report.topk1_single_expert_throughput_series || [], topk1ThroughputSelected, renderAllPlots);
+renderLegend("topk1TritonThroughputLegend", report.topk1_triton_single_expert_throughput_series || [], topk1TritonThroughputSelected, renderAllPlots);
 document.getElementById("moeAllBtn").onclick = () => { (report.kernel_series || []).forEach(s => moeSelected.add(s.label)); renderLegend("moeLegend", report.kernel_series || [], moeSelected, renderAllPlots); renderAllPlots(); };
 document.getElementById("moeNoneBtn").onclick = () => { moeSelected.clear(); renderLegend("moeLegend", report.kernel_series || [], moeSelected, renderAllPlots); renderAllPlots(); };
 document.getElementById("moeMainBtn").onclick = () => { moeSelected.clear(); (report.kernel_series || []).forEach(s => { if (moeMainCats.has(s.category)) moeSelected.add(s.label); }); renderLegend("moeLegend", report.kernel_series || [], moeSelected, renderAllPlots); renderAllPlots(); };
@@ -860,6 +935,9 @@ document.getElementById("denseMainBtn").onclick = () => { denseSelected.clear();
 document.getElementById("topk1AllBtn").onclick = () => { (report.topk1_single_expert_series || []).forEach(s => topk1Selected.add(s.label)); renderLegend("topk1Legend", report.topk1_single_expert_series || [], topk1Selected, renderAllPlots); renderAllPlots(); };
 document.getElementById("topk1NoneBtn").onclick = () => { topk1Selected.clear(); renderLegend("topk1Legend", report.topk1_single_expert_series || [], topk1Selected, renderAllPlots); renderAllPlots(); };
 document.getElementById("topk1MainBtn").onclick = () => { topk1Selected.clear(); (report.topk1_single_expert_series || []).forEach(s => { if (topk1MainCats.has(s.category)) topk1Selected.add(s.label); }); renderLegend("topk1Legend", report.topk1_single_expert_series || [], topk1Selected, renderAllPlots); renderAllPlots(); };
+document.getElementById("topk1TritonAllBtn").onclick = () => { (report.topk1_triton_single_expert_series || []).forEach(s => topk1TritonSelected.add(s.label)); renderLegend("topk1TritonLegend", report.topk1_triton_single_expert_series || [], topk1TritonSelected, renderAllPlots); renderAllPlots(); };
+document.getElementById("topk1TritonNoneBtn").onclick = () => { topk1TritonSelected.clear(); renderLegend("topk1TritonLegend", report.topk1_triton_single_expert_series || [], topk1TritonSelected, renderAllPlots); renderAllPlots(); };
+document.getElementById("topk1TritonMainBtn").onclick = () => { topk1TritonSelected.clear(); (report.topk1_triton_single_expert_series || []).forEach(s => { if (topk1MainCats.has(s.category)) topk1TritonSelected.add(s.label); }); renderLegend("topk1TritonLegend", report.topk1_triton_single_expert_series || [], topk1TritonSelected, renderAllPlots); renderAllPlots(); };
 document.querySelectorAll(".tabBtn").forEach(btn => btn.onclick = () => {
   document.querySelectorAll(".tabBtn").forEach(b => b.classList.remove("active"));
   document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
@@ -899,6 +977,9 @@ def main() -> None:
     topk1_rows = read_csv(args.topk1_single_expert_csv)
     if topk1_rows:
         add_topk1_data(report, topk1_rows)
+    topk1_triton_rows = read_csv(args.topk1_triton_single_expert_csv)
+    if topk1_triton_rows:
+        add_topk1_triton_data(report, topk1_triton_rows)
     backend_rows = read_csv(args.backend_sweep_csv)
     if backend_rows:
         add_backend_sweep(report, backend_rows, dense_rows)
