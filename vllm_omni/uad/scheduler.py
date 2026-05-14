@@ -72,7 +72,13 @@ class UADShadowScheduler:
             if request.phase == "dit_step":
                 if request.dit_step_index >= request.total_dit_steps:
                     continue
-                num_scheduled_tokens = request.image_context_token_count or len(request.pending_token_ids())
+                is_final_dit_step = request.dit_step_index + 1 >= request.total_dit_steps
+                pending_token_ids = request.pending_token_ids()
+                num_scheduled_tokens = (
+                    len(pending_token_ids)
+                    if is_final_dit_step
+                    else request.image_context_token_count or len(pending_token_ids)
+                )
                 items.append(
                     UADScheduleItem(
                         request_id=request.request_id,
@@ -80,7 +86,7 @@ class UADShadowScheduler:
                         token_ids=[],
                         num_scheduled_tokens=num_scheduled_tokens,
                         num_computed_tokens=request.num_computed_tokens,
-                        persist=False,
+                        persist=is_final_dit_step,
                     )
                 )
                 continue

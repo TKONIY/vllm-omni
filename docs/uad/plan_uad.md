@@ -20,6 +20,7 @@ worktree: ~/code/vllm-omni-uad-code
 | Step 1 | 完成 | `UADScheduleItem` / `UADSchedulerOutput` |
 | Step 2 | 完成 | HunyuanImage3 toy AR -> DiT phase switch |
 | Step 3 | 完成 | runner 消费完整 scheduler output；state update 移到 scheduler `update_from_output()` |
+| Step 5 foundation | 完成 | toy final `dit_step(persist=True)` 推进 pending engine context |
 
 下一步：Step 4 接真实 HunyuanImage3 DiT 单请求路径。
 
@@ -110,7 +111,9 @@ loader、TP、quant 和原 model executor 约定。
 - `HunyuanImage3UADStateMachine` 识别 `<img_ratio_*>`。
 - ratio token 触发 `phase="dit_step"`。
 - toy image context tokens 进入 `engine_tokens`，不进入 `materialized_tokens`。
-- `dit_step` item 是 compute-only fake step，只推进 `dit_step_index`。
+- non-final toy `dit_step(persist=False)` 只推进 `dit_step_index`。
+- final toy `dit_step(persist=True)` 推进所有 pending engine tokens 到
+  `num_computed_tokens`，然后回到 `ar_decode`。
 - request state 更新现在在 scheduler `update_from_output()` 中完成。
 
 验证点：
@@ -166,9 +169,10 @@ multiturn。
 - `UADScheduleItem` 明确定义 `persist`：`True` 表示本 item 成功后写 reusable context/KV
   并推进 `num_computed_tokens`；`False` 表示 transient compute。
 - scheduler 将 non-final `dit_step` 标成 `persist=False`，final `dit_step` 标成
-  `persist=True`，并在 forward 前用 vLLM `KVCacheManager` 分配 image tokens 的 slots。
-- runner 根据 HunyuanImage3 image grid 生成 image context embeddings / positions，并写入
-  paged KV。
+  `persist=True`。
+- toy runner 先 mock final persist 完成；真实 runner 后续根据 HunyuanImage3 image grid
+  生成 image context embeddings / positions，并写入 paged KV。
+- 真实路径需要在 forward 前用 vLLM `KVCacheManager` 分配 image tokens 的 slots。
 - scheduler 根据 final `dit_step(persist=True)` 推进 `num_computed_tokens` 到 image context
   之后。
 - VAE/artifact decode 仍不进入 scheduler token budget。
@@ -177,7 +181,7 @@ multiturn。
 
 - final `dit_step(persist=True)` 后 `num_computed_tokens` 覆盖 image context tokens。
 - 下一轮 text turn 可以接在同一条 `engine_tokens` 后继续调度。
-- block table / slot mapping 与 vLLM paged KV 状态一致，无 block 泄漏。
+- 当前 toy 验证不覆盖 block table / slot mapping；真实 vLLM KV 接入后必须验证无 block 泄漏。
 
 ## 8. Step 6：Paged-prefix attention + dense chunk attention
 

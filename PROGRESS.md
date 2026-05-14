@@ -198,6 +198,25 @@ Validation:
 - Passed: `git diff --check -- vllm_omni/uad tests/uad docs/uad/design_uad.md docs/uad/plan_uad.md`.
 - Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py -q`.
 
+## Step 5 Foundation: Final DiT Persist
+
+Status: completed.
+
+Completed modifications:
+
+- Updated the toy scheduler so non-final `dit_step` items use `persist=False`, while the final `dit_step` uses `persist=True`.
+- Made the final toy DiT step persist all pending engine tokens, including the sampled ratio token and toy image context tokens.
+- Updated HunyuanImage3 toy state-machine behavior so final DiT returns the request to `ar_decode` and clears `pending_image_context_commit`.
+- Added Step 5 tests for final-DiT scheduling, `num_computed_tokens` advancement, and a toy next-turn AR decode after image context persistence.
+- Updated `docs/uad/design_uad.md` and `docs/uad/plan_uad.md` to describe the toy final-persist behavior and keep real vLLM KV slot allocation as later work.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
+- Passed: `git diff --check -- PROGRESS.md vllm_omni/uad tests/uad docs/uad/design_uad.md docs/uad/plan_uad.md`.
+- Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step5_persist.py -q`.
+
 ## Plan Future Steps Detail
 
 Status: completed.

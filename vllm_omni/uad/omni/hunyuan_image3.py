@@ -299,12 +299,13 @@ class HunyuanImage3UADStateMachine:
             raise ValueError(f"request {request.request_id} entered dit_step without total_dit_steps")
 
         next_step_index = min(request.dit_step_index + 1, request.total_dit_steps)
+        is_final_step = next_step_index >= request.total_dit_steps
         return UADModelOutput(
             request_id=request.request_id,
             phase_update=UADPhaseUpdate(
-                phase="dit_step",
+                phase="ar_decode" if is_final_step else "dit_step",
                 dit_step_index=next_step_index,
-                pending_image_context_commit=True,
+                pending_image_context_commit=not is_final_step,
             ),
             finished=False,
         )

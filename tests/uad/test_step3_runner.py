@@ -49,7 +49,7 @@ class RecordingStateMachine:
         )
 
 
-def test_step3_runner_executes_fake_dit_steps_without_committing_tokens() -> None:
+def test_step3_runner_executes_fake_dit_steps_and_persists_final_step() -> None:
     engine = _build_engine()
     request = engine.add_request("req-ratio", [49])
 
@@ -72,13 +72,15 @@ def test_step3_runner_executes_fake_dit_steps_without_committing_tokens() -> Non
     assert final_dit.request_ids == ["req-ratio"]
     assert request.dit_step_index == 2
     assert request.total_dit_steps == 2
-    assert request.num_computed_tokens == 1
+    assert request.num_computed_tokens == len(request.engine_tokens)
     assert request.engine_tokens == engine_tokens
+    assert request.phase == "ar_decode"
+    assert request.pending_image_context_commit is False
+    assert request.pending_token_ids() == []
 
     no_work = engine.step()
     assert no_work.outputs == []
-    assert request.phase == "dit_step"
-    assert request.pending_token_ids()
+    assert request.phase == "ar_decode"
 
 
 def test_step3_runner_can_process_ar_and_dit_items_in_one_tick() -> None:

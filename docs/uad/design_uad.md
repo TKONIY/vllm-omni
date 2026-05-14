@@ -232,7 +232,8 @@ AR output token:
 DiT step raw output:
   state_machine.update_request_state(...)
   dit_step_index += 1
-  no engine token commit
+  non-final step: persist=False, no engine token commit
+  final step: persist=True, pending image context becomes computed
   no materialized artifact
 ```
 
