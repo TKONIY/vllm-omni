@@ -2,33 +2,24 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from vllm_omni.uad.outputs import UADModelOutput
-from vllm_omni.uad.request import UADRequestState, UADToken
+from vllm_omni.uad.outputs import UADModelOutput, UADRunnerOutput
+from vllm_omni.uad.request import UADRequestState
 
 
 class UADModelStateMachine(Protocol):
-    """Model-specific phase and output-ledger policy used by `UADRunner`.
+    """Model-specific phase and output-ledger policy used by scheduler update.
 
-    The runner owns execution mechanics. This protocol owns model-defined
-    interpretation of sampled AR tokens, phase transitions, and per-phase
-    request ledger updates.
+    The runner owns execution mechanics and returns semantic-free raw outputs.
+    The scheduler calls this protocol from `update_from_output()` to interpret
+    raw outputs, compute request-state deltas, and keep model-private phase
+    rules out of the generic runner.
     """
 
-    def on_ar_token_sampled(
+    def update_request_state(
         self,
         *,
         request: UADRequestState,
-        sampled_token: UADToken,
-        num_scheduled_tokens: int,
+        runner_output: UADRunnerOutput,
     ) -> UADModelOutput:
-        """Convert one sampled AR token into a request-state update."""
-        ...
-
-    def on_dit_step_completed(
-        self,
-        *,
-        request: UADRequestState,
-        num_scheduled_tokens: int,
-    ) -> UADModelOutput:
-        """Convert one completed DiT scheduler item into a request-state update."""
+        """Convert one raw runner output into a request-state delta."""
         ...

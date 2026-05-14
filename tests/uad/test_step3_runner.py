@@ -7,8 +7,8 @@ from vllm_omni.model_executor.models.hunyuan_image3.hunyuan_image3_uad import (
 )
 from vllm_omni.uad.engine import UADEngine
 from vllm_omni.uad.omni.hunyuan_image3 import HunyuanImage3UADStateConfig, HunyuanImage3UADStateMachine
-from vllm_omni.uad.outputs import UADModelOutput
-from vllm_omni.uad.request import UADRequestState, UADToken
+from vllm_omni.uad.outputs import UADModelOutput, UADRunnerOutput
+from vllm_omni.uad.request import UADRequestState
 from vllm_omni.uad.runner import UADRunner
 
 pytestmark = pytest.mark.cpu
@@ -25,36 +25,29 @@ def _build_engine() -> UADEngine:
     )
     model = HunyuanImage3UADForConditionalGeneration(vocab_size=300)
     state_machine = HunyuanImage3UADStateMachine(config=state_config)
-    return UADEngine(runner=UADRunner(model=model, state_machine=state_machine))
+    return UADEngine(runner=UADRunner(model=model), state_machine=state_machine)
 
 
 class RecordingStateMachine:
     def __init__(self) -> None:
         self.sampled_tokens: list[int] = []
 
-    def on_ar_token_sampled(
+    def update_request_state(
         self,
         *,
         request: UADRequestState,
-        sampled_token: UADToken,
-        num_scheduled_tokens: int,
+        runner_output: UADRunnerOutput,
     ) -> UADModelOutput:
+        assert runner_output.sampled_token is not None
+        sampled_token = runner_output.sampled_token
         self.sampled_tokens.append(sampled_token.token_id)
         return UADModelOutput(
             request_id=request.request_id,
             new_engine_tokens=[sampled_token],
             new_materialized_tokens=[sampled_token],
-            num_computed_tokens_delta=num_scheduled_tokens,
+            num_computed_tokens_delta=runner_output.num_scheduled_tokens,
             finished=False,
         )
-
-    def on_dit_step_completed(
-        self,
-        *,
-        request: UADRequestState,
-        num_scheduled_tokens: int,
-    ) -> UADModelOutput:
-        return UADModelOutput(request_id=request.request_id, finished=False)
 
 
 def test_step3_runner_executes_fake_dit_steps_without_committing_tokens() -> None:
@@ -105,10 +98,10 @@ def test_step3_runner_can_process_ar_and_dit_items_in_one_tick() -> None:
     assert ar_request.num_computed_tokens == 1
 
 
-def test_step3_runner_delegates_ar_token_semantics_to_state_machine() -> None:
+def test_step3_scheduler_update_delegates_runner_outputs_to_state_machine() -> None:
     model = HunyuanImage3UADForConditionalGeneration(vocab_size=300)
     state_machine = RecordingStateMachine()
-    engine = UADEngine(runner=UADRunner(model=model, state_machine=state_machine))
+    engine = UADEngine(runner=UADRunner(model=model), state_machine=state_machine)
 
     request = engine.add_request("req-custom", [49])
     output = engine.step()
@@ -117,3 +110,16 @@ def test_step3_runner_delegates_ar_token_semantics_to_state_machine() -> None:
     assert [token.token_id for token in output.outputs[0].new_engine_tokens] == [50]
     assert [token.token_id for token in request.materialized_tokens] == [50]
     assert request.phase == "ar_decode"
+
+
+def test_step3_runner_has_no_model_state_machine() -> None:
+    runner = UADRunner()
+
+    assert not hasattr(runner, "state_machine")
+
+
+def test_step3_engine_delegates_state_updates_to_scheduler() -> None:
+    engine = _build_engine()
+
+    assert hasattr(engine.scheduler, "update_from_output")
+    assert not hasattr(engine, "_process_runner_output")

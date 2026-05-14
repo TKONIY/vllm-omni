@@ -5,71 +5,83 @@ import torch
 from vllm_omni.model_executor.models.hunyuan_image3.hunyuan_image3_uad import (
     HunyuanImage3UADForConditionalGeneration,
 )
-from vllm_omni.uad.omni.hunyuan_image3 import HunyuanImage3UADStateConfig, HunyuanImage3UADStateMachine
-from vllm_omni.uad.outputs import UADModelOutput, UADStepOutput
-from vllm_omni.uad.request import UADRequestState, UADToken
+from vllm_omni.uad.outputs import UADRunnerOutput, UADRunnerStepOutput
+from vllm_omni.uad.request import UADToken
 from vllm_omni.uad.scheduler import UADScheduleItem, UADSchedulerOutput
-from vllm_omni.uad.state_machine import UADModelStateMachine
 
 
 class UADRunner:
     """Runner-first UAD execution facade.
 
     Step 3 keeps execution toy-sized, but centralizes item execution in the
-    runner instead of a separate model adapter. Later steps replace these toy
-    item paths with batched input building, paged metadata, and real AR/DiT
-    module calls.
+    runner instead of a separate model adapter. The runner consumes the whole
+    scheduler output for a tick, groups work by executable phase, and returns
+    raw model results. Request state transitions remain outside the runner.
     """
 
     def __init__(
         self,
         model: HunyuanImage3UADForConditionalGeneration | None = None,
-        state_machine: UADModelStateMachine | None = None,
-        state_config: HunyuanImage3UADStateConfig | None = None,
     ) -> None:
         self.model = model or HunyuanImage3UADForConditionalGeneration()
-        if state_machine is not None and state_config is not None:
-            raise ValueError("pass either state_machine or state_config, not both")
-        self.state_machine = state_machine or HunyuanImage3UADStateMachine(
-            config=state_config or HunyuanImage3UADStateConfig()
-        )
 
     def execute_model(
         self,
         scheduler_output: UADSchedulerOutput,
-        requests: dict[str, UADRequestState],
-    ) -> UADStepOutput:
-        outputs: list[UADModelOutput] = []
-        for item in scheduler_output.scheduled_items:
-            request = requests[item.request_id]
+    ) -> UADRunnerStepOutput:
+        outputs_by_index: list[UADRunnerOutput | None] = [None] * len(scheduler_output.scheduled_items)
+        ar_items: list[tuple[int, UADScheduleItem]] = []
+        dit_items: list[tuple[int, UADScheduleItem]] = []
+
+        for index, item in enumerate(scheduler_output.scheduled_items):
             if item.phase in ("ar_prefill", "ar_decode"):
-                outputs.append(self._execute_ar_item(item, request))
+                ar_items.append((index, item))
             elif item.phase == "dit_step":
-                outputs.append(self._execute_dit_item(item, request))
+                dit_items.append((index, item))
             else:
                 raise NotImplementedError(f"unsupported UAD phase: {item.phase}")
-        return UADStepOutput(outputs=outputs)
 
-    def _execute_ar_item(
-        self,
-        item: UADScheduleItem,
-        request: UADRequestState,
-    ) -> UADModelOutput:
-        input_ids = torch.tensor(item.token_ids, dtype=torch.long)
-        model_output = self.model(input_ids=input_ids, request_id=request.request_id, phase=item.phase)
-        sampled_token = UADToken(modality="text", token_id=model_output.next_token_id)
-        return self.state_machine.on_ar_token_sampled(
-            request=request,
-            sampled_token=sampled_token,
-            num_scheduled_tokens=item.num_scheduled_tokens,
-        )
+        for index, output in self._execute_ar_items(ar_items):
+            outputs_by_index[index] = output
+        for index, output in self._execute_dit_items(dit_items):
+            outputs_by_index[index] = output
 
-    def _execute_dit_item(
+        return UADRunnerStepOutput(outputs=[output for output in outputs_by_index if output is not None])
+
+    def _execute_ar_items(
         self,
-        item: UADScheduleItem,
-        request: UADRequestState,
-    ) -> UADModelOutput:
-        return self.state_machine.on_dit_step_completed(
-            request=request,
-            num_scheduled_tokens=item.num_scheduled_tokens,
-        )
+        indexed_items: list[tuple[int, UADScheduleItem]],
+    ) -> list[tuple[int, UADRunnerOutput]]:
+        outputs: list[tuple[int, UADRunnerOutput]] = []
+        for index, item in indexed_items:
+            input_ids = torch.tensor(item.token_ids, dtype=torch.long)
+            model_output = self.model(input_ids=input_ids, request_id=item.request_id, phase=item.phase)
+            sampled_token = UADToken(modality="text", token_id=model_output.next_token_id)
+            outputs.append(
+                (
+                    index,
+                    UADRunnerOutput(
+                        request_id=item.request_id,
+                        phase=item.phase,
+                        num_scheduled_tokens=item.num_scheduled_tokens,
+                        sampled_token=sampled_token,
+                    ),
+                )
+            )
+        return outputs
+
+    def _execute_dit_items(
+        self,
+        indexed_items: list[tuple[int, UADScheduleItem]],
+    ) -> list[tuple[int, UADRunnerOutput]]:
+        return [
+            (
+                index,
+                UADRunnerOutput(
+                    request_id=item.request_id,
+                    phase=item.phase,
+                    num_scheduled_tokens=item.num_scheduled_tokens,
+                ),
+            )
+            for index, item in indexed_items
+        ]

@@ -8,7 +8,6 @@ from vllm_omni.model_executor.models.hunyuan_image3.hunyuan_image3_uad import (
 from vllm_omni.uad.engine import UADEngine
 from vllm_omni.uad.omni.hunyuan_image3 import HunyuanImage3UADStateConfig, HunyuanImage3UADStateMachine
 from vllm_omni.uad.runner import UADRunner
-from vllm_omni.uad.scheduler import UADToyScheduler
 
 pytestmark = pytest.mark.cpu
 
@@ -16,7 +15,7 @@ pytestmark = pytest.mark.cpu
 def _build_engine(state_config: HunyuanImage3UADStateConfig) -> UADEngine:
     model = HunyuanImage3UADForConditionalGeneration(vocab_size=300)
     state_machine = HunyuanImage3UADStateMachine(config=state_config)
-    return UADEngine(runner=UADRunner(model=model, state_machine=state_machine))
+    return UADEngine(runner=UADRunner(model=model), state_machine=state_machine)
 
 
 def test_step2_ratio_token_switches_request_to_dit_phase() -> None:
@@ -60,7 +59,7 @@ def test_step2_scheduler_marks_dit_phase_as_dit_work_not_ar_decode() -> None:
     request = engine.add_request("req-ratio", [49])
     engine.step()
 
-    scheduler_output = UADToyScheduler().schedule([request])
+    scheduler_output = engine.scheduler.schedule()
 
     assert request.phase == "dit_step"
     assert request.pending_token_ids()

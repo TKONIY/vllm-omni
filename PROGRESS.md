@@ -159,3 +159,54 @@ Validation:
 - Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
 - Passed: `git diff --check -- vllm_omni/uad tests/uad docs/uad/design_uad.md docs/uad/plan_uad.md`.
 - Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py -q`.
+
+## Scheduler / Runner / State Machine Separation
+
+Status: completed.
+
+Completed modifications:
+
+- Changed `UADRunner` to consume a full `UADSchedulerOutput`, group work by phase, and return semantic-free `UADRunnerOutput` items.
+- Moved model-specific state-machine invocation out of `UADRunner` and into `UADEngine` output processing.
+- Kept `HunyuanImage3UADStateMachine` responsible only for turning runner raw outputs into request state deltas.
+- Added tests that the runner has no state-machine ownership and that engine/output processing delegates sampled-token semantics to the state machine.
+- Updated design and plan docs to make the scheduler -> runner -> output processor/state machine flow explicit for continuous batching.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
+- Passed: `git diff --check -- vllm_omni/uad tests/uad docs/uad/design_uad.md docs/uad/plan_uad.md`.
+- Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py -q`.
+
+## Scheduler-Owned State Update
+
+Status: completed.
+
+Completed modifications:
+
+- Moved request-state application out of `UADEngine` and into `UADToyScheduler.update_from_output()`.
+- Made `UADToyScheduler` own requests and the model-specific state machine, matching the vLLM-style scheduler/update path.
+- Kept `UADRunner.execute_model()` limited to phase-grouped raw output generation.
+- Updated tests so scheduler-driven `update_from_output()` is the only state-update path.
+- Simplified `docs/uad/design_uad.md` and `docs/uad/plan_uad.md` to the new `schedule -> runner -> scheduler.update_from_output -> output` shape.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
+- Passed: `git diff --check -- vllm_omni/uad tests/uad docs/uad/design_uad.md docs/uad/plan_uad.md`.
+- Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py -q`.
+
+## Plan Future Steps Detail
+
+Status: completed.
+
+Completed modifications:
+
+- Updated `docs/uad/plan_uad.md` so Steps 5-9 each keep target, scope, and validation sections.
+- Marked Step 3 as completed in the current status table.
+
+Validation:
+
+- Passed: `git diff --check -- PROGRESS.md docs/uad/plan_uad.md`.

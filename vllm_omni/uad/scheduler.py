@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from vllm_omni.uad.omni.hunyuan_image3 import HunyuanImage3UADStateMachine
+from vllm_omni.uad.outputs import UADModelOutput, UADRunnerOutput, UADRunnerStepOutput, UADStepOutput
 from vllm_omni.uad.request import UADPhase, UADRequestState
+from vllm_omni.uad.state_machine import UADModelStateMachine
 
 
 @dataclass(frozen=True)
@@ -82,9 +85,55 @@ class UADShadowScheduler:
 class UADToyScheduler(UADShadowScheduler):
     """Token-budget-free scheduler used only for UAD toy smoke tests."""
 
+    def __init__(
+        self,
+        state_machine: UADModelStateMachine | None = None,
+    ) -> None:
+        self.state_machine = state_machine or HunyuanImage3UADStateMachine()
+        self.requests: dict[str, UADRequestState] = {}
+
+    def add_request(
+        self,
+        request_id: str,
+        prompt_token_ids: list[int],
+    ) -> UADRequestState:
+        if request_id in self.requests:
+            raise ValueError(f"duplicate UAD request_id: {request_id}")
+        request = UADRequestState.from_prompt_token_ids(request_id, prompt_token_ids)
+        self.requests[request_id] = request
+        return request
+
+    def get_request(self, request_id: str) -> UADRequestState:
+        return self.requests[request_id]
+
     def schedule(
         self,
-        requests: list[UADRequestState],
         base_output: Any | None = None,
     ) -> UADSchedulerOutput:
-        return self.build_shadow_output(requests, base_output=base_output)
+        return self.build_shadow_output(list(self.requests.values()), base_output=base_output)
+
+    def update_from_output(
+        self,
+        scheduler_output: UADSchedulerOutput,
+        runner_output: UADRunnerStepOutput,
+    ) -> UADStepOutput:
+        outputs = [self._process_runner_output(output) for output in runner_output.outputs]
+        for output in outputs:
+            self._apply_model_output(output)
+        return UADStepOutput(outputs=outputs)
+
+    def _process_runner_output(self, output: UADRunnerOutput) -> UADModelOutput:
+        request = self.requests[output.request_id]
+        return self.state_machine.update_request_state(
+            request=request,
+            runner_output=output,
+        )
+
+    def _apply_model_output(self, output: UADModelOutput) -> None:
+        request = self.requests[output.request_id]
+        request.advance_computed_tokens(output.num_computed_tokens_delta)
+        request.append_engine_tokens(output.new_engine_tokens)
+        request.append_materialized_tokens(output.new_materialized_tokens)
+        if output.phase_update is not None:
+            request.apply_phase_update(output.phase_update)
+        request.finished = output.finished

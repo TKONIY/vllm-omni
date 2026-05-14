@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from vllm_omni.uad.outputs import UADModelOutput, UADStepOutput
+from vllm_omni.uad.outputs import UADStepOutput
 from vllm_omni.uad.request import UADRequestState
 from vllm_omni.uad.runner import UADRunner
 from vllm_omni.uad.scheduler import UADToyScheduler
+from vllm_omni.uad.state_machine import UADModelStateMachine
 
 
 class UADEngine:
@@ -13,36 +14,27 @@ class UADEngine:
         self,
         scheduler: UADToyScheduler | None = None,
         runner: UADRunner | None = None,
+        state_machine: UADModelStateMachine | None = None,
     ) -> None:
-        self.scheduler = scheduler or UADToyScheduler()
+        if scheduler is not None and state_machine is not None:
+            raise ValueError("pass either scheduler or state_machine, not both")
+        self.scheduler = scheduler or UADToyScheduler(state_machine=state_machine)
         self.runner = runner or UADRunner()
-        self.requests: dict[str, UADRequestState] = {}
+
+    @property
+    def requests(self) -> dict[str, UADRequestState]:
+        return self.scheduler.requests
 
     def add_request(self, request_id: str, prompt_token_ids: list[int]) -> UADRequestState:
-        if request_id in self.requests:
-            raise ValueError(f"duplicate UAD request_id: {request_id}")
-        request = UADRequestState.from_prompt_token_ids(request_id, prompt_token_ids)
-        self.requests[request_id] = request
-        return request
+        return self.scheduler.add_request(request_id, prompt_token_ids)
 
     def step(self) -> UADStepOutput:
-        scheduler_output = self.scheduler.schedule(list(self.requests.values()))
-        step_output = self.runner.execute_model(scheduler_output, self.requests)
-        for output in step_output.outputs:
-            self._apply_model_output(output)
-        return step_output
+        scheduler_output = self.scheduler.schedule()
+        runner_output = self.runner.execute_model(scheduler_output)
+        return self.scheduler.update_from_output(scheduler_output, runner_output)
 
     def get_request(self, request_id: str) -> UADRequestState:
-        return self.requests[request_id]
-
-    def _apply_model_output(self, output: UADModelOutput) -> None:
-        request = self.requests[output.request_id]
-        request.advance_computed_tokens(output.num_computed_tokens_delta)
-        request.append_engine_tokens(output.new_engine_tokens)
-        request.append_materialized_tokens(output.new_materialized_tokens)
-        if output.phase_update is not None:
-            request.apply_phase_update(output.phase_update)
-        request.finished = output.finished
+        return self.scheduler.get_request(request_id)
 
 
 class AsyncUADEngine:

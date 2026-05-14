@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from vllm_omni.uad.outputs import UADModelOutput
+from vllm_omni.uad.outputs import UADModelOutput, UADRunnerOutput
 from vllm_omni.uad.request import UADPhaseUpdate, UADRequestState, UADToken
 
 
@@ -202,9 +202,9 @@ class HunyuanImage3UADStateMachine:
     """HunyuanImage3-specific UAD phase and output-ledger policy.
 
     `UADRunner` should not know that HunyuanImage3 uses `<img_ratio_*>` as
-    its AR-to-DiT boundary. The runner only passes sampled tokens here; this
-    class decides whether the token is visible text, engine-only structure,
-    or a phase switch into DiT.
+    its AR-to-DiT boundary. The scheduler calls this policy from
+    `update_from_output()`, and this class decides whether a raw runner output
+    becomes visible text, engine-only structure, or a phase switch into DiT.
     """
 
     config: HunyuanImage3UADStateConfig = field(default_factory=HunyuanImage3UADStateConfig)
@@ -228,19 +228,41 @@ class HunyuanImage3UADStateMachine:
             )
         )
 
-    def on_ar_token_sampled(
+    def update_request_state(
+        self,
+        *,
+        request: UADRequestState,
+        runner_output: UADRunnerOutput,
+    ) -> UADModelOutput:
+        """Apply HunyuanImage3 semantics to one raw runner output.
+
+        This is called from scheduler `update_from_output()`, mirroring vLLM's
+        request-state update path. The generic runner has already executed the
+        item and does not know whether a token is a ratio/control token.
+        """
+        if runner_output.phase in ("ar_prefill", "ar_decode"):
+            if runner_output.sampled_token is None:
+                raise ValueError(f"AR runner output for {request.request_id} did not include sampled_token")
+            return self._update_from_ar_token(
+                request=request,
+                sampled_token=runner_output.sampled_token,
+                num_scheduled_tokens=runner_output.num_scheduled_tokens,
+            )
+        if runner_output.phase == "dit_step":
+            return self._update_from_dit_step(
+                request=request,
+                num_scheduled_tokens=runner_output.num_scheduled_tokens,
+            )
+        raise NotImplementedError(f"unsupported HunyuanImage3 UAD phase: {runner_output.phase}")
+
+    def _update_from_ar_token(
         self,
         *,
         request: UADRequestState,
         sampled_token: UADToken,
         num_scheduled_tokens: int,
     ) -> UADModelOutput:
-        """Apply HunyuanImage3 AR-token semantics after runner sampling.
-
-        Ratio-token detection, engine-only filtering, and toy image-context
-        insertion are all HunyuanImage3 model policy. The generic runner only
-        executes the AR item and delegates the sampled token here.
-        """
+        """Apply HunyuanImage3 AR-token semantics after runner sampling."""
         ratio_index = self.config.ratio_index(sampled_token.token_id)
         if ratio_index is not None:
             image_context_tokens = self.config.build_toy_image_context_tokens()
@@ -272,7 +294,7 @@ class HunyuanImage3UADStateMachine:
             finished=False,
         )
 
-    def on_dit_step_completed(
+    def _update_from_dit_step(
         self,
         *,
         request: UADRequestState,
