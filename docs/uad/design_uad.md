@@ -28,9 +28,9 @@
 | `SchedulerOutput` | `UADSchedulerOutput` |
 | `GPUModelRunner.execute_model(scheduler_output)` | `UADRunner.execute_model(uad_scheduler_output)` |
 | 具体 `nn.Module` model | `HunyuanImage3UADModel.forward(uad_batch_inputs)` |
-| `ModelRunnerOutput.sampled_token_ids` | `UADRunnerOutput.sampled_token` / denoise raw output |
+| `ModelRunnerOutput.sampled_token_ids` | `UADModelRunnerOutput.outputs[*].sampled_token` / denoise raw output |
 | `Scheduler.update_from_output(...)` | `UADScheduler.update_from_output(...)` |
-| `EngineCoreOutput(new_token_ids=...)` | `UADStepOutput(new_engine_tokens, new_materialized_tokens, ...)` |
+| `EngineCoreOutput(new_token_ids=...)` | `UADEngineCoreOutputs(outputs=[UADStateUpdate(...)])` |
 | serving `OutputProcessor` / detokenizer | UAD materialized text/artifact output processor |
 
 主循环必须保持这个形状：
@@ -40,7 +40,7 @@ scheduler.schedule()
   -> runner.execute_model(scheduler_output)
   -> scheduler.update_from_output(scheduler_output, runner_output)
        -> state_machine.update_request_state(...)
-       -> UADStepOutput / EngineCoreOutput
+       -> UADEngineCoreOutputs / EngineCoreOutput
   -> serving/output_processor materialize
 ```
 
@@ -92,7 +92,7 @@ UAD scheduler 负责：
 - 对需要写入 paged KV 的 item，复用 vLLM `KVCacheManager` 分配 blocks，并把 block ids
   放进 scheduler output。
 - 在 `update_from_output()` 中消费 runner raw output，调用 model-specific state machine，
-  更新 request state，并产出 `UADStepOutput` / 后续 `EngineCoreOutput`。
+  更新 request state，并产出 `UADEngineCoreOutputs` / 后续 `EngineCoreOutput`。
 
 当前 toy 结构：
 
@@ -112,8 +112,8 @@ class UADScheduler:
     def update_from_output(
         self,
         scheduler_output: UADSchedulerOutput,
-        runner_output: UADRunnerStepOutput,
-    ) -> UADStepOutput: ...
+        runner_output: UADModelRunnerOutput,
+    ) -> UADEngineCoreOutputs: ...
 ```
 
 字段语义：
@@ -161,7 +161,7 @@ layer-wise batch，再调用 `HunyuanImage3UADModel`：
 
 ```python
 class UADRunner:
-    def execute_model(self, scheduler_output: UADSchedulerOutput) -> UADRunnerStepOutput: ...
+    def execute_model(self, scheduler_output: UADSchedulerOutput) -> UADModelRunnerOutput: ...
 ```
 
 runner 可以：
@@ -170,7 +170,7 @@ runner 可以：
 - 为 attention 构造 phase / mask / position metadata。
 - 为 DiT 构造 latents / timesteps / image-shape metadata。
 - 让 AR + DiT hidden tokens 进入同一个 FFN / MoE batch。
-- 保持 item 顺序可还原，并返回 raw `UADRunnerOutput`。
+- 保持 item 顺序可还原，并返回 raw `UADModelRunnerOutput`。
 
 runner 不可以：
 
@@ -241,8 +241,8 @@ class UADModelStateMachine:
     def update_request_state(
         self,
         request: UADRequestState,
-        runner_output: UADRunnerOutput,
-    ) -> UADModelOutput: ...
+        runner_output: UADModelRunnerItemOutput,
+    ) -> UADStateUpdate: ...
 ```
 
 通用基类在 `vllm_omni/uad/state/base.py`。具体模型只继承该基类并实现
@@ -262,7 +262,7 @@ state machine 返回的是 request state delta：
 
 ```python
 @dataclass
-class UADModelOutput:
+class UADStateUpdate:
     request_id: str
     new_engine_tokens: list[UADToken]
     new_materialized_tokens: list[UADToken]
@@ -339,6 +339,6 @@ SP：
 
 真实 serving output：
 
-- `UADStepOutput` 对齐 `EngineCoreOutput`。
+- `UADEngineCoreOutputs` 对齐 `EngineCoreOutputs` / 后续 `EngineCoreOutput`。
 - text streaming 与 image artifact materialization 分离。
 - VAE/artifact decode 作为 serving output epilogue，而不是 scheduler phase。

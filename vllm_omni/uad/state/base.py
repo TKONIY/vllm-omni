@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from vllm_omni.uad.outputs import UADModelOutput, UADRunnerOutput
+from vllm_omni.uad.outputs import UADModelRunnerItemOutput, UADStateUpdate
 from vllm_omni.uad.request import UADRequestState
 
 
@@ -20,7 +20,7 @@ class UADModelStateMachine(ABC):
         self,
         *,
         request: UADRequestState,
-        runner_output: UADRunnerOutput,
-    ) -> UADModelOutput:
+        runner_output: UADModelRunnerItemOutput,
+    ) -> UADStateUpdate:
         """Convert one raw runner output into a request-state delta."""
         raise NotImplementedError

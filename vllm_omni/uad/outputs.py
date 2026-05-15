@@ -6,7 +6,7 @@ from vllm_omni.uad.request import UADPhase, UADPhaseUpdate, UADToken
 
 
 @dataclass
-class UADRunnerOutput:
+class UADModelRunnerItemOutput:
     """Raw per-item result from runner execution.
 
     This object is intentionally model-semantic-free. For AR phases it carries
@@ -22,8 +22,14 @@ class UADRunnerOutput:
 
 
 @dataclass
-class UADRunnerStepOutput:
-    outputs: list[UADRunnerOutput] = field(default_factory=list)
+class UADModelRunnerOutput:
+    """Batch output from `UADRunner.execute_model()`.
+
+    This mirrors vLLM's `ModelRunnerOutput` layer: it is the raw runner result
+    for one scheduler batch, before scheduler/state-machine request updates.
+    """
+
+    outputs: list[UADModelRunnerItemOutput] = field(default_factory=list)
 
     @property
     def request_ids(self) -> list[str]:
@@ -31,7 +37,9 @@ class UADRunnerStepOutput:
 
 
 @dataclass
-class UADModelOutput:
+class UADStateUpdate:
+    """Request-state delta produced by a model-specific state machine."""
+
     request_id: str
     new_engine_tokens: list[UADToken] = field(default_factory=list)
     new_materialized_tokens: list[UADToken] = field(default_factory=list)
@@ -40,8 +48,15 @@ class UADModelOutput:
 
 
 @dataclass
-class UADStepOutput:
-    outputs: list[UADModelOutput] = field(default_factory=list)
+class UADEngineCoreOutputs:
+    """UAD engine-core batch output after scheduler state update.
+
+    This mirrors vLLM's `EngineCoreOutputs` layer. The current toy UAD engine
+    carries `UADStateUpdate` objects directly; serving/output-processor mapping
+    to user-facing request outputs is still a later step.
+    """
+
+    outputs: list[UADStateUpdate] = field(default_factory=list)
 
     @property
     def request_ids(self) -> list[str]:

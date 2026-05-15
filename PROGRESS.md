@@ -56,7 +56,7 @@ Status: completed.
 Completed modifications:
 
 - Added `UADPhaseUpdate` and DiT/image boundary fields to `UADRequestState`.
-- Extended `UADModelOutput` so runner outputs can carry a request state-machine update.
+- Extended the request state-update output so runner outputs can carry a request state-machine update.
 - Updated `UADEngine` to apply phase updates after scheduled AR tokens are marked computed and new engine/materialized tokens are appended.
 - Updated `UADShadowScheduler` to skip `dit_step` requests in Step 2, so pending image context tokens are not accidentally scheduled as AR decode tokens.
 - Added `HunyuanImage3UADStateConfig` for HunyuanImage3 special-token rules: `<img_ratio_*>` detection, stage-transition helpers, ratio-index extraction, engine-only token filtering, and toy image-context token construction.
@@ -166,7 +166,7 @@ Status: completed.
 
 Completed modifications:
 
-- Changed `UADRunner` to consume a full `UADSchedulerOutput`, group work by phase, and return semantic-free `UADRunnerOutput` items.
+- Changed `UADRunner` to consume a full `UADSchedulerOutput`, group work by phase, and return semantic-free runner output items.
 - Moved model-specific state-machine invocation out of `UADRunner` and into `UADEngine` output processing.
 - Kept `HunyuanImage3UADStateMachine` responsible only for turning runner raw outputs into request state deltas.
 - Added tests that the runner has no state-machine ownership and that engine/output processing delegates sampled-token semantics to the state machine.
@@ -256,6 +256,7 @@ Validation:
 - Passed: `uv run --no-sync ruff check vllm_omni/uad tests/uad`.
 - Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
 - Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step4_batch_model.py tests/uad/test_step5_persist.py -q`.
+- Passed: `git diff --check -- PROGRESS.md docs/uad/design_uad.md docs/uad/plan_uad.md vllm_omni/uad tests/uad`.
 
 ## State Package Cleanup
 
@@ -356,3 +357,22 @@ Completed modifications:
 Validation:
 
 - Passed: `git diff --check -- PROGRESS.md docs/uad/design_uad.md docs/uad/plan_uad.md`.
+
+## UAD Output Naming Alignment
+
+Status: completed.
+
+Completed modifications:
+
+- Renamed runner batch output to `UADModelRunnerOutput`, matching vLLM's `ModelRunnerOutput` layer.
+- Renamed per-scheduled-item runner output to `UADModelRunnerItemOutput`.
+- Renamed model-specific request delta to `UADStateUpdate`.
+- Renamed scheduler-updated engine output to `UADEngineCoreOutputs`, matching vLLM's engine-core output layer.
+- Updated scheduler, runner, engine, state machine, tests, and UAD docs to remove the older
+  pre-vLLM-aligned output names.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step4_batch_model.py tests/uad/test_step5_persist.py -q`.

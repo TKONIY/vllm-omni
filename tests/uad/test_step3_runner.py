@@ -4,7 +4,7 @@ import pytest
 
 from vllm_omni.uad.engine import UADEngine
 from vllm_omni.uad.model.hunyuan_image3 import HunyuanImage3UADForConditionalGeneration
-from vllm_omni.uad.outputs import UADModelOutput, UADRunnerOutput
+from vllm_omni.uad.outputs import UADModelRunnerItemOutput, UADStateUpdate
 from vllm_omni.uad.request import UADRequestState
 from vllm_omni.uad.runner import UADRunner
 from vllm_omni.uad.state.base import UADModelStateMachine
@@ -35,12 +35,12 @@ class RecordingStateMachine(UADModelStateMachine):
         self,
         *,
         request: UADRequestState,
-        runner_output: UADRunnerOutput,
-    ) -> UADModelOutput:
+        runner_output: UADModelRunnerItemOutput,
+    ) -> UADStateUpdate:
         assert runner_output.sampled_token is not None
         sampled_token = runner_output.sampled_token
         self.sampled_tokens.append(sampled_token.token_id)
-        return UADModelOutput(
+        return UADStateUpdate(
             request_id=request.request_id,
             new_engine_tokens=[sampled_token],
             new_materialized_tokens=[sampled_token],

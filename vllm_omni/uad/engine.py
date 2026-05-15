@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from vllm_omni.uad.outputs import UADStepOutput
+from vllm_omni.uad.outputs import UADEngineCoreOutputs
 from vllm_omni.uad.request import UADRequestState
 from vllm_omni.uad.runner import UADRunner
 from vllm_omni.uad.scheduler import UADToyScheduler
@@ -28,7 +28,7 @@ class UADEngine:
     def add_request(self, request_id: str, prompt_token_ids: list[int]) -> UADRequestState:
         return self.scheduler.add_request(request_id, prompt_token_ids)
 
-    def step(self) -> UADStepOutput:
+    def step(self) -> UADEngineCoreOutputs:
         scheduler_output = self.scheduler.schedule()
         runner_output = self.runner.execute_model(scheduler_output)
         return self.scheduler.update_from_output(scheduler_output, runner_output)
@@ -46,5 +46,5 @@ class AsyncUADEngine:
     async def add_request(self, request_id: str, prompt_token_ids: list[int]) -> UADRequestState:
         return self.engine.add_request(request_id, prompt_token_ids)
 
-    async def step(self) -> UADStepOutput:
+    async def step(self) -> UADEngineCoreOutputs:
         return self.engine.step()

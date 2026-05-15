@@ -4,7 +4,7 @@ import torch
 
 from vllm_omni.uad.batch import UADBatchInputs, UADBatchItem, UADBatchOutputs
 from vllm_omni.uad.model.hunyuan_image3 import HunyuanImage3UADModel
-from vllm_omni.uad.outputs import UADRunnerOutput, UADRunnerStepOutput
+from vllm_omni.uad.outputs import UADModelRunnerItemOutput, UADModelRunnerOutput
 from vllm_omni.uad.request import UADToken
 from vllm_omni.uad.scheduler import UADScheduleItem, UADSchedulerOutput
 
@@ -29,11 +29,11 @@ class UADRunner:
     def execute_model(
         self,
         scheduler_output: UADSchedulerOutput,
-    ) -> UADRunnerStepOutput:
+    ) -> UADModelRunnerOutput:
         if not scheduler_output.scheduled_items:
             self.last_batch_inputs = None
             self.last_batch_outputs = None
-            return UADRunnerStepOutput()
+            return UADModelRunnerOutput()
 
         batch_inputs = self._build_batch_inputs(scheduler_output)
         batch_outputs = self.model(batch_inputs)
@@ -106,8 +106,10 @@ class UADRunner:
         self,
         scheduler_output: UADSchedulerOutput,
         batch_outputs: UADBatchOutputs,
-    ) -> UADRunnerStepOutput:
-        outputs_by_index: list[UADRunnerOutput | None] = [None] * len(scheduler_output.scheduled_items)
+    ) -> UADModelRunnerOutput:
+        outputs_by_index: list[UADModelRunnerItemOutput | None] = [None] * len(
+            scheduler_output.scheduled_items
+        )
         for item_output in batch_outputs.item_outputs:
             item = scheduler_output.scheduled_items[item_output.output_index]
             if item.request_id != item_output.request_id or item.phase != item_output.phase:
@@ -121,7 +123,7 @@ class UADRunner:
             if item_output.next_token_id is not None:
                 sampled_token = UADToken(modality="text", token_id=item_output.next_token_id)
 
-            outputs_by_index[item_output.output_index] = UADRunnerOutput(
+            outputs_by_index[item_output.output_index] = UADModelRunnerItemOutput(
                 request_id=item_output.request_id,
                 phase=item_output.phase,
                 num_scheduled_tokens=item_output.num_scheduled_tokens,
@@ -130,4 +132,4 @@ class UADRunner:
 
         if any(output is None for output in outputs_by_index):
             raise ValueError("model batch output did not cover every scheduled item")
-        return UADRunnerStepOutput(outputs=[output for output in outputs_by_index if output is not None])
+        return UADModelRunnerOutput(outputs=[output for output in outputs_by_index if output is not None])

@@ -65,7 +65,7 @@ scheduler.schedule()
   -> runner.execute_model(scheduler_output)
   -> scheduler.update_from_output(scheduler_output, runner_output)
        -> state_machine.update_request_state(...)
-       -> UADStepOutput / EngineCoreOutput
+       -> UADEngineCoreOutputs / EngineCoreOutput
   -> serving/output_processor materialize
 ```
 
@@ -86,7 +86,7 @@ vllm_omni/uad/
   request.py          # UADRequestState / UADPhase / UADToken
   scheduler.py        # UADSchedulerOutput / UADToyScheduler.update_from_output()
   runner.py           # UADRunner.execute_model()
-  outputs.py          # UADRunnerOutput / UADModelOutput / UADStepOutput
+  outputs.py          # UADModelRunnerOutput / UADStateUpdate / UADEngineCoreOutputs
   engine.py           # UADEngine shell
   state/
     base.py           # UADModelStateMachine base class
@@ -248,7 +248,7 @@ batch。
 
 范围：
 
-- 将 `UADStepOutput` 映射到后续 `EngineCoreOutput` / request output。
+- 将 `UADEngineCoreOutputs` 映射到后续 `EngineCoreOutput` / request output。
 - text token 支持 delta streaming。
 - VAE/artifact decode 作为 output epilogue materialize image，不作为 scheduler phase。
 - engine-only control/image context tokens 不对外 streaming。

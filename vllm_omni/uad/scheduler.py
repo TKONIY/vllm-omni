@@ -3,7 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from vllm_omni.uad.outputs import UADModelOutput, UADRunnerOutput, UADRunnerStepOutput, UADStepOutput
+from vllm_omni.uad.outputs import (
+    UADEngineCoreOutputs,
+    UADModelRunnerItemOutput,
+    UADModelRunnerOutput,
+    UADStateUpdate,
+)
 from vllm_omni.uad.request import UADPhase, UADRequestState
 from vllm_omni.uad.state.base import UADModelStateMachine
 from vllm_omni.uad.state.hunyuan_image3 import HunyuanImage3UADStateMachine
@@ -151,8 +156,8 @@ class UADToyScheduler(UADShadowScheduler):
     def update_from_output(
         self,
         scheduler_output: UADSchedulerOutput,
-        runner_output: UADRunnerStepOutput,
-    ) -> UADStepOutput:
+        runner_output: UADModelRunnerOutput,
+    ) -> UADEngineCoreOutputs:
         if len(scheduler_output.scheduled_items) != len(runner_output.outputs):
             raise ValueError(
                 "scheduler/runner output length mismatch: "
@@ -162,10 +167,14 @@ class UADToyScheduler(UADShadowScheduler):
         item_outputs = list(zip(scheduler_output.scheduled_items, runner_output.outputs, strict=True))
         outputs = [self._process_runner_output(item, output) for item, output in item_outputs]
         for item, output in zip(scheduler_output.scheduled_items, outputs, strict=True):
-            self._apply_model_output(item, output)
-        return UADStepOutput(outputs=outputs)
+            self._apply_state_update(item, output)
+        return UADEngineCoreOutputs(outputs=outputs)
 
-    def _process_runner_output(self, item: UADScheduleItem, output: UADRunnerOutput) -> UADModelOutput:
+    def _process_runner_output(
+        self,
+        item: UADScheduleItem,
+        output: UADModelRunnerItemOutput,
+    ) -> UADStateUpdate:
         if item.request_id != output.request_id or item.phase != output.phase:
             raise ValueError(
                 "scheduler/runner output item mismatch: "
@@ -177,7 +186,7 @@ class UADToyScheduler(UADShadowScheduler):
             runner_output=output,
         )
 
-    def _apply_model_output(self, item: UADScheduleItem, output: UADModelOutput) -> None:
+    def _apply_state_update(self, item: UADScheduleItem, output: UADStateUpdate) -> None:
         request = self.requests[output.request_id]
         if item.persist:
             request.advance_computed_tokens(item.num_scheduled_tokens)

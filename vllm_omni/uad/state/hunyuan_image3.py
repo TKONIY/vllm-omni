@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from vllm_omni.uad.outputs import UADModelOutput, UADRunnerOutput
+from vllm_omni.uad.outputs import UADModelRunnerItemOutput, UADStateUpdate
 from vllm_omni.uad.request import UADPhaseUpdate, UADRequestState, UADToken
 from vllm_omni.uad.state.base import UADModelStateMachine
 
@@ -233,8 +233,8 @@ class HunyuanImage3UADStateMachine(UADModelStateMachine):
         self,
         *,
         request: UADRequestState,
-        runner_output: UADRunnerOutput,
-    ) -> UADModelOutput:
+        runner_output: UADModelRunnerItemOutput,
+    ) -> UADStateUpdate:
         """Apply HunyuanImage3 semantics to one raw runner output.
 
         This is called from scheduler `update_from_output()`, mirroring vLLM's
@@ -259,12 +259,12 @@ class HunyuanImage3UADStateMachine(UADModelStateMachine):
         *,
         request: UADRequestState,
         sampled_token: UADToken,
-    ) -> UADModelOutput:
+    ) -> UADStateUpdate:
         """Apply HunyuanImage3 AR-token semantics after runner sampling."""
         ratio_index = self.config.ratio_index(sampled_token.token_id)
         if ratio_index is not None:
             image_context_tokens = self.config.build_toy_image_context_tokens()
-            return UADModelOutput(
+            return UADStateUpdate(
                 request_id=request.request_id,
                 new_engine_tokens=[sampled_token] + image_context_tokens,
                 new_materialized_tokens=[],
@@ -283,7 +283,7 @@ class HunyuanImage3UADStateMachine(UADModelStateMachine):
         materialized_tokens = []
         if not self.config.is_engine_only_token(sampled_token.token_id):
             materialized_tokens.append(sampled_token)
-        return UADModelOutput(
+        return UADStateUpdate(
             request_id=request.request_id,
             new_engine_tokens=[sampled_token],
             new_materialized_tokens=materialized_tokens,
@@ -294,14 +294,14 @@ class HunyuanImage3UADStateMachine(UADModelStateMachine):
         self,
         *,
         request: UADRequestState,
-    ) -> UADModelOutput:
+    ) -> UADStateUpdate:
         """Advance HunyuanImage3's current toy DiT denoise-step state."""
         if request.total_dit_steps <= 0:
             raise ValueError(f"request {request.request_id} entered dit_step without total_dit_steps")
 
         next_step_index = min(request.dit_step_index + 1, request.total_dit_steps)
         is_final_step = next_step_index >= request.total_dit_steps
-        return UADModelOutput(
+        return UADStateUpdate(
             request_id=request.request_id,
             phase_update=UADPhaseUpdate(
                 phase="ar_decode" if is_final_step else "dit_step",
