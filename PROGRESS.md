@@ -376,3 +376,21 @@ Validation:
 - Passed: `uv run --no-sync ruff check vllm_omni/uad tests/uad`.
 - Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
 - Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step4_batch_model.py tests/uad/test_step5_persist.py -q`.
+
+## UAD Milestone Plan Rewrite
+
+Status: completed.
+
+Completed modifications:
+
+- Rewrote `docs/uad/plan_uad.md` from linear toy steps into milestone-based implementation plan.
+- Defined the first complete HunyuanImage3 run boundary: real AR, real AR->DiT transition,
+  real DiT denoise, final image context persist, VAE decode, and image artifact output.
+- Split remaining work by difficulty into state/metadata, real AR, paged KV persist, real DiT
+  attention and denoise, VAE output, continuous batching, mixed FFN/MoE, distributed integration,
+  and motivation experiments.
+- Added per-milestone implementation steps, validation checks, and review stop points.
+
+Validation:
+
+- Passed: `git diff --check -- PROGRESS.md docs/uad/plan_uad.md`.

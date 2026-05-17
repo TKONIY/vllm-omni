@@ -1,272 +1,353 @@
-# UAD 实验与实现计划
+# UAD Milestone Plan
 
-本文只保留当前 UAD 方向：基于 vLLM AR engine 新开 `UADEngine`，控制流对齐
-`schedule -> runner -> scheduler.update_from_output -> serving/output_processor`。
+目标：基于 vLLM AR engine 新开 `UADEngine`，让 HunyuanImage3 可以在同一套
+request / scheduler / runner / KV 管理下完整运行 AR + DiT，并逐步支持 continuous
+batching 和 AR/DiT 合批。
 
-## 0. 当前状态
-
-工作分支和 worktree：
+当前分支和 worktree：
 
 ```text
 branch: uad-code
 worktree: ~/code/vllm-omni-uad-code
 ```
 
-已完成：
+## 0. Milestone 定义
 
-| Step | 状态 | 说明 |
-|---|---|---|
-| Step 0 | 完成 | toy `UADEngine`、request ledger、HunyuanImage3 UAD toy model |
-| Step 1 | 完成 | `UADScheduleItem` / `UADSchedulerOutput` |
-| Step 2 | 完成 | HunyuanImage3 toy AR -> DiT phase switch |
-| Step 3 | 完成 | runner 消费完整 scheduler output；state update 移到 scheduler `update_from_output()` |
-| Step 4 | 完成 | `UADRunner` pack mixed batch；`HunyuanImage3UADModel` 一次 forward；按 item 顺序 scatter |
-| Step 5 foundation | 完成 | toy final `dit_step(persist=True)` 推进 pending engine context |
+“完整运行 HunyuanImage3”的最小验收边界：
 
-下一步：Step 5 的真实 paged-KV slot 分配和 final DiT persist 路径。
+```text
+prompt
+  -> real HunyuanImage3 AR prefill/decode
+  -> real HunyuanImage3 state machine 识别 image boundary
+  -> real DiT denoise loop
+  -> final image context persist 到 engine context / paged KV
+  -> VAE decode
+  -> request output 返回 image artifact
+```
 
-## 1. Motivation 实验计划
+不纳入第一个完整运行 milestone 的内容：
 
-目标：证明 staged HunyuanImage3 online serving 里 AR/DiT 两组 GPU 会出现互补空闲，
-并证明小 token batch 下 FFN/MoE 不饱和。
+- CFG parallel。
+- SP / ring attention / Ulysses。
+- AR + DiT 真实 FFN/MoE 混合合批。
+- 多请求吞吐优化。
+- motivation benchmark。
 
-### 1.1 Online Serving Sweep
+难度标记：
 
-部署现有 HunyuanImage3 online serving，不使用 UAD engine。使用合理 prompt 数据集，从高到低
-request rate 打流量，记录每个 stage 的 forward 时间线和 FFN/MoE token batch。
+| 标记 | 含义 |
+|---|---|
+| S | 小改动，主要是接口/测试/文档 |
+| M | 需要读现有实现并补齐状态或数据结构 |
+| L | 接入真实模型路径或 vLLM 关键基础设施 |
+| XL | attention / distributed / 性能关键路径，风险高 |
 
-核心输出：
+## 1. 已完成：Toy Control Plane
 
-- 每个 request rate 下 AR stage / DiT stage 的 busy interval。
-- 每个 request rate 下 stage idle ratio。
-- 每个 forward 中 FFN/MoE local token batch size 随时间变化曲线。
-- request latency、queue wait、错误样本。
+难度：S。状态：完成。
 
-### 1.2 FFN/MoE Saturation Microbench
+已实现：
 
-单独测 HunyuanImage3 一个 FFN/MoE 层，在 TP 和 EP 配置下递增 token 数。
+- `UADEngine` / `UADToyScheduler` / `UADRunner` / `UADRequestState`。
+- `UADScheduleItem.persist`，`persist=True` 推进 `num_computed_tokens`。
+- `UADModelRunnerOutput` / `UADStateUpdate` / `UADEngineCoreOutputs`。
+- HunyuanImage3 toy state machine：toy ratio token 触发 AR -> DiT。
+- toy `HunyuanImage3UADModel`：runner 可以 pack mixed AR + DiT item，一次 forward 后 scatter。
 
-核心输出：
+已验证：
+
+- UAD 单测 23 个通过。
+- runner 不识别 HunyuanImage3 私有 token。
+- state machine 只改 request state，不调用 runner。
+- scheduler `update_from_output()` 是唯一 request state update 路径。
+
+## 2. Milestone A：真实 HunyuanImage3 State / Metadata
+
+难度：M。目标：去掉 toy token 规则，让 UAD state machine 与现有 HunyuanImage3 AR -> DiT
+边界一致，但仍不跑真实大模型。
+
+实现步骤：
+
+1. 从现有 tokenizer / config 构造 `HunyuanImage3UADStateConfig`。
+2. 对齐现有 `vllm_omni/model_executor/stage_input_processors/hunyuan_image3.py`：
+   - image ratio token。
+   - image size / bucket。
+   - image token count。
+   - AR -> DiT 所需 metadata。
+3. 补齐 HunyuanImage3 私有 token 规则：
+   - think / recaption / answer / boi / eoi。
+   - engine-only token。
+   - 对外 materialize 的 text token。
+4. 增加 `UADRequestState` 中真实 DiT 需要的轻量 metadata：
+   - image size。
+   - latent shape。
+   - timestep count。
+   - seed。
+5. 保持 runner 语义不变：runner 仍不读取 tokenizer/token 规则。
+
+验证：
+
+- 用 tokenizer fixture 测所有特殊 token id 解析。
+- 用固定 token 序列测试 state transition：
+  `ar_decode -> dit_step -> ar_decode/finished`。
+- 与 `stage_input_processors/hunyuan_image3.py` 的 AR -> DiT metadata 输出做 parity test。
+- 不加载真实模型，只跑 CPU unit tests。
+
+停点：完成后提交，等待 review。
+
+## 3. Milestone B：真实 AR Path，单请求
+
+难度：L。目标：UAD runner/model 可以跑真实 HunyuanImage3 AR prefill/decode，直到产生
+普通 text token 或 image boundary token。
+
+实现步骤：
+
+1. 将 `vllm_omni/uad/model/hunyuan_image3.py` 从 toy shell 改成真实模型 shell：
+   - 复用 `vllm_omni/model_executor/models/hunyuan_image3/hunyuan_image3.py` 的 AR 组件。
+   - 复用现有 embedding、RoPE、decoder layer、MoE、lm head、sampler 逻辑。
+   - 暂时只启用 AR branch。
+2. `UADRunner` 为 AR item 构造真实输入：
+   - token ids。
+   - positions / mRoPE metadata。
+   - block table / slot mapping 的占位字段先保留，真实分配在 Milestone C。
+3. `UADModelRunnerItemOutput.sampled_token` 来自真实 sampler，而不是 toy `+1`。
+4. state machine 消费真实 sampled token，决定 text continuation 或 AR -> DiT transition。
+5. 如果真实 HunyuanImage3 无法单卡加载，则把最小 TP loader 从 Milestone H 提前为本
+   milestone 的 blocking sub-step。
+
+验证：
+
+- text-only prompt：UAD AR 单步 logits / sampled token 与现有 vLLM HunyuanImage3 AR 路径一致。
+- image prompt 前缀：能够 decode 到 image boundary token，并产生正确 `UADStateUpdate`。
+- runner 仍不持有 state machine。
+- 暂不要求真实 DiT、VAE 或 multiturn。
+
+停点：完成后提交，等待 review。
+
+## 4. Milestone C：Paged KV / Persist 接入
+
+难度：L。目标：UAD 不新增 page manager，所有 reusable context 都复用 vLLM paged KV。
+
+实现步骤：
+
+1. 让 `UADSchedulerOutput` 携带 vLLM runner 需要的 KV metadata：
+   - block table。
+   - slot mapping。
+   - num computed / scheduled tokens。
+2. `UADScheduler` 复用 vLLM `KVCacheManager` 为 `persist=True` item 分配 slots。
+3. AR prefill/decode：
+   - `persist=True`。
+   - forward 写 paged KV。
+   - 成功后推进 `num_computed_tokens`。
+4. DiT non-final denoise：
+   - `persist=False`。
+   - 不分配 writable slots。
+   - 不推进 `num_computed_tokens`。
+5. final DiT：
+   - `persist=True`。
+   - 为 generated image context tokens 分配 slots。
+   - 写入 paged KV。
+   - 推进 `num_computed_tokens` 到 image context 之后。
+
+验证：
+
+- page boundary case：image context token 数跨多个 KV page。
+- block allocation / free 无泄漏。
+- AR prefill/decode 的 `num_computed_tokens` 与 vLLM 原语义一致。
+- final DiT 后同一 request 的下一轮 text 能接着调度。
+- 暂不要求真实 DiT attention；可以用 controlled fake image context 写 KV 验证 persist。
+
+停点：完成后提交，等待 review。
+
+## 5. Milestone D：真实 DiT Attention + Denoise，单请求
+
+难度：XL。目标：单请求完整跑真实 DiT denoise loop，不做 CFG parallel / SP。
+
+实现步骤：
+
+1. 引入真实 DiT runtime state：
+   - latents。
+   - timesteps。
+   - image grid / shape bucket。
+   - per-step scheduler state。
+2. `HunyuanImage3UADModel` 增加真实 DiT branch：
+   - 复用 `vllm_omni/diffusion/models/hunyuan_image3/hunyuan_image3_transformer.py`。
+   - 复用 timestep embedding、DiT decoder layers、postprocessor。
+3. 实现 DiT attention recipe：
+   - DiT Q 读历史 prefix：paged-prefix attention，`causal=False`。
+   - DiT chunk 内：dense bidirectional attention。
+   - 两路 attention 用 LSE merge。
+4. non-final DiT step：
+   - 更新 latent / denoise state。
+   - `persist=False`。
+   - 不写 paged KV。
+5. final DiT step：
+   - 生成 image context embedding / tokens。
+   - 通过 Milestone C 的 persist 路径写 paged KV。
+6. 第一版固定：
+   - 单请求。
+   - 固定 image size bucket。
+   - `guidance_scale <= 1.0`，不启用 CFG。
+
+验证：
+
+- 单个 DiT layer / 单个 timestep 与现有 diffusion pipeline 的输出做数值对齐。
+- 完整 denoise loop 无 NaN。
+- fixed prompt / seed 下 latent deterministic。
+- non-final step 不推进 `num_computed_tokens`。
+- final step 推进 `num_computed_tokens` 并保留 multiturn context。
+
+停点：完成后提交，等待 review。
+
+## 6. Milestone E：VAE Decode / Artifact Output
+
+难度：M。目标：从 UAD engine 返回真实图片 artifact，形成第一个完整 HunyuanImage3 E2E。
+
+实现步骤：
+
+1. 复用现有 HunyuanImage3 VAE / image processor。
+2. DiT denoise 完成后触发 VAE decode。
+3. VAE decode 不作为 scheduler phase，不消耗 token budget，不写 KV。
+4. `UADEngineCoreOutputs` 增加 image artifact 输出所需字段，或增加 serving 层转换结构。
+5. output processor：
+   - text token streaming。
+   - engine-only control token 不输出。
+   - image artifact 最终返回。
+
+验证：
+
+- 单 prompt -> PNG / PIL image smoke test。
+- request 正常 finished。
+- generated image context 已 persist，artifact decode 不改变 `num_computed_tokens`。
+- text-only request 行为不被破坏。
+
+停点：这是第一个“完整运行 HunyuanImage3” milestone。完成后提交，等待 review。
+
+## 7. Milestone F：Continuous Batching Correctness
+
+难度：L。目标：一个 scheduler tick 可以同时包含多个 request，且可以混合 AR item 和 DiT item。
+
+实现步骤：
+
+1. 将 toy scheduler 换成基于 vLLM scheduler 语义的 UAD scheduler：
+   - token budget。
+   - waiting / running request。
+   - preemption / finished cleanup 的最小版本。
+2. schedule item 仍用 token 数计费：
+   - AR prefill/decode 是 scheduled tokens。
+   - DiT step 是 image context token count。
+3. runner 按 phase 分组执行：
+   - AR group。
+   - DiT group。
+4. 保持 request output 顺序可还原。
+5. 保证 state machine 仍只在 scheduler `update_from_output()` 中调用。
+
+验证：
+
+- 多个 AR request 连续 decode。
+- AR + DiT request 同 tick 调度。
+- 长 DiT request 不饿死新 AR request。
+- 多请求结果与单请求顺序执行结果一致。
+- request finish 后 KV blocks 正确释放。
+
+停点：完成后提交，等待 review。
+
+## 8. Milestone G：真实 AR + DiT Layer 合批
+
+难度：XL。目标：attention recipe 可以分开，但 projection / FFN / MoE 必须能把 AR token 和
+DiT token 合成更大的 batch。
+
+实现步骤：
+
+1. runner 建立统一 hidden buffer：
+   - item span。
+   - phase。
+   - output scatter index。
+2. attention 先按 recipe 执行：
+   - AR causal paged attention。
+   - DiT prefix paged + chunk dense attention。
+3. attention output 写回统一 hidden buffer。
+4. 共享 projection / FFN / MoE 在统一 hidden buffer 上执行。
+5. FFN/MoE 输出按 span 切回 AR logits 或 DiT denoise output。
+6. 加最小 trace：
+   - 每层 FFN/MoE local token batch size。
+   - per-phase token count。
+
+验证：
+
+- 固定 seed 下，mixed FFN/MoE 与 phase-separated 执行数值一致或在容差内。
+- request state 更新顺序不变。
+- FFN/MoE batch size trace 能看到 AR + DiT token 合并。
+- 单请求和多请求都能跑。
+
+停点：完成后提交，等待 review。
+
+## 9. Milestone H：Distributed / Production Integration
+
+难度：XL。目标：让 UAD 路径能在实际 HunyuanImage3 部署配置上运行。
+
+实现步骤：
+
+1. 明确 UAD model 是否注册到 production model registry，或保持 research-only entrypoint。
+2. 接 vLLM model loader：
+   - TP shard。
+   - quant。
+   - weight tying / shared module。
+3. 接 MoE runtime：
+   - TP。
+   - EP。
+   - expert routing stats。
+4. 支持最小线上配置：
+   - 单组 4 GPU。
+   - 先 TP 或 TP+EP。
+   - CFG/SP 暂不纳入。
+5. 增加 UAD serve / offline smoke script。
+
+验证：
+
+- 4 GPU 上加载真实 HunyuanImage3。
+- 单请求 E2E image generation。
+- 多请求 smoke。
+- 显存释放正常。
+- 与非 UAD staged serving 的基础输出语义一致。
+
+停点：完成后提交，等待 review。
+
+## 10. Motivation Experiments
+
+难度：M-L。目标：证明 UAD 的性能动机。这个可以和 Milestone F/G 并行，不阻塞第一个完整
+运行 milestone。
+
+### Online Serving Sweep
+
+使用现有 HunyuanImage3 staged online serving，不使用 UAD engine。从高到低 request rate
+打流量，记录：
+
+- AR stage / DiT stage busy interval。
+- stage idle ratio。
+- 每个 forward 的 FFN/MoE token batch size。
+- request latency / queue wait / error。
+
+### FFN/MoE Saturation Microbench
+
+单独测 HunyuanImage3 一个 FFN/MoE 层，在 TP 和 EP 配置下递增 token 数，记录：
 
 - latency vs tokens。
 - tokens/s vs tokens。
 - achieved TFLOPs vs tokens。
-- EP 下 local expert token histogram。
-- 饱和阈值：吞吐达到 plateau 90% 且连续点稳定。
+- EP local expert token histogram。
+- 饱和阈值。
 
-最终把 online trace 的 FFN/MoE token 分布叠到 microbench 饱和阈值上。
+最终输出：把 online trace 的 token 分布叠到 FFN/MoE 饱和阈值上。
 
-## 2. UAD 控制流
-
-必须对齐 vLLM 原结构：
-
-```text
-scheduler.schedule()
-  -> runner.execute_model(scheduler_output)
-  -> scheduler.update_from_output(scheduler_output, runner_output)
-       -> state_machine.update_request_state(...)
-       -> UADEngineCoreOutputs / EngineCoreOutput
-  -> serving/output_processor materialize
-```
-
-职责边界：
-
-| 组件 | 职责 | 不做 |
-|---|---|---|
-| `UADScheduler` | 持有 request；统一 schedule 多 request；update request state | 不执行模型 |
-| `UADRunner` | 消费完整 scheduler output；把 mixed AR + DiT items pack 成 batch；调用 `HunyuanImage3UADModel`；返回 raw output | 不识别模型私有 token；不改 request |
-| `UADModelStateMachine` | 模型私有 phase/output-ledger 规则 | 不调用 runner；不调度；不决定 computed 进度 |
-| serving/output processor | materialize text/artifact | 不参与 token budget |
-
-## 3. 模块边界
-
-```text
-vllm_omni/uad/
-  batch.py            # UADBatchItem / UADBatchInputs / UADBatchOutputs
-  request.py          # UADRequestState / UADPhase / UADToken
-  scheduler.py        # UADSchedulerOutput / UADToyScheduler.update_from_output()
-  runner.py           # UADRunner.execute_model()
-  outputs.py          # UADModelRunnerOutput / UADStateUpdate / UADEngineCoreOutputs
-  engine.py           # UADEngine shell
-  state/
-    base.py           # UADModelStateMachine base class
-    hunyuan_image3.py # HunyuanImage3 state machine and token rules
-  model/
-    hunyuan_image3.py # HunyuanImage3UADModel toy unified model shell
-```
-
-当前 research 实现全部放在 `vllm_omni/uad/` 下，不注册到原 `model_executor`。
-后续真正接 loader、TP、quant 时，再决定是否进入 production model registry。
-
-## 4. 已实现 Toy 语义
-
-### Step 0/1
-
-- `UADEngine.add_request()` 创建 `UADRequestState`。
-- `UADToyScheduler.schedule()` 根据 request phase 生成 `UADScheduleItem`。
-- `UADRunner.execute_model()` 消费完整 `UADSchedulerOutput`。
-- AR toy model 对最后一个 token 做 `+1`，返回 sampled token。
-
-### Step 2/3
-
-- `HunyuanImage3UADStateMachine` 识别 `<img_ratio_*>`。
-- ratio token 触发 `phase="dit_step"`。
-- toy image context tokens 进入 `engine_tokens`，不进入 `materialized_tokens`。
-- non-final toy `dit_step(persist=False)` 只推进 `dit_step_index`。
-- final toy `dit_step(persist=True)` 推进所有 pending engine tokens 到
-  `num_computed_tokens`，然后回到 `ar_decode`。
-- request state 更新现在在 scheduler `update_from_output()` 中完成。
-
-验证点：
-
-- text token 同时进入 `engine_tokens` 和 `materialized_tokens`。
-- Hunyuan control token 只进入 `engine_tokens`。
-- runner 不持有 state machine。
-- runner 不识别 HunyuanImage3 ratio/control token。
-- 一个 scheduler tick 可以同时包含 AR 和 DiT request。
-
-## 5. Paged KV 约束
-
-UAD 不新增 page manager。凡是会写入 reusable paged KV 的 token，都必须复用 vLLM
-`KVCacheManager`、block table 和 slot mapping。
-
-| Phase | KV 行为 |
-|---|---|
-| AR prefill/decode | `persist=True`；写 vLLM paged KV；推进 `num_computed_tokens` |
-| DiT non-final denoise | `persist=False`；不写 paged KV；只更新 diffusion runtime state |
-| DiT final denoise | `persist=True`；写 image context 的 vLLM paged KV；推进到 image context 后 |
-| VAE/artifact decode | 不写 paged KV；只 materialize artifact |
-
-DiT 读取历史 text/prefix context 时，目标路径是 read-only paged-prefix attention。
-DiT chunk 内 full attention 使用 dense K/V，两路 attention 通过 LSE merge 合并。
-
-## 6. Step 4：HunyuanImage3 UAD batch executor shell
-
-状态：已完成 toy shell。
-
-目标：建立一个统一的 HunyuanImage3 UAD batch shell，让同一个 tick 里的 AR 和 DiT items
-能进入同一次 runner/model forward；先允许 fake compute，但 batch packing、attention metadata、
-FFN/MoE 合批和输出 scatter 必须是真实的。
-
-已完成范围：
-
-- 定义 `HunyuanImage3UADModel`：一个共享权重的 `nn.Module`，AR 和 DiT 只是不同输入 recipe。
-- 定义 `UADBatchInputs` / `UADBatchOutputs`：承载 mixed AR + DiT item metadata、position、
-  DiT step metadata、attention grouping 和 FFN/MoE token count。
-- `UADRunner` 把 `UADSchedulerOutput` pack 成上述 batch，调用 model，并保留 request 顺序。
-- attention metadata 记录所有 item 的 causal work，并额外标记 DiT chunk bidirectional work。
-- FFN/MoE token count 来自同一个 flattened token-slot batch。
-- 先不接真实 KV 写入、CFG parallel、SP、真实 output processor。
-
-已验证：
-
-- 同一 tick 能同时 pack AR 和 DiT items。
-- attention metadata 和 FFN/MoE batch 都能看到两类 token。
-- 输出顺序可还原到 request。
-- fake model output 不改变 scheduler / state machine 语义。
-
-## 7. Step 5：Final DiT `persist=True`
-
-目标：让 final DiT step 默认把 generated image context 写入 vLLM paged KV，并通过
-`persist=True` 推进 `num_computed_tokens`，原生支持
-multiturn。
-
-范围：
-
-- `UADScheduleItem` 明确定义 `persist`：`True` 表示本 item 成功后写 reusable context/KV
-  并推进 `num_computed_tokens`；`False` 表示 transient compute。
-- scheduler 将 non-final `dit_step` 标成 `persist=False`，final `dit_step` 标成
-  `persist=True`。
-- toy runner 先 mock final persist 完成；真实 `HunyuanImage3UADModel`/runner 后续根据
-  HunyuanImage3 image grid 生成 image context embeddings / positions，并写入 paged KV。
-- 真实路径需要在 forward 前用 vLLM `KVCacheManager` 分配 image tokens 的 slots。
-- scheduler 根据 final `dit_step(persist=True)` 推进 `num_computed_tokens` 到 image context
-  之后。
-- VAE/artifact decode 仍不进入 scheduler token budget。
-
-验证：
-
-- final `dit_step(persist=True)` 后 `num_computed_tokens` 覆盖 image context tokens。
-- 下一轮 text turn 可以接在同一条 `engine_tokens` 后继续调度。
-- 当前 toy 验证不覆盖 block table / slot mapping；真实 vLLM KV 接入后必须验证无 block 泄漏。
-
-## 8. Step 6：Paged-prefix attention + dense chunk attention
-
-目标：让 DiT denoise token 读取已提交的 text/image prefix，同时保留 chunk 内 bidirectional
-attention。
-
-范围：
-
-- DiT Q 对历史 prefix 走 read-only paged-prefix attention，`causal=False`。
-- DiT chunk 内 K/V 使用 dense scratch buffer 做 full attention。
-- 两路 attention output 用 LSE merge 合并。
-- 先支持单请求固定 shape，不实现 CFG parallel / SP。
-
-验证：
-
-- DiT denoise step 读取 vLLM paged prefix，不复制整段 prefix KV 到长期 dense cache。
-- attention output shape、dtype、device 与 DiT block 预期一致。
-- 固定 prompt / seed 下完整 denoise 无 NaN，step state 正常推进。
-
-## 9. Step 7：多请求 phase-separated batching
-
-目标：一个 scheduler tick 可以同时调度多个 AR 和 DiT request，runner 先按 phase 分组执行。
-
-范围：
-
-- scheduler 在同一个 token budget 下选择 AR prefill/decode 和 DiT step item。
-- runner 分组执行 AR group 与 DiT group，保持 request output 顺序可还原。
-- 不做 mixed FFN/MoE；不做 CFG parallel / SP。
-
-验证：
-
-- 多个请求并发时，AR 和 DiT item 能在同一个 tick 被调度。
-- phase-separated 执行结果与单请求顺序执行结果一致。
-- 长 DiT request 不饿死新进 AR request，AR decode 不饿死 DiT step。
-
-## 10. Step 8：Mixed projection / FFN / MoE batch
-
-目标：在 attention 边界仍分 phase 的前提下，把可共享的 projection/FFN/MoE token 合成更大
-batch。
-
-范围：
-
-- runner 建立统一 hidden buffer，记录每个 item 的 token span。
-- attention 各自执行后，把 AR/DiT hidden states 拼到共享 projection/FFN/MoE。
-- FFN/MoE 输出再按 span 切回各 request/phase。
-- 先不改 attention kernel，不引入 SP。
-
-验证：
-
-- 固定 seed 下 mixed FFN/MoE 与 phase-separated 执行的 logits/denoise output 在容差内一致。
-- FFN/MoE trace 中 local token batch 分布明显右移。
-- request 输出顺序和 request state 更新不受 mixed batch 影响。
-
-## 11. Step 9：Serving output processor
-
-目标：把 UAD 的 `materialized_tokens` / image artifact 对齐到 serving output path。
-
-范围：
-
-- 将 `UADEngineCoreOutputs` 映射到后续 `EngineCoreOutput` / request output。
-- text token 支持 delta streaming。
-- VAE/artifact decode 作为 output epilogue materialize image，不作为 scheduler phase。
-- engine-only control/image context tokens 不对外 streaming。
-
-验证：
-
-- text-only request streaming 行为与普通 AR 路径一致。
-- image request 最终返回 image artifact，且不会把 Hunyuan control tokens 暴露给用户。
-- final-only 与 delta output mode 均能正常结束并释放 request。
-
-## 12. TODO
+## 11. 暂不做但必须保留接口位置
 
 CFG parallel：
 
 - CFG branch 表达。
 - CFG branch cache 共享。
 - denoise merge。
-- final commit 语义。
+- final persist 语义。
 
 SP：
 
@@ -274,8 +355,8 @@ SP：
 - SP 与 paged-prefix attention 接口。
 - SP + EP 的 all-to-all 和 token routing。
 
-Motivation 实验整理：
+Production serving：
 
-- online serving sweep 脚本。
-- FFN/MoE saturation microbench。
-- trace summary 和 plotting。
+- OpenAI compatible output schema。
+- artifact streaming。
+- request cancellation / timeout / retry。
