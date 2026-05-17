@@ -24,7 +24,16 @@ class UADPhaseUpdate:
     total_dit_steps: int | None = None
     image_ratio_token_id: int | None = None
     image_ratio_index: int | None = None
+    image_width: int | None = None
+    image_height: int | None = None
+    image_token_width: int | None = None
+    image_token_height: int | None = None
+    image_base_size: int | None = None
     image_context_token_count: int | None = None
+    latent_shape: tuple[int, ...] | None = None
+    seed: int | None = None
+    num_inference_steps: int | None = None
+    guidance_scale: float | None = None
     pending_image_context_commit: bool | None = None
 
 
@@ -47,7 +56,16 @@ class UADRequestState:
     total_dit_steps: int = 0
     image_ratio_token_id: int | None = None
     image_ratio_index: int | None = None
+    image_width: int | None = None
+    image_height: int | None = None
+    image_token_width: int | None = None
+    image_token_height: int | None = None
+    image_base_size: int | None = None
     image_context_token_count: int = 0
+    latent_shape: tuple[int, ...] | None = None
+    seed: int | None = None
+    num_inference_steps: int | None = None
+    guidance_scale: float | None = None
     pending_image_context_commit: bool = False
 
     @classmethod
@@ -95,7 +113,25 @@ class UADRequestState:
             self.image_ratio_token_id = update.image_ratio_token_id
         if update.image_ratio_index is not None:
             self.image_ratio_index = update.image_ratio_index
+        if update.image_width is not None:
+            self.image_width = update.image_width
+        if update.image_height is not None:
+            self.image_height = update.image_height
+        if update.image_token_width is not None:
+            self.image_token_width = update.image_token_width
+        if update.image_token_height is not None:
+            self.image_token_height = update.image_token_height
+        if update.image_base_size is not None:
+            self.image_base_size = update.image_base_size
         if update.image_context_token_count is not None:
             self.image_context_token_count = update.image_context_token_count
+        if update.latent_shape is not None:
+            self.latent_shape = update.latent_shape
+        if update.seed is not None:
+            self.seed = update.seed
+        if update.num_inference_steps is not None:
+            self.num_inference_steps = update.num_inference_steps
+        if update.guidance_scale is not None:
+            self.guidance_scale = update.guidance_scale
         if update.pending_image_context_commit is not None:
             self.pending_image_context_commit = update.pending_image_context_commit

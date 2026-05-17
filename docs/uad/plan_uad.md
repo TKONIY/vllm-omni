@@ -63,7 +63,9 @@ prompt
 
 ## 2. Milestone A：真实 HunyuanImage3 State / Metadata
 
-难度：M。目标：去掉 toy token 规则，让 UAD state machine 与现有 HunyuanImage3 AR -> DiT
+难度：M。状态：完成。
+
+目标：去掉 toy token 规则，让 UAD state machine 与现有 HunyuanImage3 AR -> DiT
 边界一致，但仍不跑真实大模型。
 
 实现步骤：

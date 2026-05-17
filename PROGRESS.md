@@ -394,3 +394,26 @@ Completed modifications:
 Validation:
 
 - Passed: `git diff --check -- PROGRESS.md docs/uad/plan_uad.md`.
+
+## Milestone A: Real HunyuanImage3 State / Metadata
+
+Status: completed.
+
+Completed modifications:
+
+- Added HunyuanImage3 generation metadata derivation to the UAD state machine without loading model weights.
+- Added lightweight HunyuanImage3 ratio-bucket math matching the existing image processor's base-size buckets.
+- Extended `UADPhaseUpdate` and `UADRequestState` with DiT metadata: image size, image token grid,
+  image base size, latent shape, seed, inference steps, and guidance scale.
+- Updated HunyuanImage3 ratio-token handling so AR -> DiT state updates record real metadata and real
+  image-context token counts when constructed from a tokenizer.
+- Kept toy state-machine behavior compatible for existing scheduler/runner tests.
+- Added Milestone A CPU tests for tokenizer rule parsing, ratio metadata, request-state update, and request
+  overrides of DiT runtime metadata.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m pytest tests/uad/test_milestone_a_state_metadata.py tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step4_batch_model.py tests/uad/test_step5_persist.py -q`.
+- Passed: `git diff --check -- PROGRESS.md docs/uad/plan_uad.md vllm_omni/uad tests/uad`.
