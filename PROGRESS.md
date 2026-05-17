@@ -98,3 +98,27 @@ Validation:
 Commit and push:
 
 - Runner-first design update is committed and pushed to the current branch upstream `origin/uad`.
+
+## Experiment Cleanup: Hunyuan Batch/Route Profiling
+
+Status: completed.
+
+Scope:
+
+- Consolidate the existing HunyuanImage3 MoE batch-size/backend profiling scripts and the later real-request routing
+  profiling helpers under `docs/uad/script/`.
+- Keep generated traces, HTML reports, cloned official repositories, logs, and large local outputs under `artifacts/`
+  as local-only data.
+- Add the HunyuanImage3 MoE route tracer as opt-in instrumentation controlled by environment variables.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check docs/uad/script/build_hunyuan_real_request_routing_html.py docs/uad/script/build_hunyuan_routing_tabs_html.py docs/uad/script/profile_hunyuan_a13b_routing.py docs/uad/script/profile_hunyuan_official_clean_routing.py docs/uad/script/profile_hunyuan_official_routing.py docs/uad/script/profile_hunyuan_real_request_routing.py vllm_omni/model_executor/models/hunyuan_image3/moe_route_trace.py vllm_omni/model_executor/models/hunyuan_image3/hunyuan_image3.py vllm_omni/diffusion/models/hunyuan_image3/hunyuan_image3_transformer.py vllm_omni/diffusion/models/hunyuan_image3/pipeline_hunyuan_image3.py`.
+- Passed: `uv run --no-sync python -m compileall -q docs/uad/script/build_hunyuan_real_request_routing_html.py docs/uad/script/build_hunyuan_routing_tabs_html.py docs/uad/script/profile_hunyuan_a13b_routing.py docs/uad/script/profile_hunyuan_official_clean_routing.py docs/uad/script/profile_hunyuan_official_routing.py docs/uad/script/profile_hunyuan_real_request_routing.py vllm_omni/model_executor/models/hunyuan_image3/moe_route_trace.py`.
+- Passed: rebuilt a real-request routing HTML report from local traces with `build_hunyuan_real_request_routing_html.py`.
+- Passed: rebuilt a combined vLLM/official routing tabs HTML report with `build_hunyuan_routing_tabs_html.py`.
+- Passed: `git diff --check -- .gitignore PROGRESS.md docs/uad/script vllm_omni/model_executor/models/hunyuan_image3 vllm_omni/diffusion/models/hunyuan_image3`.
+
+Commit and push:
+
+- Pending commit and push.

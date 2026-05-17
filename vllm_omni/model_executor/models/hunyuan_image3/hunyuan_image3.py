@@ -100,6 +100,7 @@ from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.sampler import Sampler
 
 from vllm_omni.model_executor.models.hunyuan_image3.autoencoder_kl_3d import AutoencoderKLConv3D
+from vllm_omni.model_executor.models.hunyuan_image3.moe_route_trace import record_routes as record_moe_routes
 from vllm_omni.model_executor.models.hunyuan_image3.siglip2 import LightProjector, Siglip2VisionTransformer
 
 logger = init_logger(__name__)
@@ -1194,6 +1195,7 @@ class HunyuanImage3SparseMoeBlock(HunYuanSparseMoeBlock):
         # + ``custom_routing_function``-driven ``SharedFusedMoE`` directly,
         # mirroring the parent's structure 1:1 except for the routing dtype.
         nn.Module.__init__(self)
+        self.layer_id = layer_id
 
         self.tp_size = get_tensor_model_parallel_world_size()
         self.ep_group = get_ep_group().device_group
@@ -1292,6 +1294,13 @@ class HunyuanImage3SparseMoeBlock(HunYuanSparseMoeBlock):
         # ``HunyuanTopKGate.easy_topk`` exactly.
         gates = torch.softmax(router_logits, dim=-1, dtype=torch.float32)
         topk_weights, topk_indices = torch.topk(gates, self.top_k, dim=-1)
+        record_moe_routes(
+            stage="ar",
+            layer_id=self.layer_id,
+            topk_indices=topk_indices,
+            num_experts=self.n_routed_experts,
+            default_modality="ar_text",
+        )
         weight_sums = topk_weights.sum(dim=-1, keepdim=True)
         topk_weights = topk_weights / weight_sums.clamp(min=1e-8)
 

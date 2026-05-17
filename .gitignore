@@ -194,6 +194,9 @@ AGENTS.md
 #  .idea/
 
 # vLLM-Omni specific
+# Local experiment outputs and downloaded auxiliary repos.
+artifacts/
+
 # Model files and checkpoints
 checkpoints/
 *.bin

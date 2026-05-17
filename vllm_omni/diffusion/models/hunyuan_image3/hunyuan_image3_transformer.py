@@ -75,6 +75,12 @@ from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.layers.rope import RotaryEmbedding
 from vllm_omni.diffusion.models.hunyuan_image3.hunyuan_fused_moe import HunyuanFusedMoE
 from vllm_omni.model_executor.layers.timestep_embedding import timestep_embedding
+from vllm_omni.model_executor.models.hunyuan_image3.moe_route_trace import (
+    enabled as moe_route_trace_enabled,
+)
+from vllm_omni.model_executor.models.hunyuan_image3.moe_route_trace import (
+    record_routes as record_moe_routes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1443,6 +1449,7 @@ class HunYuanSparseMoeBlock(nn.Module):
         enable_eplb: bool = False,
     ):
         super().__init__()
+        self.layer_id = layer_id
         self.tp_size = get_tensor_model_parallel_world_size()
         self.n_routed_experts = config.num_experts
 
@@ -1458,6 +1465,7 @@ class HunYuanSparseMoeBlock(nn.Module):
             top_k = config.moe_topk[layer_id]
         else:
             top_k = config.moe_topk
+        self.top_k = top_k
 
         # If it is moe, moe_intermediate_size is preferred
         intermediate_size = config.intermediate_size
@@ -1522,6 +1530,15 @@ class HunYuanSparseMoeBlock(nn.Module):
 
         # router_logits: (num_tokens, n_experts)
         router_logits, _ = self.gate(hidden_states)
+        if moe_route_trace_enabled():
+            _, topk_indices = torch.topk(router_logits.float(), self.top_k, dim=-1)
+            record_moe_routes(
+                stage="dit",
+                layer_id=self.layer_id,
+                topk_indices=topk_indices,
+                num_experts=self.n_routed_experts,
+                default_modality="dit_unknown",
+            )
         final_hidden_states = self.experts(hidden_states=hidden_states, router_logits=router_logits)
 
         return final_hidden_states.view(orig_shape)

@@ -29,6 +29,10 @@ from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import (
 )
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.inputs.data import OmniTextPrompt
+from vllm_omni.model_executor.models.hunyuan_image3.moe_route_trace import (
+    enabled as moe_route_trace_enabled,
+)
+from vllm_omni.model_executor.models.hunyuan_image3.moe_route_trace import request_capture, token_modality_labels
 from vllm_omni.model_executor.models.hunyuan_image3.siglip2 import Siglip2VisionTransformer
 
 from .autoencoder import AutoencoderKLConv3D
@@ -1229,29 +1233,77 @@ class HunyuanImage3Pipeline(
                 inputs_embeds, cond_vit_images, cond_vit_image_mask, vit_kwargs
             )
 
+        trace_labels = None
+        if moe_route_trace_enabled() and mode == "gen_image":
+            if uncond_cfg_prefill:
+                trace_labels = torch.zeros(
+                    (bsz, inputs_embeds.shape[1]),
+                    device=inputs_embeds.device,
+                    dtype=torch.int8,
+                )
+            elif first_step and image_mask is not None:
+                trace_labels = torch.zeros(
+                    (bsz, inputs_embeds.shape[1]),
+                    device=inputs_embeds.device,
+                    dtype=torch.int8,
+                )
+                trace_labels.masked_fill_(image_mask.to(device=inputs_embeds.device).bool(), 1)
+                if cond_vae_image_mask is not None:
+                    trace_labels.masked_fill_(cond_vae_image_mask.to(device=inputs_embeds.device).bool(), 3)
+                if cond_vit_image_mask is not None:
+                    trace_labels.masked_fill_(cond_vit_image_mask.to(device=inputs_embeds.device).bool(), 3)
+                if gen_timestep_scatter_index is not None:
+                    trace_labels.scatter_(
+                        dim=1,
+                        index=gen_timestep_scatter_index.to(device=inputs_embeds.device),
+                        src=torch.full_like(
+                            gen_timestep_scatter_index.to(device=inputs_embeds.device, dtype=torch.int8),
+                            2,
+                        ),
+                    )
+                if cond_timestep_scatter_index is not None:
+                    trace_labels.scatter_(
+                        dim=1,
+                        index=cond_timestep_scatter_index.to(device=inputs_embeds.device),
+                        src=torch.full_like(
+                            cond_timestep_scatter_index.to(device=inputs_embeds.device, dtype=torch.int8),
+                            2,
+                        ),
+                    )
+            else:
+                trace_labels = torch.ones(
+                    (bsz, inputs_embeds.shape[1]),
+                    device=inputs_embeds.device,
+                    dtype=torch.int8,
+                )
+                if trace_labels.shape[1] > 0:
+                    trace_labels[:, 0] = 2
+            trace_labels = trace_labels.reshape(-1) if trace_labels is not None else None
+
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         from vllm.forward_context import set_forward_context
 
         with set_forward_context(None, self.vllm_config):
-            outputs = self.model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-                custom_pos_emb=custom_pos_emb,
-                mode=mode,
-                first_step=first_step,
-                query_lens=query_lens,
-                seq_lens=seq_lens,
-                num_image_tokens=num_image_tokens,
-                gen_timestep_scatter_index=gen_timestep_scatter_index,
-                uncond_cfg_prefill=uncond_cfg_prefill,
-            )
+            with token_modality_labels(trace_labels):
+                outputs = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_values=past_key_values,
+                    inputs_embeds=inputs_embeds,
+                    use_cache=use_cache,
+                    output_attentions=output_attentions,
+                    output_hidden_states=output_hidden_states,
+                    return_dict=return_dict,
+                    custom_pos_emb=custom_pos_emb,
+                    mode=mode,
+                    first_step=first_step,
+                    query_lens=query_lens,
+                    seq_lens=seq_lens,
+                    num_image_tokens=num_image_tokens,
+                    gen_timestep_scatter_index=gen_timestep_scatter_index,
+                    uncond_cfg_prefill=uncond_cfg_prefill,
+                )
         hidden_states = outputs[0]
 
         if mode == "gen_text":
@@ -1415,7 +1467,8 @@ class HunyuanImage3Pipeline(
 
         model_inputs.update(ar_kv_kwargs)
 
-        outputs = self._generate(**model_inputs, **kwargs)
+        with request_capture(req.request_id, req.request_ids):
+            outputs = self._generate(**model_inputs, **kwargs)
         return DiffusionOutput(
             output=outputs[0],
             stage_durations=self.stage_durations if hasattr(self, "stage_durations") else None,
