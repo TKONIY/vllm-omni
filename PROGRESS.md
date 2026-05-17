@@ -122,3 +122,29 @@ Validation:
 Commit and push:
 
 - Commit `86e29c55` is pushed to the current branch upstream `fork/uad`.
+
+## Experiment Plan: HunyuanImage3 Phase Imbalance
+
+Status: completed.
+
+Completed modifications:
+
+- Created a separate experiment worktree at `/mnt/raid0nvme0/yangshen/code/vllm-omni-uad-phase-util-exp`.
+- Fetched latest upstream and merged `origin/main` (`c99df1eb`) into the experiment branch.
+- Resolved the HunyuanImage3 pipeline merge conflict by preserving upstream AR KV reuse / custom output changes and
+  keeping the opt-in MoE routing trace wrapper.
+- Added `docs/uad/script/check_hunyuan_phase_batching.py` as Gate 0 for HunyuanImage3 phase-internal batching.
+- Added `docs/uad/phase_imbalance_experiment_plan.md` with dataset, workload, metrics, deployment, and execution plan.
+
+Validation:
+
+- Passed: `python docs/uad/script/check_hunyuan_phase_batching.py --output-json artifacts/uad_phase_imbalance/preflight/phase_batching.json`.
+- Passed: `uv run --no-sync ruff check docs/uad/script/check_hunyuan_phase_batching.py`.
+- Passed: `uv run --no-sync python -m compileall -q docs/uad/script/check_hunyuan_phase_batching.py`.
+- Gate 0 result: `full_phase_internal_continuous_batching_ready=false`.
+  AR model code can batch, but the default deploy config keeps `max_num_seqs=1`.
+  HunyuanImage3 DiT has no stepwise execution hooks, so diffusion request mode still runs one request at a time.
+
+Commit and push:
+
+- This commit is prepared on branch `uad-phase-util-exp`; push pending.
