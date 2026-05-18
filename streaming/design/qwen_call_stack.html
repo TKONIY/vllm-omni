@@ -1,0 +1,2354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>vLLM-Omni · QwenOmni & QwenTTS 调用栈</title>
+<script>
+  // Pre-paint theme apply (avoid light-to-dark flash on load)
+  (function () {
+    try {
+      var saved = localStorage.getItem('qwen-callstack-theme');
+      var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var theme = saved || (prefersDark ? 'dark' : 'light');
+      if (theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+    } catch (e) {}
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* ── light (default) ── */
+    --bg:            #F5F1E8;
+    --bg-soft:       #EFE9DC;
+    --paper:         #FAF7F0;
+    --ink:           #1F1E1C;
+    --ink-soft:      #4A4642;
+    --ink-mute:      #756F68;
+    --line:          #DCD3BE;
+    --line-soft:     #E8E0CB;
+    --accent:        #CC785C;
+    --accent-deep:   #A85940;
+    --accent-soft:   #E8A38A;
+    --accent-wash:   #F4E2D7;
+    --sage:          #6E8B6A;
+    --sage-wash:     #E0E8DC;
+    --indigo:        #4A5A78;
+    --indigo-wash:   #DCE0E8;
+    --indigo-chip:   #DFE3F0;
+    --gold:          #B8862E;
+    --code-bg:       #1B1A18;
+    --code-fg:       #E8E2D4;
+    --code-mute:     #908779;
+    --code-key:      #E8A38A;
+    --code-str:      #B8B070;
+    --code-num:      #C49A6C;
+    --bar-bg:        rgba(245, 241, 232, 0.92);
+    --shadow-sm:     0 1px 2px rgba(31,30,28,.04), 0 1px 1px rgba(31,30,28,.03);
+    --shadow-md:     0 2px 6px rgba(31,30,28,.05), 0 8px 24px rgba(31,30,28,.04);
+
+    color-scheme: light;
+  }
+
+  /* ── dark (warm anthracite, Claude-style) ── */
+  [data-theme="dark"] {
+    --bg:            #1A1613;
+    --bg-soft:       #221D19;
+    --paper:         #2A2520;
+    --ink:           #ECE3D1;
+    --ink-soft:      #BFB5A2;
+    --ink-mute:      #877E70;
+    --line:          #3A332B;
+    --line-soft:     #2E2823;
+    --accent:        #E59377;     /* lifted for contrast on dark */
+    --accent-deep:   #F0B89E;
+    --accent-soft:   #F4C8B3;
+    --accent-wash:   #3A2820;
+    --sage:          #A3BFA0;
+    --sage-wash:     #243029;
+    --indigo:        #A3B4D0;
+    --indigo-wash:   #232C3B;
+    --indigo-chip:   #2B364A;
+    --gold:          #D4A953;
+    --code-bg:       #131210;
+    --code-fg:       #ECE3D1;
+    --code-mute:     #87796A;
+    --code-key:      #F0B89E;
+    --code-str:      #C8BC78;
+    --code-num:      #D4A678;
+    --bar-bg:        rgba(26, 22, 19, 0.92);
+    --shadow-sm:     0 1px 2px rgba(0,0,0,.25), 0 1px 1px rgba(0,0,0,.18);
+    --shadow-md:     0 2px 6px rgba(0,0,0,.3),  0 8px 24px rgba(0,0,0,.22);
+
+    color-scheme: dark;
+  }
+
+  html, body, .topbar, .card, .pipeline, .stack, .layer-table,
+  .dataflow, .df-node, .stage, .stage-tag, .chip, .topology, .topo-cell,
+  .numbered .step, .numbered .step .payload, .proc-tag, .glossary dd code,
+  code.ref, .fileref {
+    transition: background-color .25s ease, color .25s ease, border-color .25s ease;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* ---------- Layout ---------- */
+  .wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 32px;
+  }
+
+  /* ---------- Top nav ---------- */
+  .topbar {
+    border-bottom: 1px solid var(--line-soft);
+    background: var(--bar-bg);
+    backdrop-filter: blur(10px);
+    position: sticky;
+    top: 0;
+    z-index: 30;
+  }
+  .topbar-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 60px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: 'Fraunces', serif;
+    font-weight: 600;
+    font-size: 18px;
+    letter-spacing: -0.01em;
+  }
+  .brand-dot {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, var(--accent-soft), var(--accent) 70%, var(--accent-deep));
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,.05);
+  }
+  .topnav {
+    display: flex;
+    gap: 28px;
+    font-size: 14px;
+    color: var(--ink-soft);
+  }
+  .topnav a {
+    color: var(--ink-soft);
+    text-decoration: none;
+    transition: color .15s;
+  }
+  .topnav a:hover { color: var(--accent-deep); }
+
+  .theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px; height: 34px;
+    border: 1px solid var(--line);
+    background: var(--paper);
+    color: var(--ink-soft);
+    border-radius: 50%;
+    cursor: pointer;
+    padding: 0;
+    margin-left: 4px;
+    transition: background-color .2s, color .2s, border-color .2s, transform .15s;
+  }
+  .theme-toggle:hover {
+    color: var(--accent-deep);
+    border-color: var(--accent);
+    transform: rotate(15deg);
+  }
+  .theme-toggle .icon-sun { display: none; }
+  .theme-toggle .icon-moon { display: block; }
+  [data-theme="dark"] .theme-toggle .icon-sun  { display: block; }
+  [data-theme="dark"] .theme-toggle .icon-moon { display: none; }
+  @media (max-width: 720px) {
+    .topnav { gap: 14px; font-size: 13px; }
+  }
+  @media (max-width: 560px) {
+    .topnav a:not(:first-child):not(:last-child) { display: none; }
+  }
+
+  /* ---------- Hero ---------- */
+  .hero {
+    padding: 88px 0 64px;
+    border-bottom: 1px solid var(--line-soft);
+    background:
+      radial-gradient(ellipse 600px 320px at 88% 0%, var(--accent-wash) 0%, transparent 70%),
+      radial-gradient(ellipse 500px 280px at 10% 90%, var(--sage-wash) 0%, transparent 70%);
+  }
+  .eyebrow {
+    display: inline-block;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-weight: 600;
+    color: var(--accent-deep);
+    background: var(--accent-wash);
+    padding: 6px 12px;
+    border-radius: 100px;
+    margin-bottom: 24px;
+  }
+  h1 {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: clamp(36px, 5vw, 60px);
+    line-height: 1.08;
+    letter-spacing: -0.025em;
+    margin: 0 0 20px;
+    color: var(--ink);
+  }
+  h1 em {
+    font-style: italic;
+    color: var(--accent-deep);
+    font-weight: 400;
+  }
+  .lede {
+    font-size: 19px;
+    line-height: 1.6;
+    color: var(--ink-soft);
+    max-width: 720px;
+    margin: 0 0 32px;
+  }
+
+  .hero-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 28px;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    border-radius: 100px;
+    font-size: 13px;
+    font-weight: 500;
+    background: var(--paper);
+    color: var(--ink-soft);
+    border: 1px solid var(--line);
+  }
+  .chip-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent);
+  }
+  .chip.sage .chip-dot { background: var(--sage); }
+  .chip.indigo .chip-dot { background: var(--indigo); }
+  .chip.gold .chip-dot { background: var(--gold); }
+
+  /* ---------- Section ---------- */
+  section { padding: 80px 0; border-bottom: 1px solid var(--line-soft); }
+  section:last-child { border-bottom: none; }
+  .section-head { margin-bottom: 44px; }
+  .section-eyebrow {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-weight: 600;
+    color: var(--accent-deep);
+    margin-bottom: 14px;
+  }
+  h2 {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: clamp(28px, 3.4vw, 40px);
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    margin: 0 0 14px;
+  }
+  h2 em { color: var(--accent-deep); font-style: italic; font-weight: 400; }
+  .section-sub {
+    font-size: 17px;
+    color: var(--ink-soft);
+    max-width: 720px;
+    margin: 0;
+  }
+  h3 {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 22px;
+    letter-spacing: -0.01em;
+    margin: 0 0 12px;
+  }
+
+  /* ---------- Cards ---------- */
+  .card {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 28px;
+    box-shadow: var(--shadow-sm);
+    transition: transform .2s, box-shadow .2s;
+  }
+  .card:hover { box-shadow: var(--shadow-md); }
+  .card-title {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+  .card-num {
+    font-family: 'Fraunces', serif;
+    font-size: 28px;
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .card p { color: var(--ink-soft); margin: 8px 0 0; font-size: 15px; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  @media (max-width: 860px) {
+    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  }
+
+  /* ---------- Pipeline diagram ---------- */
+  .pipeline {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 32px;
+    margin-top: 28px;
+    box-shadow: var(--shadow-sm);
+  }
+  .pipe-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 24px;
+    font-family: 'Fraunces', serif;
+    font-size: 20px;
+    font-weight: 500;
+  }
+  .pipe-title .badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    background: var(--accent-wash);
+    color: var(--accent-deep);
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+  .stages {
+    display: grid;
+    gap: 14px;
+  }
+  .qwen-tts .stages { grid-template-columns: 1fr 24px 1fr; }
+  .qwen-omni .stages { grid-template-columns: 1fr 24px 1fr 24px 1fr; }
+  @media (max-width: 760px) {
+    .qwen-tts .stages, .qwen-omni .stages { grid-template-columns: 1fr; }
+    .arrow { transform: rotate(90deg); justify-self: center; }
+  }
+  .stage {
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 18px 16px;
+    min-height: 130px;
+  }
+  .stage-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .stage-name {
+    font-weight: 600;
+    font-size: 14px;
+    letter-spacing: 0.02em;
+  }
+  .stage-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: var(--paper);
+    color: var(--ink-mute);
+    border: 1px solid var(--line);
+  }
+  .stage-tag.ar { background: var(--accent-wash); color: var(--accent-deep); border-color: transparent; }
+  .stage-tag.gen { background: var(--sage-wash); color: var(--sage); border-color: transparent; }
+  .stage-tag.thinker { background: var(--indigo-wash); color: var(--indigo); border-color: transparent; }
+  .stage-desc {
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    line-height: 1.5;
+  }
+  .stage-runner {
+    margin-top: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--accent-deep);
+  }
+  .arrow {
+    align-self: center;
+    justify-self: center;
+    color: var(--accent);
+    font-size: 22px;
+    font-weight: 300;
+  }
+
+  /* ---------- Call stack tree ---------- */
+  .stack {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    border-radius: 14px;
+    padding: 28px 24px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.85;
+    overflow-x: auto;
+    margin-top: 24px;
+    box-shadow: var(--shadow-md);
+  }
+  .stack .l1 { color: var(--accent-soft); font-weight: 600; }
+  .stack .l2 { color: #E8E2D4; padding-left: 1.5em; }
+  .stack .l3 { color: #C8C0AF; padding-left: 3em; }
+  .stack .l4 { color: #A8A092; padding-left: 4.5em; }
+  .stack .l5 { color: #908779; padding-left: 6em; }
+  .stack .stage-marker {
+    display: inline-block;
+    padding: 1px 8px;
+    margin-right: 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    vertical-align: 2px;
+  }
+  .stack .m-thinker { background: var(--indigo); color: #fff; }
+  .stack .m-talker { background: var(--accent); color: #fff; }
+  .stack .m-code2wav { background: var(--sage); color: #fff; }
+  .stack .cmt { color: var(--code-mute); font-style: italic; }
+  .stack .fn { color: var(--code-key); }
+  .stack .str { color: var(--code-str); }
+  .stack .path { color: var(--code-num); }
+
+  /* ---------- File ref ---------- */
+  code.ref, .fileref {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    background: var(--bg-soft);
+    color: var(--accent-deep);
+    padding: 1px 7px;
+    border-radius: 4px;
+    border: 1px solid var(--line-soft);
+    white-space: nowrap;
+  }
+
+  /* ---------- Tables ---------- */
+  .layer-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    margin-top: 20px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+  }
+  .layer-table th {
+    text-align: left;
+    background: var(--bg-soft);
+    padding: 14px 18px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    border-bottom: 1px solid var(--line);
+  }
+  .layer-table td {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line-soft);
+    font-size: 14px;
+    vertical-align: top;
+  }
+  .layer-table tr:last-child td { border-bottom: none; }
+  .layer-table .layer-name {
+    font-weight: 600;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+  .layer-table .layer-tag {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: var(--accent-wash);
+    color: var(--accent-deep);
+    font-weight: 600;
+    margin-right: 6px;
+  }
+
+  /* ---------- Comparison ---------- */
+  .cmp {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-top: 24px;
+  }
+  @media (max-width: 760px) { .cmp { grid-template-columns: 1fr; } }
+  .cmp .card { padding: 26px; }
+  .cmp h4 {
+    font-family: 'Fraunces', serif;
+    font-size: 18px;
+    margin: 0 0 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .cmp .swatch { width: 12px; height: 12px; border-radius: 3px; }
+  .cmp ul { margin: 10px 0 0; padding-left: 18px; color: var(--ink-soft); font-size: 14px; }
+  .cmp ul li { margin: 7px 0; }
+
+  /* ---------- Key bullets ---------- */
+  .kv {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 14px 24px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .kv dt {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 16px;
+    color: var(--accent-deep);
+    padding-top: 2px;
+  }
+  .kv dd { margin: 0; color: var(--ink-soft); font-size: 14.5px; }
+  @media (max-width: 760px) { .kv { grid-template-columns: 1fr; gap: 4px 0; }
+    .kv dt { margin-top: 12px; }
+  }
+
+  /* ---------- Glossary ---------- */
+  .glossary {
+    grid-template-columns: 220px 1fr;
+    gap: 16px 28px;
+    margin-top: 12px;
+  }
+  .glossary dt { padding-top: 4px; }
+  .glossary dd code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    background: var(--bg-soft);
+    color: var(--accent-deep);
+    padding: 1px 6px;
+    border-radius: 3px;
+    border: 1px solid var(--line-soft);
+  }
+  @media (max-width: 760px) { .glossary { grid-template-columns: 1fr; } }
+
+  /* ---------- Numbered step list ---------- */
+  .numbered {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    counter-reset: step;
+    display: grid;
+    gap: 16px;
+  }
+  .numbered > li {
+    display: grid;
+    grid-template-columns: 56px 1fr;
+    gap: 18px;
+    align-items: stretch;
+  }
+  .numbered .num {
+    font-family: 'Fraunces', serif;
+    font-size: 28px;
+    font-weight: 500;
+    color: var(--accent);
+    line-height: 1;
+    padding-top: 18px;
+    text-align: center;
+    border-right: 1px dashed var(--line);
+  }
+  .numbered .step {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 22px;
+    box-shadow: var(--shadow-sm);
+  }
+  .numbered .step h4 {
+    font-family: 'Fraunces', serif;
+    font-size: 17px;
+    font-weight: 500;
+    margin: 0 0 6px;
+    color: var(--ink);
+  }
+  .numbered .step p {
+    margin: 0 0 10px;
+    color: var(--ink-soft);
+    font-size: 14.5px;
+    line-height: 1.6;
+  }
+  .numbered .step .loc {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    color: var(--ink-mute);
+    margin-top: 4px;
+  }
+  .numbered .step .payload {
+    margin-top: 8px;
+    padding: 8px 12px;
+    background: var(--bg-soft);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    color: var(--ink-soft);
+  }
+  .numbered .step .payload code {
+    background: transparent;
+    padding: 0;
+    color: var(--accent-deep);
+    border: none;
+  }
+
+  /* mini stack inside step cards */
+  .stack.mini {
+    margin-top: 10px;
+    padding: 14px 16px;
+    font-size: 12px;
+    line-height: 1.7;
+  }
+
+  /* journey-specific tags */
+  .proc-tag {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    padding: 2px 7px;
+    border-radius: 3px;
+    margin-right: 8px;
+    vertical-align: 1px;
+  }
+  .proc-tag.frontend { background: var(--indigo-wash); color: var(--indigo); }
+  .proc-tag.talker   { background: var(--accent-wash); color: var(--accent-deep); }
+  .proc-tag.code2wav { background: var(--sage-wash);   color: var(--sage); }
+  .proc-tag.thinker  { background: var(--indigo-chip); color: var(--indigo); }
+
+  /* ---------- Topology diagram ---------- */
+  .topology {
+    display: grid;
+    grid-template-columns: 1fr auto 1.6fr;
+    gap: 24px;
+    align-items: center;
+    margin-top: 24px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 28px;
+    box-shadow: var(--shadow-sm);
+  }
+  @media (max-width: 860px) {
+    .topology { grid-template-columns: 1fr; }
+    .topo-arrow { transform: rotate(90deg); justify-self: center; }
+  }
+  .topo-col { display: grid; gap: 12px; }
+  .topo-cell {
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .topo-cell.topo-frontend { border-left-color: var(--indigo); background: var(--indigo-wash); }
+  .topo-cell.stage-thinker  { border-left-color: var(--indigo); }
+  .topo-cell.stage-talker   { border-left-color: var(--accent); }
+  .topo-cell.stage-code2wav { border-left-color: var(--sage); }
+  .topo-title {
+    font-family: 'Fraunces', serif;
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--ink);
+  }
+  .topo-sub {
+    font-size: 12px;
+    color: var(--ink-mute);
+    margin-bottom: 6px;
+  }
+  .topo-cell ul {
+    list-style: none;
+    padding: 0;
+    margin: 8px 0 0;
+    font-size: 13px;
+    color: var(--ink-soft);
+  }
+  .topo-cell ul li {
+    padding: 2px 0;
+  }
+  .topo-cell ul li code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    color: var(--accent-deep);
+  }
+  .topo-arrow {
+    text-align: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-mute);
+    line-height: 1.5;
+  }
+  .topo-arrow::after {
+    content: '→';
+    display: block;
+    font-size: 24px;
+    color: var(--accent);
+    margin-top: 4px;
+  }
+  @media (max-width: 860px) {
+    .topo-arrow::after { transform: rotate(90deg); display: inline-block; }
+  }
+
+  /* ---------- Data flow diagram ---------- */
+  .dataflow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    margin-top: 28px;
+    padding: 32px 24px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: var(--shadow-sm);
+  }
+  .df-node {
+    width: 100%;
+    max-width: 580px;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 10px;
+    padding: 14px 18px;
+    text-align: center;
+  }
+  .df-node.df-stage      { border-left-color: var(--indigo); background: var(--indigo-wash); }
+  .df-node.df-stage-next { border-left-color: var(--sage);   background: var(--sage-wash); }
+  .df-node.df-outproc    { border-left-color: var(--gold);   }
+  .df-node.df-orch       { border-left-color: var(--accent-deep); background: var(--accent-wash); }
+  .df-node.df-proc       { border-left-color: var(--accent); }
+  .df-label {
+    font-family: 'Fraunces', serif;
+    font-size: 17px;
+    font-weight: 500;
+    color: var(--ink);
+  }
+  .df-sub {
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--ink-soft);
+  }
+  .df-sub code, .df-edge-label code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    background: var(--paper);
+    padding: 1px 6px;
+    border-radius: 3px;
+    color: var(--accent-deep);
+    border: 1px solid var(--line-soft);
+  }
+  .df-edge {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 6px 0;
+  }
+  .df-edge-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    color: var(--ink-mute);
+    margin-bottom: 2px;
+  }
+  .df-arrow {
+    color: var(--accent);
+    font-size: 16px;
+    line-height: 1;
+  }
+
+  /* ---------- Callout ---------- */
+  .callout {
+    margin: 20px 0 16px;
+    padding: 16px 20px;
+    background: var(--accent-wash);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+    color: var(--ink);
+  }
+  .callout-title {
+    font-family: 'Fraunces', serif;
+    font-weight: 600;
+    font-size: 15px;
+    color: var(--accent-deep);
+    margin-bottom: 6px;
+  }
+  .callout p {
+    margin: 0;
+    font-size: 14.5px;
+    color: var(--ink-soft);
+    line-height: 1.6;
+  }
+  .callout code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    background: var(--paper);
+    color: var(--accent-deep);
+    padding: 1px 6px;
+    border-radius: 3px;
+    border: 1px solid var(--line-soft);
+  }
+
+  /* ---------- Footer ---------- */
+  footer {
+    padding: 50px 0;
+    text-align: center;
+    color: var(--ink-mute);
+    font-size: 13px;
+    border-top: 1px solid var(--line-soft);
+    background: var(--bg-soft);
+  }
+  footer .brand-dot { display: inline-block; vertical-align: -3px; margin-right: 6px; }
+</style>
+</head>
+<body>
+
+<!-- ============ TOPBAR ============ -->
+<header class="topbar">
+  <div class="wrap topbar-inner">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span>vLLM-Omni · Call&nbsp;Stack</span>
+    </div>
+    <nav class="topnav">
+      <a href="#overview">概览</a>
+      <a href="#glossary">术语</a>
+      <a href="#reception">接入</a>
+      <a href="#qwen-omni">QwenOmni</a>
+      <a href="#qwen-tts">QwenTTS</a>
+      <a href="#data-flow">数据</a>
+      <a href="#scheduling">调度</a>
+      <a href="#streaming">输出</a>
+      <a href="#journey">旅程</a>
+      <a href="#patterns">模式</a>
+      <button id="themeToggle" class="theme-toggle" aria-label="切换主题" title="切换主题">
+        <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="4"/>
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+        </svg>
+        <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+        </svg>
+      </button>
+    </nav>
+  </div>
+</header>
+
+<!-- ============ HERO ============ -->
+<div class="hero">
+  <div class="wrap">
+    <span class="eyebrow">vLLM-Omni · Architecture Notes</span>
+    <h1>QwenOmni 与 QwenTTS 的<br/><em>调用栈</em>剖析</h1>
+    <p class="lede">
+      从 <code class="ref">AsyncOmni.generate()</code> 一路向下，到达 RVQ 码本、声码器、最终的语音波形。
+      本文档梳理两条多阶段流水线 —— 三阶段 Thinker → Talker → Code2Wav 全模态推理，
+      与轻量级两阶段 Talker → Code2Wav 文本到语音 —— 在 vLLM-Omni 中的代码路径与关键组件。
+    </p>
+    <div class="hero-meta">
+      <span class="chip"><span class="chip-dot"></span>AR Talker</span>
+      <span class="chip sage"><span class="chip-dot"></span>Non-AR Code2Wav</span>
+      <span class="chip indigo"><span class="chip-dot"></span>Multimodal Thinker</span>
+      <span class="chip gold"><span class="chip-dot"></span>Streaming Audio</span>
+    </div>
+  </div>
+</div>
+
+<!-- ============ OVERVIEW ============ -->
+<section id="overview">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Overview</div>
+      <h2>统一的 <em>多阶段</em> 编排框架</h2>
+      <p class="section-sub">
+        vLLM-Omni 把任意多模态模型抽象成一条由若干 <strong>Stage</strong> 串接的流水线。
+        每个 Stage 拥有独立的 Engine / Executor / ModelRunner，由 <code class="ref">Orchestrator</code>
+        驱动跨阶段的张量传递。QwenOmni 与 QwenTTS 共享相同的编排骨架，只在阶段数量和模型类上有所不同。
+      </p>
+    </div>
+
+    <div class="grid-3">
+      <div class="card">
+        <div class="card-title"><span class="card-num">01</span><h3>入口编排</h3></div>
+        <p><code class="ref">AsyncOmni</code> 暴露 <code class="ref">generate()</code> 异步接口，
+        内部由 <code class="ref">AsyncOmniEngine</code> 启动后台 <code class="ref">Orchestrator</code>
+        线程，按 Stage 顺序把请求转交给对应的 <code class="ref">StagePool</code>。</p>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="card-num">02</span><h3>阶段执行</h3></div>
+        <p>每个 Stage 持有若干 <code class="ref">StagePool</code> 副本，副本内部是一个独立的
+        vLLM 引擎实例 —— 自回归阶段使用 <code class="ref">GPUARModelRunner</code>，
+        非自回归阶段使用 <code class="ref">GPUGenerationModelRunner</code>。</p>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="card-num">03</span><h3>跨阶段载荷</h3></div>
+        <p>阶段之间通过 <code class="ref">StageSubmissionMessage</code> 与
+        <code class="ref">OmniPayload</code> 传递隐藏状态、codes、参考音色等张量；
+        <code class="ref">OmniRequestState.mm_accumulated</code> 在跨阶段过程中累积多模态输出。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ GLOSSARY ============ -->
+<section id="glossary">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Terminology</div>
+      <h2>先把 <em>名词</em> 对齐</h2>
+      <p class="section-sub">
+        在追踪一条请求的旅程之前，先把 vLLM-Omni 里频繁出现、却容易和上游 vLLM 混淆的概念定义清楚。
+      </p>
+    </div>
+
+    <dl class="kv glossary">
+      <dt>Stage</dt>
+      <dd>流水线的一个逻辑节点。一个模型可被拆为多个 Stage —— QwenOmni 三个、QwenTTS 两个。
+          每个 Stage 拥有独立的 <code>VllmConfig</code>、KV cache、Scheduler 与 ModelRunner。</dd>
+
+      <dt>StagePool / StagePoolClient</dt>
+      <dd>同一 Stage 的副本池（一个副本 = 一个 EngineCore 子进程）。
+          <code>StagePoolClient</code> 抽象了 LLM 与 Diffusion 两种 stage 的统一访问接口。</dd>
+
+      <dt>Orchestrator</dt>
+      <dd>跨阶段调度器，运行在 AsyncOmni 主进程的后台线程里。
+          它持有所有 <code>StagePool</code>，按 <code>PipelineConfig.stages</code> 的拓扑
+          把上游输出转发给下游。</dd>
+
+      <dt>Thinker · Talker · Code2Wav</dt>
+      <dd>QwenOmni 的三个 Stage 角色：
+          <strong>Thinker</strong> 做多模态理解 + 文本生成；
+          <strong>Talker</strong> 把文本 hidden 转成 16 层 RVQ codes；
+          <strong>Code2Wav</strong> 把 codes 解码成语音波形。QwenTTS 没有 Thinker。</dd>
+
+      <dt>RVQ codes · codebook size</dt>
+      <dd>Residual Vector Quantization。每一帧由 16 个 codebook 索引表示
+          （<code>[T, 16]</code>），<code>codebook_size=2048</code>。
+          超过该值的 token 视作控制符（如 EOS=2150）。</dd>
+
+      <dt>talker_mtp</dt>
+      <dd>Talker 内嵌的 Multi-Token-Predictor，单次前向预测 16 层 codes。
+          独立于 backbone 单独 CUDA Graph 捕获，是 Talker 阶段的性能关键路径。</dd>
+
+      <dt>StageExecutionType</dt>
+      <dd><code>LLM_AR</code>：自回归生成，使用 <code>GPUARModelRunner</code> + <code>OmniARScheduler</code>。<br/>
+          <code>LLM_GENERATION</code>：一次性生成（如 Code2Wav），使用 <code>GPUGenerationModelRunner</code> + <code>OmniGenerationScheduler</code>。</dd>
+
+      <dt>OmniPayload · CodesStruct</dt>
+      <dd>跨阶段张量载荷的 TypedDict / msgspec.Struct 定义。
+          <code>CodesStruct.audio</code> 形状 <code>[T, 16]</code>，<code>CodesStruct.ref</code> 是可选的参考音色 codes。</dd>
+
+      <dt>mm_accumulated</dt>
+      <dd><code>OmniRequestState</code> 的字段，<code>dict[str, Any]</code>。
+          ModelRunner 每步产出的 <code>pooling_output</code> 都会被按 modality 名累加到这里，
+          最终挂到 <code>CompletionOutput.multimodal_output</code> 上。</dd>
+
+      <dt>OmniTokensPrompt</dt>
+      <dd>Stage Input Processor 的输出类型 —— 把上游的 codes / hidden 重新打包为可投递下游 EngineCore 的 token prompt。
+          <code>prompt_token_ids</code> 是 codes flatten 后的整型序列。</dd>
+
+      <dt>StageSubmissionMessage</dt>
+      <dd>跨阶段控制消息（msgspec 序列化）。携带 <code>request_id</code>、<code>prompt</code>、
+          <code>sampling_params_list</code>、<code>final_stage_id</code> 等。
+          实际张量则走 EngineCoreRequest 的 <code>additional_information</code>。</dd>
+
+      <dt>PipelineConfig / StagePipelineConfig</dt>
+      <dd>声明式的流水线 dataclass。<code>StagePipelineConfig.input_sources</code> 描述上游依赖，
+          三类 processor 函数（<code>process_input</code>、<code>process_next_stage_input</code>、
+          <code>async_chunk_process_next_stage_input</code>）都以字符串路径登记。</dd>
+
+      <dt>final_output_type</dt>
+      <dd>每个 Stage 可选标记自己是 <code>"text"</code> 还是 <code>"audio"</code> 的最终输出。
+          <code>FinalOutputModalityType</code> 据此决定 <code>AsyncOmni.generate()</code> yield 哪些 chunk。</dd>
+
+      <dt>EngineCore</dt>
+      <dd>上游 vLLM 的术语，指真正持有模型与 KV cache 的工作进程。
+          在 vLLM-Omni 中每个 Stage 副本就是一个 <code>StageEngineCoreProc</code>（spawn 出来的子进程）。</dd>
+
+      <dt>OmniKVTransferManager</dt>
+      <dd>包装 vLLM KV cache 的管理器；在 async-chunk 路径下负责把上游已产 KV 块「过户」给下游。
+          相关 Scheduler 是 <code>OmniARScheduler</code>。</dd>
+
+      <dt>Suppressed-token mask</dt>
+      <dd>Talker 采样时对 logits 加的 mask，用以禁止生成不在 codec 字典内的非法 token —— 配合
+          <code>stop_token_ids: [2150]</code> 控制结束位置。</dd>
+    </dl>
+  </div>
+</section>
+
+<!-- ============ REQUEST RECEPTION ============ -->
+<section id="reception">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Receiving a Request</div>
+      <h2>HTTP 到 EngineCore · <em>请求</em> 是怎样落到模型上的</h2>
+      <p class="section-sub">
+        从用户的一次 <code>POST /v1/chat/completions</code> 出发，沿着 FastAPI 路由、AsyncOmni、
+        OmniInputPreprocessor、Orchestrator，一路追到第一个 Stage 的 EngineCore 子进程。
+      </p>
+    </div>
+
+    <ol class="numbered">
+      <li>
+        <div class="num">1</div>
+        <div class="step">
+          <h4>HTTP 入口 · OpenAI 兼容路由</h4>
+          <p>vLLM-Omni 复用 vLLM 的 <code class="ref">build_openai_app()</code>，但把
+            <code>/v1/chat/completions</code>、<code>/v1/audio/speech</code> 等 multimodal 路由
+            从原始 router 上摘掉，再挂上自己的 handler。</p>
+          <div class="loc"><span class="fileref">vllm_omni/entrypoints/openai/api_server.py:365-399</span></div>
+          <div class="stack mini">
+<div class="l1">async with <span class="fn">build_async_omni</span>(args, client_config=client_config) as engine_client:</div>
+<div class="l2">    app = <span class="fn">build_openai_app</span>(args, supported_tasks)</div>
+<div class="l2">    <span class="fn">_remove_route_from_app</span>(app, <span class="str">"/v1/chat/completions"</span>, {<span class="str">"POST"</span>})</div>
+<div class="l2">    app.include_router(router)  <span class="cmt"># 注册 Omni 自己的 handler</span></div>
+          </div>
+        </div>
+      </li>
+
+      <li>
+        <div class="num">2</div>
+        <div class="step">
+          <h4>Chat / Speech Handler · 转发给 AsyncOmni</h4>
+          <p><code class="ref">OmniOpenAIServingChat.create_chat_completion()</code> 与
+            <code class="ref">OmniOpenAIServingSpeech</code> 都把请求转化为内部 prompt 结构后，
+            调用 <code>engine_client.generate()</code> —— 即 <code class="ref">AsyncOmni.generate()</code>。</p>
+          <div class="loc"><span class="fileref">vllm_omni/entrypoints/openai/serving_chat.py:168-191</span></div>
+        </div>
+      </li>
+
+      <li>
+        <div class="num">3</div>
+        <div class="step">
+          <h4>OmniInputPreprocessor · 文本分词 + 多模态处理</h4>
+          <p><code class="ref">OmniInputPreprocessor._process_text()</code> 走标准 tokenizer 路径；
+            如果 <code>multi_modal_data</code> 非空，再交给
+            <code class="ref">_process_multimodal()</code> 调用 HuggingFace 模型自带的 processor
+            （图像 / 音频特征提取），结果合并成统一的 <code>EngineCoreRequest</code>。</p>
+          <div class="loc"><span class="fileref">vllm_omni/inputs/preprocess.py:28-94</span></div>
+          <div class="stack mini">
+<div class="l1">if multi_modal_data := parsed_content.get(<span class="str">"multi_modal_data"</span>):</div>
+<div class="l2">    inputs = self.<span class="fn">_process_multimodal</span>(</div>
+<div class="l3">        prompt_text, multi_modal_data, mm_processor_kwargs, ...)</div>
+          </div>
+        </div>
+      </li>
+
+      <li>
+        <div class="num">4</div>
+        <div class="step">
+          <h4>AsyncOmni.generate() · 包装异步生成器</h4>
+          <p>构造 <code class="ref">OmniRequestState</code>（含 <code>mm_accumulated={}</code> 初值），
+            把 <code>StageSubmissionMessage(type="add_request")</code> 投递到
+            <code class="ref">request_async_queue</code>，然后开始 <code>yield</code> 来自
+            <code class="ref">output_async_queue</code> 的输出片段。</p>
+          <div class="loc"><span class="fileref">vllm_omni/entrypoints/async_omni.py:220-236</span> · <span class="fileref">vllm_omni/engine/output_processor.py:29-48</span></div>
+        </div>
+      </li>
+
+      <li>
+        <div class="num">5</div>
+        <div class="step">
+          <h4>Orchestrator 接管 · 派发到第一个 Stage</h4>
+          <p>后台 <code class="ref">Orchestrator</code> 线程从 <code>request_async_queue</code> 拉取消息，
+            根据 <code>PipelineConfig.stages[0]</code> 选定入口 Stage，
+            通过 <code class="ref">StagePool.submit_initial()</code> 把
+            <code>EngineCoreRequest</code> 投递给某个副本。</p>
+          <div class="loc"><span class="fileref">vllm_omni/engine/orchestrator.py</span> · <span class="fileref">vllm_omni/engine/stage_pool.py:194-252</span></div>
+        </div>
+      </li>
+
+      <li>
+        <div class="num">6</div>
+        <div class="step">
+          <h4>跨进程到 EngineCore · ZMQ ROUTER 握手</h4>
+          <p>每个 Stage 副本是一个 <code class="ref">StageEngineCoreProc</code> 子进程（<code>multiprocessing.Process</code> spawn 出来）。
+            主进程通过 ZMQ ROUTER socket 与子进程握手并保持 RPC 通道，
+            后续每个 token 步的输出经此通道回流。</p>
+          <div class="loc"><span class="fileref">vllm_omni/engine/stage_engine_core_proc.py:118-190</span></div>
+          <div class="stack mini">
+<div class="l1">ctx = <span class="fn">get_mp_context</span>()</div>
+<div class="l1">proc = ctx.<span class="fn">Process</span>(target=StageEngineCoreProc.run_stage_core, ...)</div>
+<div class="l1">proc.start()</div>
+<div class="l1"><span class="cmt"># 子进程中：</span></div>
+<div class="l1">with <span class="fn">zmq_socket_ctx</span>(handshake_address, zmq.ROUTER, bind=True) as sock:</div>
+<div class="l2">    identity, msg = <span class="fn">_recv</span>(poller, sock, proc, <span class="str">"HELLO"</span>, handshake_timeout)</div>
+          </div>
+        </div>
+      </li>
+    </ol>
+
+    <h3 style="margin-top:48px;">进程拓扑速览</h3>
+    <div class="topology">
+      <div class="topo-col">
+        <div class="topo-cell topo-frontend">
+          <div class="topo-title">Frontend Process</div>
+          <ul>
+            <li>FastAPI · uvicorn</li>
+            <li><code>OmniOpenAIServingChat / Speech</code></li>
+            <li><code>AsyncOmni</code> · 异步 generate 入口</li>
+            <li><code>OmniInputPreprocessor</code></li>
+            <li><strong>Orchestrator</strong>（后台线程）</li>
+            <li><strong>StagePool</strong> × N</li>
+            <li>3 条 <code>janus.AsyncQueue</code></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="topo-arrow">ZMQ ROUTER / DEALER<br/><code>ipc:///tmp/...</code></div>
+
+      <div class="topo-col">
+        <div class="topo-cell topo-stage stage-thinker">
+          <div class="topo-title">Stage 0 · EngineCore</div>
+          <div class="topo-sub">e.g. Thinker (QwenOmni)</div>
+          <ul>
+            <li><code>StageEngineCoreProc</code></li>
+            <li><code>OmniARScheduler</code></li>
+            <li><code>GPUARModelRunner</code></li>
+            <li>独立 KV cache pool</li>
+          </ul>
+        </div>
+        <div class="topo-cell topo-stage stage-talker">
+          <div class="topo-title">Stage 1 · EngineCore</div>
+          <div class="topo-sub">Talker</div>
+          <ul>
+            <li><code>StageEngineCoreProc</code></li>
+            <li><code>OmniARScheduler</code></li>
+            <li><code>GPUARModelRunner</code> + talker_mtp</li>
+          </ul>
+        </div>
+        <div class="topo-cell topo-stage stage-code2wav">
+          <div class="topo-title">Stage 2 · EngineCore</div>
+          <div class="topo-sub">Code2Wav</div>
+          <ul>
+            <li><code>StageEngineCoreProc</code></li>
+            <li><code>OmniGenerationScheduler</code></li>
+            <li><code>GPUGenerationModelRunner</code></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <p style="color:var(--ink-mute); font-size:13px; margin-top:14px;">
+      ※ 每个 Stage 可有多副本（StagePool size > 1），副本之间通过亲和性路由（如 same speaker → same replica）保留缓存命中。
+    </p>
+  </div>
+</section>
+
+<!-- ============ QWEN OMNI ============ -->
+<section id="qwen-omni">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Pipeline 01 · Qwen3-Omni / Qwen2.5-Omni</div>
+      <h2>QwenOmni · <em>Thinker → Talker → Code2Wav</em></h2>
+      <p class="section-sub">
+        三阶段全模态推理：Thinker 负责多模态理解与文本生成，
+        Talker 把文本隐藏状态映射成 RVQ 码字（含 Multi-Token-Prediction），
+        Code2Wav 把 16 层残差量化 codes 解码成语音波形。
+      </p>
+    </div>
+
+    <!-- pipeline diagram -->
+    <div class="pipeline qwen-omni">
+      <div class="pipe-title">
+        <span>Stage Pipeline</span>
+        <span class="badge">vllm_omni/model_executor/models/qwen3_omni/</span>
+      </div>
+      <div class="stages">
+        <div class="stage">
+          <div class="stage-head">
+            <span class="stage-name">① Thinker</span>
+            <span class="stage-tag thinker">LLM_AR</span>
+          </div>
+          <div class="stage-desc">
+            多模态输入（text · audio · vision）→ 文本 tokens；
+            捕获中间层 embedding 供 Talker 复用。
+          </div>
+          <div class="stage-runner">GPUARModelRunner</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="stage">
+          <div class="stage-head">
+            <span class="stage-name">② Talker</span>
+            <span class="stage-tag ar">LLM_AR</span>
+          </div>
+          <div class="stage-desc">
+            Thinker 隐藏状态 + TTS embedding → RVQ codes；
+            内部 MTP code predictor，支持 CUDA Graph 捕获。
+          </div>
+          <div class="stage-runner">GPUARModelRunner + talker_mtp</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="stage">
+          <div class="stage-head">
+            <span class="stage-name">③ Code2Wav</span>
+            <span class="stage-tag gen">LLM_GENERATION</span>
+          </div>
+          <div class="stage-desc">
+            <code>[B, 16, T]</code> codes → 16Hz / 12Hz 波形；
+            <code>Qwen3TTSTokenizerV2Decoder</code> 流式分块解码。
+          </div>
+          <div class="stage-runner">GPUGenerationModelRunner</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- call stack -->
+    <h3 style="margin-top:48px;">完整调用链</h3>
+    <div class="stack">
+<div class="l1"><span class="fn">AsyncOmni.generate()</span>  <span class="cmt"># vllm_omni/entrypoints/async_omni.py:220</span></div>
+<div class="l2">└── <span class="fn">AsyncOmniEngine.generate()</span>  <span class="cmt"># vllm_omni/engine/async_omni_engine.py</span></div>
+<div class="l3">    └── <span class="fn">Orchestrator.process_request()</span>  <span class="cmt"># vllm_omni/engine/orchestrator.py</span></div>
+<div class="l4">        │</div>
+<div class="l4">        ├── <span class="stage-marker m-thinker">THINKER</span><span class="fn">StagePool[0].step()</span></div>
+<div class="l5">        │   └── <span class="fn">GPUARModelRunner.execute_model()</span>  <span class="cmt"># worker/gpu_ar_model_runner.py:310</span></div>
+<div class="l5">        │       └── <span class="fn">Qwen3OmniMoeForConditionalGeneration.forward</span>(stage=<span class="str">"thinker"</span>)  <span class="cmt"># qwen3_omni.py:328</span></div>
+<div class="l5">        │           └── <span class="fn">Qwen3OmniMoeThinkerForConditionalGeneration.forward()</span></div>
+<div class="l5">        │               <span class="cmt"># 返回 text_hidden_states, captured_layer_dict（供 Talker 使用）</span></div>
+<div class="l4">        │</div>
+<div class="l4">        ├── <span class="fn">StageInputProcessor[qwen3_omni].thinker2talker()</span>  <span class="cmt"># stage_input_processors/qwen3_omni.py</span></div>
+<div class="l5">        │   <span class="cmt"># 提取 thinker hidden + TTS embedding，注入参考音色 codes</span></div>
+<div class="l4">        │</div>
+<div class="l4">        ├── <span class="stage-marker m-talker">TALKER&nbsp;</span><span class="fn">StagePool[1].step()</span></div>
+<div class="l5">        │   └── <span class="fn">GPUARModelRunner.execute_model()</span>  <span class="cmt"># 含 talker_mtp CUDAGraphWrapper</span></div>
+<div class="l5">        │       └── <span class="fn">Qwen3OmniMoeForConditionalGeneration.forward</span>(stage=<span class="str">"talker"</span>)  <span class="cmt"># qwen3_omni.py:388</span></div>
+<div class="l5">        │           ├── <span class="fn">talker_preprocess()</span>   <span class="cmt"># 拼接 embedding，加 suppressed-token mask</span></div>
+<div class="l5">        │           ├── <span class="fn">Qwen3OmniMoeTalkerForConditionalGeneration.forward()</span></div>
+<div class="l5">        │           ├── <span class="fn">Qwen3OmniMoeMTPCodePredictor()</span>   <span class="cmt"># 一次生成 16 层 RVQ codes</span></div>
+<div class="l5">        │           └── <span class="fn">talker_postprocess()</span>  <span class="cmt"># 过滤 EOS、整理为 codes 张量</span></div>
+<div class="l4">        │</div>
+<div class="l4">        ├── <span class="fn">StageInputProcessor[qwen3_omni].talker2code2wav()</span>  <span class="cmt"># 帧对齐、参考 speaker codes 注入</span></div>
+<div class="l4">        │</div>
+<div class="l4">        └── <span class="stage-marker m-code2wav">CODE2WAV</span><span class="fn">StagePool[2].step()</span></div>
+<div class="l5">            └── <span class="fn">GPUGenerationModelRunner.execute_model()</span></div>
+<div class="l5">                └── <span class="fn">Qwen3OmniMoeForConditionalGeneration.forward</span>(stage=<span class="str">"code2wav"</span>)  <span class="cmt"># qwen3_omni.py:406</span></div>
+<div class="l5">                    └── <span class="fn">Qwen3OmniMoeCode2Wav.forward()</span>  <span class="cmt"># qwen3_omni_code2wav.py</span></div>
+<div class="l5">                        └── <span class="fn">Qwen3TTSTokenizerV2Decoder()</span>  <span class="cmt"># 分块 + left-context 流式解码</span></div>
+<div class="l3">    │</div>
+<div class="l3">    └── <span class="fn">OmniRequestState.add_multimodal_tensor()</span>  <span class="cmt"># output_processor.py:61</span></div>
+<div class="l4">        └── <span class="fn">AsyncOmni._final_output_handler()</span>  <span class="cmt"># yield 音频/文本片段</span></div>
+    </div>
+
+    <!-- layer table -->
+    <h3 style="margin-top:48px;">各层关键文件</h3>
+    <table class="layer-table">
+      <thead>
+        <tr>
+          <th style="width: 22%;">层级</th>
+          <th>类 / 入口</th>
+          <th>位置</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="layer-name"><span class="layer-tag">API</span>入口</td>
+          <td><code>AsyncOmni</code></td>
+          <td><span class="fileref">vllm_omni/entrypoints/async_omni.py:108</span></td>
+        </tr>
+        <tr>
+          <td class="layer-name"><span class="layer-tag">Engine</span>引擎</td>
+          <td><code>AsyncOmniEngine</code> · <code>Orchestrator</code> · <code>StagePool</code></td>
+          <td><span class="fileref">vllm_omni/engine/{async_omni_engine, orchestrator, stage_pool}.py</span></td>
+        </tr>
+        <tr>
+          <td class="layer-name"><span class="layer-tag">Runner</span>AR</td>
+          <td><code>GPUARModelRunner</code>（Thinker / Talker）</td>
+          <td><span class="fileref">vllm_omni/worker/gpu_ar_model_runner.py:70</span></td>
+        </tr>
+        <tr>
+          <td class="layer-name"><span class="layer-tag">Runner</span>Gen</td>
+          <td><code>GPUGenerationModelRunner</code>（Code2Wav）</td>
+          <td><span class="fileref">vllm_omni/worker/gpu_model_runner.py</span></td>
+        </tr>
+        <tr>
+          <td class="layer-name"><span class="layer-tag">Model</span>统一壳</td>
+          <td><code>Qwen3OmniMoeForConditionalGeneration</code></td>
+          <td><span class="fileref">vllm_omni/model_executor/models/qwen3_omni/qwen3_omni.py:80</span></td>
+        </tr>
+        <tr>
+          <td class="layer-name"><span class="layer-tag">Stage 0</span>Thinker</td>
+          <td><code>Qwen3OmniMoeThinkerForConditionalGeneration</code></td>
+          <td><span class="fileref">qwen3_omni/qwen3_omni.py:137-145</span></td>
+        </tr>
+        <tr>
+          <td class="layer-name"><span class="layer-tag">Stage 1</span>Talker</td>
+          <td><code>Qwen3OmniMoeTalkerForConditionalGeneration</code> + <code>MTPCodePredictor</code></td>
+          <td><span class="fileref">qwen3_omni/qwen3_omni.py:151-189</span></td>
+        </tr>
+        <tr>
+          <td class="layer-name"><span class="layer-tag">Stage 2</span>Code2Wav</td>
+          <td><code>Qwen3OmniMoeCode2Wav</code> → <code>Qwen3TTSTokenizerV2Decoder</code></td>
+          <td><span class="fileref">qwen3_omni/qwen3_omni_code2wav.py · tokenizer_12hz/...</span></td>
+        </tr>
+        <tr>
+          <td class="layer-name"><span class="layer-tag">Bridge</span>输入处理</td>
+          <td><code>stage_input_processors.qwen3_omni</code></td>
+          <td><span class="fileref">vllm_omni/model_executor/stage_input_processors/qwen3_omni.py</span></td>
+        </tr>
+        <tr>
+          <td class="layer-name"><span class="layer-tag">Output</span>累积器</td>
+          <td><code>OmniRequestState.mm_accumulated</code></td>
+          <td><span class="fileref">vllm_omni/v1/engine/output_processor.py:29</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ QWEN TTS ============ -->
+<section id="qwen-tts">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Pipeline 02 · Qwen3-TTS</div>
+      <h2>QwenTTS · <em>Talker → Code2Wav</em></h2>
+      <p class="section-sub">
+        纯文本输入的轻量级 TTS 流水线：Talker 直接由文本 token 生成 RVQ codes，
+        ECAPA-TDNN 编码参考音色；Code2Wav 采用分块 + 桶式 batch 的流式解码以降低延迟。
+      </p>
+    </div>
+
+    <div class="pipeline qwen-tts">
+      <div class="pipe-title">
+        <span>Stage Pipeline</span>
+        <span class="badge">vllm_omni/model_executor/models/qwen3_tts/</span>
+      </div>
+      <div class="stages">
+        <div class="stage">
+          <div class="stage-head">
+            <span class="stage-name">① Talker</span>
+            <span class="stage-tag ar">LLM_AR</span>
+          </div>
+          <div class="stage-desc">
+            text → RVQ codes，ECAPA-TDNN 注入 speaker embedding；
+            支持 talker_mtp 的 CUDA Graph 多批次捕获。
+          </div>
+          <div class="stage-runner">GPUARModelRunner</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="stage">
+          <div class="stage-head">
+            <span class="stage-name">② Code2Wav</span>
+            <span class="stage-tag gen">LLM_GENERATION</span>
+          </div>
+          <div class="stage-desc">
+            <code>chunk=300</code>、<code>left_ctx=25</code> 的流式解码；
+            可异步增量驱动以实现首包低延迟。
+          </div>
+          <div class="stage-runner">GPUGenerationModelRunner</div>
+        </div>
+      </div>
+    </div>
+
+    <h3 style="margin-top:48px;">完整调用链</h3>
+    <div class="stack">
+<div class="l1"><span class="fn">AsyncOmni.generate()</span>  <span class="cmt"># vllm_omni/entrypoints/async_omni.py</span></div>
+<div class="l2">└── <span class="fn">AsyncOmniEngine.generate()</span></div>
+<div class="l3">    └── <span class="fn">Orchestrator.process_request()</span>  <span class="cmt"># 管道由 QWEN3_TTS_PIPELINE 定义</span></div>
+<div class="l4">        │   <span class="path">vllm_omni/model_executor/models/qwen3_tts/pipeline.py:16</span></div>
+<div class="l4">        │</div>
+<div class="l4">        ├── <span class="stage-marker m-talker">TALKER&nbsp;</span><span class="fn">StagePool[0].step()</span></div>
+<div class="l5">        │   └── <span class="fn">GPUARModelRunner.execute_model()</span>  <span class="cmt"># gpu_ar_model_runner.py:70</span></div>
+<div class="l5">        │       └── <span class="fn">Qwen3TTSTalkerForConditionalGeneration.forward()</span>  <span class="cmt"># qwen3_tts_talker.py</span></div>
+<div class="l5">        │           ├── <span class="fn">ECAPA_TDNN()</span>  <span class="cmt"># 参考音色 → speaker embedding</span></div>
+<div class="l5">        │           ├── <span class="fn">Qwen3 LLM backbone()</span>  <span class="cmt"># 文本 → 隐藏状态</span></div>
+<div class="l5">        │           └── <span class="fn">Qwen3TTSTalkerCodePredictorForConditionalGenerationVLLM()</span></div>
+<div class="l5">        │               <span class="cmt"># 隐藏 + speaker emb → [T, 16] RVQ codes</span></div>
+<div class="l4">        │</div>
+<div class="l4">        ├── <span class="fn">stage_input_processors.qwen3_tts.talker2code2wav</span>(_async_chunk)  <span class="cmt"># qwen3_tts.py:29</span></div>
+<div class="l5">        │   <span class="cmt"># 过滤 zero-padding EOS、对齐帧、注入参考 speaker codes</span></div>
+<div class="l4">        │</div>
+<div class="l4">        └── <span class="stage-marker m-code2wav">CODE2WAV</span><span class="fn">StagePool[1].step()</span></div>
+<div class="l5">            └── <span class="fn">GPUGenerationModelRunner.execute_model()</span></div>
+<div class="l5">                └── <span class="fn">Qwen3TTSCode2Wav.forward()</span>  <span class="cmt"># qwen3_tts_code2wav.py:28</span></div>
+<div class="l5">                    ├── <span class="fn">_split_request_ids()</span>  <span class="cmt"># line 92</span></div>
+<div class="l5">                    ├── <span class="fn">_get_decode_batch_bucket_frames()</span>  <span class="cmt"># 按帧数分桶</span></div>
+<div class="l5">                    └── <span class="fn">Qwen3TTSTokenizerV2Decoder()</span>  <span class="cmt"># chunked decode, left context</span></div>
+<div class="l5">                        <span class="cmt"># 输出 [B, sample_count] 波形</span></div>
+    </div>
+
+    <h3 style="margin-top:48px;">流式与 CUDA Graph 优化要点</h3>
+    <dl class="kv">
+      <dt>分块解码</dt>
+      <dd><code class="ref">_decode_chunk_frames=300</code>，<code class="ref">_decode_left_context_frames=25</code>，
+          通过左侧上下文衔接相邻 chunk，保持声学连续性。</dd>
+
+      <dt>桶式批处理</dt>
+      <dd><code class="ref">_get_decode_batch_bucket_frames()</code> 将不同长度请求分到固定桶位，
+          降低 padding 浪费、增加可复用 graph 数量。</dd>
+
+      <dt>CUDA Graph</dt>
+      <dd><code class="ref">_capture_talker_mtp_graphs()</code>（<code class="ref">gpu_model_runner.py:196-251</code>）
+          为 Talker 的 MTP code predictor 捕获多 batch_size 的 graph，
+          解码循环中按需切换。</dd>
+
+      <dt>异步增量</dt>
+      <dd><code class="ref">talker2code2wav_async_chunk</code> 在 Talker 还在生成时即增量驱动 Code2Wav，
+          实现「边生成边出声」的低首包延迟。</dd>
+    </dl>
+  </div>
+</section>
+
+<!-- ============ DATA FLOW ============ -->
+<section id="data-flow">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Data Passing</div>
+      <h2>跨阶段 <em>数据传递</em> · 接口与调用</h2>
+      <p class="section-sub">
+        阶段之间不是直接「函数调用」，而是经由 <strong>Orchestrator</strong> 拉取上游输出、
+        通过声明式 <strong>Input Processor</strong> 转换形状、再以 <strong>EngineCoreRequest</strong>
+        重新投递给下游引擎。下面拆开每一层的数据结构与调用点。
+      </p>
+    </div>
+
+    <!-- flow diagram -->
+    <div class="dataflow">
+      <div class="df-node df-stage">
+        <div class="df-label">Stage N · ModelRunner</div>
+        <div class="df-sub">前向产出 logits / hidden / codes</div>
+      </div>
+      <div class="df-edge">
+        <div class="df-edge-label"><code>mm_accumulated</code></div>
+        <span class="df-arrow">▼</span>
+      </div>
+      <div class="df-node df-outproc">
+        <div class="df-label">MultimodalOutputProcessor</div>
+        <div class="df-sub">把 pooling_output 累积进 <code>OmniRequestState.mm_accumulated</code></div>
+      </div>
+      <div class="df-edge">
+        <div class="df-edge-label"><code>CompletionOutput.multimodal_output</code></div>
+        <span class="df-arrow">▼</span>
+      </div>
+      <div class="df-node df-orch">
+        <div class="df-label">Orchestrator._forward_to_next_stage()</div>
+        <div class="df-sub">轮询 stage 输出 → 调用下一阶段的 input processor</div>
+      </div>
+      <div class="df-edge">
+        <div class="df-edge-label">processor(source_outputs, prompt, ...)</div>
+        <span class="df-arrow">▼</span>
+      </div>
+      <div class="df-node df-proc">
+        <div class="df-label">Stage Input Processor</div>
+        <div class="df-sub">如 <code>qwen3_tts.talker2code2wav</code>：codes → <code>OmniTokensPrompt</code></div>
+      </div>
+      <div class="df-edge">
+        <div class="df-edge-label"><code>build_engine_core_request_from_tokens()</code></div>
+        <span class="df-arrow">▼</span>
+      </div>
+      <div class="df-node df-stage df-stage-next">
+        <div class="df-label">Stage N+1 · StagePool.submit_initial()</div>
+        <div class="df-sub"><code>await client.add_request_async(request)</code> → 下游引擎</div>
+      </div>
+    </div>
+
+    <!-- 1. wire format -->
+    <h3 style="margin-top:48px;">① Wire Format · 三层数据结构</h3>
+    <p style="color:var(--ink-soft); font-size:15px; max-width:760px; margin:0 0 16px;">
+      阶段间的数据传递不只一种结构 —— <em>控制信息</em>、<em>张量载荷</em> 与 <em>累积态</em> 各司其职。
+    </p>
+    <table class="layer-table">
+      <thead>
+        <tr>
+          <th style="width: 28%;">结构</th>
+          <th style="width: 36%;">职责</th>
+          <th>定义位置</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="layer-name"><code>StageSubmissionMessage</code></td>
+          <td>跨阶段控制消息（msgspec 序列化）。携带 <code>request_id</code>、<code>prompt</code>、
+              <code>sampling_params_list</code>、<code>final_stage_id</code> 等元信息。</td>
+          <td><span class="fileref">vllm_omni/engine/messages.py</span></td>
+        </tr>
+        <tr>
+          <td class="layer-name"><code>OmniPayload</code> / <code>OmniPayloadStruct</code></td>
+          <td>实际张量载荷：<code>hidden_states · embed · ids · codes · latent · model_outputs</code> 等。
+              <code>CodesStruct</code> 内含 <code>audio</code>（<code>[T, 16]</code>）与 <code>ref</code>（参考音色）。</td>
+          <td><span class="fileref">vllm_omni/data_entry_keys.py</span></td>
+        </tr>
+        <tr>
+          <td class="layer-name"><code>OmniRequestState.mm_accumulated</code></td>
+          <td>累积态字典 <code>dict[str, Any]</code>，按 modality（audio · hidden · sr · ...）
+              累加多模态张量，跨多次 <code>process_outputs</code> 调用持续合并。</td>
+          <td><span class="fileref">vllm_omni/engine/output_processor.py:47</span></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="stack">
+<div class="cmt"># vllm_omni/data_entry_keys.py — 实际承载张量的载荷</div>
+<div class="l1">class <span class="fn">OmniPayload</span>(TypedDict, total=False):</div>
+<div class="l2">    hidden_states: <span class="path">HiddenStates</span>          <span class="cmt"># 中间层输出</span></div>
+<div class="l2">    embed: <span class="path">Embeddings</span>                    <span class="cmt"># prefill / decode 嵌入</span></div>
+<div class="l2">    ids: <span class="path">Ids</span>                              <span class="cmt"># prompt / output / speech_token</span></div>
+<div class="l2">    codes: <span class="path">Codes</span>                          <span class="cmt"># Codes.audio[T,16] + Codes.ref</span></div>
+<div class="l2">    meta: <span class="path">OmniPayloadMeta</span></div>
+<div class="l2">    latent: <span class="path">torch.Tensor</span></div>
+<div class="l2">    model_outputs: <span class="path">list[torch.Tensor]</span>     <span class="cmt"># Code2Wav 输出波形</span></div>
+<div class="l2">    speaker: <span class="path">str | list[str]</span></div>
+    </div>
+
+    <!-- 2. transport -->
+    <h3 style="margin-top:48px;">② Transport · janus 异步队列 + ZMQ 客户端</h3>
+    <dl class="kv">
+      <dt>进程模型</dt>
+      <dd>Orchestrator 与各 Stage 在 <strong>同一进程</strong> 内运行（Orchestrator 是独立线程），
+          每个 <code class="ref">StagePool</code> 内部再通过 <code class="ref">AsyncMPClient</code>
+          / ZMQ 与真正的 EngineCore worker 子进程通信。</dd>
+
+      <dt>主要队列</dt>
+      <dd><code class="ref">janus.AsyncQueue</code> 同时支持同步/异步两端：
+          <code>request_async_queue</code>（前端 → Orchestrator）、
+          <code>output_async_queue</code>（Orchestrator → 前端）、
+          <code>rpc_async_queue</code>（带外控制）。</dd>
+
+      <dt>阶段间投递</dt>
+      <dd>没有显式 inter-stage queue。Orchestrator 异步轮询上游 stage 的输出，
+          调用 input processor 后通过
+          <code class="ref">StagePool.submit_initial()</code> →
+          <code class="ref">client.add_request_async(request)</code>
+          投递到下游引擎。</dd>
+    </dl>
+
+    <div class="stack">
+<div class="cmt"># vllm_omni/engine/orchestrator.py — Orchestrator 持有的核心队列</div>
+<div class="l1">class <span class="fn">Orchestrator</span>:</div>
+<div class="l2">    def __init__(self,</div>
+<div class="l3">        request_async_queue: <span class="path">janus.AsyncQueue[EngineQueueMessage]</span>,  <span class="cmt"># 入站</span></div>
+<div class="l3">        output_async_queue:  <span class="path">janus.AsyncQueue[dict[str, Any]]</span>,     <span class="cmt"># 出站</span></div>
+<div class="l3">        rpc_async_queue:     <span class="path">janus.AsyncQueue[dict[str, Any]]</span>,</div>
+<div class="l3">        stage_pools: <span class="path">list[StagePool]</span>,                              <span class="cmt"># 各阶段引擎池</span></div>
+<div class="l3">    ):</div>
+<div class="l3">        ...</div>
+    </div>
+
+    <!-- 3. input processor calling convention -->
+    <h3 style="margin-top:48px;">③ Stage Input Processor · 注册与调用约定</h3>
+    <p style="color:var(--ink-soft); font-size:15px; max-width:760px; margin:0 0 16px;">
+      处理器以 <em>字符串模块路径</em> 在 <code>PipelineConfig</code> 中声明，运行时由
+      <code class="ref">importlib</code> 动态加载，签名固定为
+      <code>(source_outputs, prompt, requires_multimodal_data[, streaming_context])</code>。
+    </p>
+
+    <div class="stack">
+<div class="cmt"># vllm_omni/engine/stage_init_utils.py:342 — 动态加载</div>
+<div class="l1">_cpif_path = getattr(stage_config, <span class="str">"custom_process_input_func"</span>, None)</div>
+<div class="l1">if _cpif_path:</div>
+<div class="l2">    mod_path, fn_name = _cpif_path.rsplit(<span class="str">"."</span>, 1)</div>
+<div class="l2">    custom_process_input_func = getattr(importlib.import_module(mod_path), fn_name)</div>
+
+<div></div>
+<div class="cmt"># vllm_omni/engine/stage_engine_core_client.py:396 — 调用入口</div>
+<div class="l1">def <span class="fn">process_engine_inputs</span>(self, source_outputs, prompt=None, streaming_context=None):</div>
+<div class="l2">    sig = inspect.signature(self.custom_process_input_func)</div>
+<div class="l2">    if len(sig.parameters) >= 4:</div>
+<div class="l3">        return self.custom_process_input_func(</div>
+<div class="l4">            source_outputs, prompt, self.requires_multimodal_data, streaming_context)</div>
+<div class="l2">    return self.custom_process_input_func(</div>
+<div class="l3">        source_outputs, prompt, self.requires_multimodal_data)</div>
+
+<div></div>
+<div class="cmt"># vllm_omni/model_executor/stage_input_processors/qwen3_tts.py:29 — 实例</div>
+<div class="l1">def <span class="fn">talker2code2wav</span>(source_outputs, prompt=None, _requires_multimodal_data=False):</div>
+<div class="l2">    code2wav_inputs: list[<span class="path">OmniTokensPrompt</span>] = []</div>
+<div class="l2">    for talker_output in source_outputs:</div>
+<div class="l3">        if not talker_output.finished: continue</div>
+<div class="l3">        mm = talker_output.outputs[0].multimodal_output       <span class="cmt"># 从上游取 codes</span></div>
+<div class="l3">        audio_codes = mm[<span class="str">"codes"</span>][<span class="str">"audio"</span>].to(torch.long)  <span class="cmt"># [T, 16]</span></div>
+<div class="l3">        codec_codes = audio_codes.transpose(0,1).cpu().reshape(-1).tolist()</div>
+<div class="l3">        code2wav_inputs.append(<span class="fn">OmniTokensPrompt</span>(prompt_token_ids=codec_codes, ...))</div>
+<div class="l2">    return code2wav_inputs</div>
+    </div>
+
+    <h3 style="margin-top:36px;">Orchestrator 转发点 · 一次完整的阶段切换</h3>
+    <div class="stack">
+<div class="cmt"># vllm_omni/engine/orchestrator.py:925 — Orchestrator._forward_to_next_stage()</div>
+<div class="l1">next_pool   = self.stage_pools[src_stage_id + 1]</div>
+<div class="l1">next_client = next_pool.stage_client</div>
+
+<div></div>
+<div class="cmt"># (a) 上游输出 → input processor 整形</div>
+<div class="l1">next_inputs = next_client.<span class="fn">process_engine_inputs</span>(</div>
+<div class="l2">    [output],                       <span class="cmt"># 上游 CompletionOutput</span></div>
+<div class="l2">    req_state.prompt,</div>
+<div class="l2">    streaming_context=req_state.streaming,</div>
+<div class="l1">)</div>
+
+<div></div>
+<div class="cmt"># (b) 重新打包成 EngineCoreRequest，逐个投递</div>
+<div class="l1">for next_input in next_inputs:</div>
+<div class="l2">    request = <span class="fn">build_engine_core_request_from_tokens</span>(</div>
+<div class="l3">        request_id=req_id,</div>
+<div class="l3">        prompt=next_input,           <span class="cmt"># OmniTokensPrompt</span></div>
+<div class="l3">        params=params,</div>
+<div class="l3">        model_config=next_pool.stage_vllm_config.model_config,</div>
+<div class="l2">    )</div>
+<div class="l2">    <span class="cmt"># (c) 进入下游引擎 — 底层走 ZMQ → EngineCore worker</span></div>
+<div class="l2">    await next_pool.<span class="fn">submit_initial</span>(req_id, req_state, request, prompt_text=None)</div>
+    </div>
+
+    <!-- 4. output extraction -->
+    <h3 style="margin-top:48px;">④ Output 提取 · 把张量塞进 multimodal_output</h3>
+    <p style="color:var(--ink-soft); font-size:15px; max-width:760px; margin:0 0 16px;">
+      ModelRunner 产出的 <code>pooling_output</code>（codes 或隐藏状态）由
+      <code class="ref">MultimodalOutputProcessor</code> 拦截 →
+      <code class="ref">OmniRequestState.add_multimodal_tensor()</code> 累加 →
+      最终在 <code class="ref">_new_completion_output()</code> 时挂到
+      <code class="ref">CompletionOutput.multimodal_output</code> 上，供下一阶段的 processor 读取。
+    </p>
+
+    <div class="stack">
+<div class="cmt"># vllm_omni/engine/output_processor.py:296 — 拦截 pooling_output</div>
+<div class="l1">class <span class="fn">MultimodalOutputProcessor</span>(VLLMOutputProcessor):</div>
+<div class="l2">    def <span class="fn">process_outputs</span>(self, engine_core_outputs, ...):</div>
+<div class="l3">        for eco in engine_core_outputs:</div>
+<div class="l4">            req_state = self.request_states.get(eco.request_id)</div>
+<div class="l4">            if eco.pooling_output is not None:</div>
+<div class="l5">                mm_type = (eco.output_type or self.engine_core_output_type).lower()</div>
+<div class="l5">                req_state.<span class="fn">add_multimodal_tensor</span>(eco.pooling_output, mm_type)</div>
+<div class="l5">                eco.pooling_output = <span class="path">None</span>    <span class="cmt"># 强制走 text 路径</span></div>
+<div class="l3">        return super().process_outputs(...)</div>
+
+<div></div>
+<div class="cmt"># 同文件:264 — 完成时把 mm_accumulated 挂到 CompletionOutput 上</div>
+<div class="l1">def <span class="fn">_new_completion_output</span>(self, ...):</div>
+<div class="l2">    base_output = super()._new_completion_output(...)</div>
+<div class="l2">    setattr(base_output, <span class="str">"multimodal_output"</span>, {})</div>
+<div class="l2">    for k, v in self.mm_accumulated.items():</div>
+<div class="l3">        base_output.multimodal_output[k] = v   <span class="cmt"># ← 下游 processor 从这里读 codes</span></div>
+    </div>
+
+    <!-- 5. pipeline definition -->
+    <h3 style="margin-top:48px;">⑤ Pipeline 声明 · PipelineConfig + StagePipelineConfig</h3>
+    <p style="color:var(--ink-soft); font-size:15px; max-width:760px; margin:0 0 16px;">
+      整条流水线以 dataclass 形式声明：每个 <code>StagePipelineConfig</code> 指定执行类型、上游来源、
+      以及最关键的 —— 用 <em>字符串路径</em> 引用三类处理函数（<code>process_input</code>、
+      <code>process_next_stage_input</code>、<code>async_chunk_process_next_stage_input</code>）。
+    </p>
+
+    <div class="stack">
+<div class="cmt"># vllm_omni/model_executor/models/qwen3_tts/pipeline.py:16</div>
+<div class="l1">QWEN3_TTS_PIPELINE = <span class="fn">PipelineConfig</span>(</div>
+<div class="l2">    model_type=<span class="str">"qwen3_tts"</span>,</div>
+<div class="l2">    model_arch=<span class="str">"Qwen3TTSTalkerForConditionalGeneration"</span>,</div>
+<div class="l2">    stages=(</div>
+
+<div class="l3">        <span class="cmt"># ── Stage 0 · Talker ──</span></div>
+<div class="l3">        <span class="fn">StagePipelineConfig</span>(</div>
+<div class="l4">            stage_id=0, model_stage=<span class="str">"qwen3_tts"</span>,</div>
+<div class="l4">            execution_type=StageExecutionType.<span class="path">LLM_AR</span>,</div>
+<div class="l4">            input_sources=(),                                 <span class="cmt"># 入口阶段</span></div>
+<div class="l4">            engine_output_type=<span class="str">"latent"</span>,                  <span class="cmt"># codes 走 mm_accumulated</span></div>
+<div class="l4">            async_chunk_process_next_stage_input_func=(</div>
+<div class="l5">                <span class="str">"vllm_omni.model_executor.stage_input_processors.qwen3_tts."</span></div>
+<div class="l5">                <span class="str">"talker2code2wav_async_chunk"</span>),</div>
+<div class="l4">            sampling_constraints={<span class="str">"detokenize"</span>: False, <span class="str">"stop_token_ids"</span>: [2150]},</div>
+<div class="l3">        ),</div>
+
+<div class="l3">        <span class="cmt"># ── Stage 1 · Code2Wav ──</span></div>
+<div class="l3">        <span class="fn">StagePipelineConfig</span>(</div>
+<div class="l4">            stage_id=1, model_stage=<span class="str">"code2wav"</span>,</div>
+<div class="l4">            execution_type=StageExecutionType.<span class="path">LLM_GENERATION</span>,</div>
+<div class="l4">            input_sources=(0,),                               <span class="cmt"># 从 Talker 取输入</span></div>
+<div class="l4">            final_output=True, final_output_type=<span class="str">"audio"</span>,</div>
+<div class="l4">            sync_process_input_func=(</div>
+<div class="l5">                <span class="str">"vllm_omni.model_executor.stage_input_processors.qwen3_tts.talker2code2wav"</span>),</div>
+<div class="l3">        ),</div>
+<div class="l2">    ),</div>
+<div class="l1">)</div>
+    </div>
+
+    <p style="color:var(--ink-soft); font-size:14px; margin-top:18px;">
+      <strong>QwenOmni</strong> 的声明结构完全一致，只是多一个 Thinker 阶段、<code>input_sources</code> 链
+      由 <code>()→(0,)→(1,)</code> 组成，且两条边界都同时挂有 sync / async-chunk 两套
+      processor（见 <code class="ref">qwen3_omni/pipeline.py</code>）。
+    </p>
+
+    <!-- ⑥ Sync vs Async-Chunk -->
+    <h3 style="margin-top:48px;">⑥ Sync vs Async-Chunk · <em>数据传递的两条路径</em></h3>
+    <div class="callout">
+      <div class="callout-title">⚠️ 重要的不对称</div>
+      <p>前面 ①–⑤ 描述的"Orchestrator 驱动"只是 <strong>Sync 路径</strong>。
+        当 <code>StagePipelineConfig</code> 上声明了
+        <code>async_chunk_process_next_stage_input_func</code> 时（QwenTTS / QwenOmni 默认就有），
+        每个 chunk 的 processor 调用与数据推送 <strong>完全不经过 Orchestrator</strong>，
+        而是在 <em>上游 Stage 自己的 scheduler 子进程</em> 内完成。</p>
+    </div>
+
+    <table class="layer-table">
+      <thead>
+        <tr>
+          <th style="width: 22%;">维度</th>
+          <th>路径 A · Sync</th>
+          <th>路径 B · Async-Chunk</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="layer-name">触发时机</td>
+          <td>上游 request <code>finished=True</code></td>
+          <td>上游每个 decode step（chunk 粒度）</td>
+        </tr>
+        <tr>
+          <td class="layer-name">谁调 processor</td>
+          <td>Orchestrator 线程<br/>（主进程）</td>
+          <td>Scheduler 后台 save-loop 线程<br/>（上游 Stage 子进程内）</td>
+        </tr>
+        <tr>
+          <td class="layer-name">processor 类型</td>
+          <td><code>custom_process_input_func</code><br/>或 <code>sync_process_input_func</code></td>
+          <td><code>async_chunk_process_next_stage_input_func</code></td>
+        </tr>
+        <tr>
+          <td class="layer-name">谁发数据</td>
+          <td>Orchestrator → <code>StagePool.submit_initial()</code></td>
+          <td><code>ChunkTransferAdapter._send_single_request()</code></td>
+        </tr>
+        <tr>
+          <td class="layer-name">传输通道</td>
+          <td>ZMQ DEALER/ROUTER<br/>(EngineCoreRequest)</td>
+          <td><code>SharedMemoryConnector.put()</code><br/>(OmniPayloadStruct)</td>
+        </tr>
+        <tr>
+          <td class="layer-name">下游怎么收</td>
+          <td>标准 vLLM <code>add_request</code> 路径</td>
+          <td>下游 scheduler 经 <code>OmniSchedulingCoordinator</code> 拉取已就绪 chunk</td>
+        </tr>
+        <tr>
+          <td class="layer-name">设计目的</td>
+          <td>简单 / 可靠 / 完整 token / 等齐</td>
+          <td>低首包延迟 · 减少跨进程绕路</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="stack">
+<div class="cmt"># vllm_omni/core/sched/omni_ar_scheduler.py:485 — 路径 B 的发起点</div>
+<div class="l1"><span class="cmt"># 运行在上游 Stage 副本的 EngineCore 子进程里，schedule step 末尾</span></div>
+<div class="l1">if self.chunk_transfer_adapter is not None:</div>
+<div class="l2">    self.chunk_transfer_adapter.<span class="fn">save_async</span>(pooler_output, request)</div>
+
+<div></div>
+<div class="cmt"># vllm_omni/distributed/omni_connectors/transfer_adapter/chunk_transfer_adapter.py:224</div>
+<div class="l1"><span class="cmt"># save-loop 后台线程消费上面 enqueue 的任务：</span></div>
+<div class="l1">if self.custom_process_next_stage_input_func:</div>
+<div class="l2">    payload_data = self.<span class="fn">custom_process_next_stage_input_func</span>(</div>
+<div class="l3">        transfer_manager=self,</div>
+<div class="l3">        pooling_output=pooling_output,</div>
+<div class="l3">        request=request,</div>
+<div class="l3">        is_finished=is_finished,</div>
+<div class="l2">    )</div>
+
+<div></div>
+<div class="cmt"># 同文件:239 — 推送（共享内存，非 ZMQ）</div>
+<div class="l1">success, size, metadata = self.connector.<span class="fn">put</span>(</div>
+<div class="l2">    from_stage=str(stage_id),</div>
+<div class="l2">    to_stage=str(next_stage_id),</div>
+<div class="l2">    put_key=connector_put_key,</div>
+<div class="l2">    data=payload_data,           <span class="cmt"># OmniPayloadStruct（含 codes / hidden）</span></div>
+<div class="l1">)</div>
+    </div>
+
+    <p style="color:var(--ink-soft); font-size:14.5px; margin-top:18px; max-width:760px;">
+      因此一条请求在 QwenTTS 上的真实行为通常是混合的 ——
+      <strong>Talker 每生成一段就由 scheduler 直接推 chunk 给 Code2Wav 走路径 B</strong>，
+      Code2Wav 边收边解码 yield 波形；而 finalize / 结束信号、错误处理等仍由 Orchestrator 走路径 A 统一兜底。
+    </p>
+
+    <!-- summary -->
+    <h3 style="margin-top:48px;">一图总结 · 每一跳的"接口"是谁</h3>
+    <table class="layer-table">
+      <thead>
+        <tr>
+          <th style="width: 26%;">跳转</th>
+          <th style="width: 30%;">调用接口</th>
+          <th>承载的数据</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="layer-name">ModelRunner → OutputProcessor</td>
+          <td><code>process_outputs(engine_core_outputs)</code></td>
+          <td><code>EngineCoreOutput.pooling_output</code>（codes / hidden tensor）</td>
+        </tr>
+        <tr>
+          <td class="layer-name">OutputProcessor → RequestState</td>
+          <td><code>add_multimodal_tensor(payload, mm_type)</code></td>
+          <td>按 modality 累加进 <code>mm_accumulated[k]</code></td>
+        </tr>
+        <tr>
+          <td class="layer-name">RequestState → CompletionOutput</td>
+          <td><code>_new_completion_output()</code></td>
+          <td>挂载到 <code>CompletionOutput.multimodal_output</code></td>
+        </tr>
+        <tr>
+          <td class="layer-name">CompletionOutput → Orchestrator</td>
+          <td>异步轮询 stage 输出队列</td>
+          <td>整个 <code>RequestOutput</code> 对象（含 <code>multimodal_output</code>）</td>
+        </tr>
+        <tr>
+          <td class="layer-name">Orchestrator → Input Processor</td>
+          <td><code>next_client.process_engine_inputs([output], prompt, streaming_ctx)</code></td>
+          <td>动态加载的 processor 函数，输出 <code>list[OmniTokensPrompt]</code></td>
+        </tr>
+        <tr>
+          <td class="layer-name">Input Processor → 下一阶段</td>
+          <td><code>build_engine_core_request_from_tokens()</code> + <code>submit_initial()</code></td>
+          <td><code>EngineCoreRequest</code> 经 ZMQ 投递给下游 EngineCore</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ SCHEDULING & SAMPLING ============ -->
+<section id="scheduling">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Scheduling · Sampling · Stopping</div>
+      <h2>每个 Stage 内部 · <em>调度</em> 与 <em>采样</em></h2>
+      <p class="section-sub">
+        到达 EngineCore 之后，请求归属到该 Stage 自己的 Scheduler 与 ModelRunner。
+        AR Stage 走标准 chunked-prefill + continuous batching；
+        Generation Stage 走「一次喂完所有 token」的快路径。
+      </p>
+    </div>
+
+    <h3>① 两种 Scheduler</h3>
+    <table class="layer-table">
+      <thead>
+        <tr><th style="width:30%;">类</th><th>用在哪些 Stage</th><th>关键行为</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="layer-name"><code>OmniARScheduler</code></td>
+          <td>Thinker · Talker · QwenTTS Talker</td>
+          <td>继承 vLLM <code>Scheduler</code>。增加 <code>requests_needing_kv_transfer</code> 与
+              可选的 <code>OmniChunkTransferAdapter</code>。后者在 <strong>async-chunk 路径</strong>
+              下每个 step 直接把 pooler_output 入队 save-loop（见
+              <a href="#data-flow" style="color:var(--accent-deep);">数据传递 ⑥</a>），
+              <strong>不经过 Orchestrator</strong>。</td>
+        </tr>
+        <tr>
+          <td class="layer-name"><code>OmniGenerationScheduler</code></td>
+          <td>Code2Wav (LLM_GENERATION)</td>
+          <td>快路径：一次把整段 prompt（codes）当 prefill 调度，无 decode 循环；
+              单步 <code>allocate_slots(request, num_new_tokens)</code> 即可吃完输入。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="stack">
+<div class="cmt"># vllm_omni/core/sched/omni_ar_scheduler.py:54</div>
+<div class="l1">class <span class="fn">OmniARScheduler</span>(VLLMScheduler):</div>
+<div class="l2">    def __init__(self, *args, **kwargs):</div>
+<div class="l3">        super().__init__(*args, **kwargs)</div>
+<div class="l3">        self.requests_needing_kv_transfer: dict[str, dict[str, Any]] = {}</div>
+<div class="l3">        self.chunk_transfer_adapter = <span class="path">None</span></div>
+<div class="l3">        if getattr(model_config, <span class="str">"async_chunk"</span>, False):</div>
+<div class="l4">            self.chunk_transfer_adapter = <span class="fn">OmniChunkTransferAdapter</span>(self.vllm_config)</div>
+<div class="l3">        self.input_coordinator: <span class="path">OmniSchedulingCoordinator | None</span> = <span class="path">None</span></div>
+
+<div></div>
+<div class="cmt"># vllm_omni/core/sched/omni_generation_scheduler.py:182 — 一次喂完</div>
+<div class="l1">required_tokens = max(len(request.prompt_token_ids), 1)</div>
+<div class="l1">num_new_tokens = min(required_tokens, token_budget)</div>
+<div class="l1">new_blocks = self.kv_cache_manager.<span class="fn">allocate_slots</span>(request, num_new_tokens, ...)</div>
+    </div>
+
+    <h3 style="margin-top:48px;">② 一个具体的批处理切片</h3>
+    <p style="color:var(--ink-soft); font-size:15px; max-width:760px;">
+      假设 Talker 阶段同时有 3 个请求处于 decode 状态，<code>token_budget=10</code>：
+      Scheduler 在第 N 步会把请求拼成一个 batch，<code>GPUARModelRunner</code> 执行单次前向，
+      sampler 给出每个请求的下一 token。
+    </p>
+    <table class="layer-table">
+      <thead>
+        <tr><th>Step</th><th>Req-A (剩 3 tok)</th><th>Req-B (剩 5 tok)</th><th>Req-C (剩 12 tok)</th><th>消耗 budget</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>N</td><td>+3 (done)</td><td>+5 (done)</td><td>+2 (剩 10)</td><td>10</td></tr>
+        <tr><td>N+1</td><td>—</td><td>—</td><td>+10 (done)</td><td>10</td></tr>
+      </tbody>
+    </table>
+    <p style="color:var(--ink-mute); font-size:13px;">
+      QwenOmni / QwenTTS 在调度粒度上与上游 vLLM 一致；差异在于「decode 出来的 token 是 codes 而非可读字」，
+      以及 <code>engine_output_type="latent"</code> 时不做 detokenize。
+    </p>
+
+    <h3 style="margin-top:48px;">③ talker_mtp 的 CUDA Graph 矩阵</h3>
+    <p style="color:var(--ink-soft); font-size:15px; max-width:760px;">
+      Talker 的 MTP code predictor 在 <code class="ref">_capture_talker_mtp_graphs()</code> 里
+      为多个固定 batch size 各捕获一份 graph，运行时按当前 batch size 选择对应 graph。
+      这是 QwenTTS 高并发首包延迟的核心优化。
+    </p>
+    <div class="stack">
+<div class="cmt"># vllm_omni/worker/gpu_model_runner.py:196-251</div>
+<div class="l1">def <span class="fn">_capture_talker_mtp_graphs</span>(self):</div>
+<div class="l2">    for bs in self.<span class="path">cudagraph_batch_sizes</span>:                  <span class="cmt"># e.g. [1,2,4,8,16,32]</span></div>
+<div class="l3">        graph = <span class="fn">CUDAGraphWrapper</span>(self.talker_mtp, batch_size=bs)</div>
+<div class="l3">        self.talker_mtp_graphs[bs] = graph</div>
+<div class="l2">    <span class="cmt"># 推理时：self.talker_mtp_graphs[match_bs(batch)].run(...)</span></div>
+    </div>
+
+    <h3 style="margin-top:48px;">④ Sampler · 停止条件 · 抑制 token</h3>
+    <dl class="kv">
+      <dt>采样器</dt>
+      <dd>三个 Stage 都复用 vLLM 标准 sampler（top-p / top-k / temperature 等）。
+          采样发生在 ModelRunner 的 <code class="ref">execute_model()</code> 末尾，
+          模型类自身不持有 sampler 实例。</dd>
+
+      <dt>Thinker 停止</dt>
+      <dd>常规文本停止条件 —— EOS / max_tokens / stop strings，由用户的
+          <code>SamplingParams</code> 控制。</dd>
+
+      <dt>Talker 停止</dt>
+      <dd><code>stop_token_ids=[2150]</code>，在 <code>PipelineConfig</code> 的
+          Talker 阶段 <code>sampling_constraints</code> 中声明。生成到 2150 即结束。</dd>
+
+      <dt>Talker · 抑制 token</dt>
+      <dd><code class="ref">talker_preprocess()</code> 会构造 suppressed-token mask，
+          把不在 codec 字典内（≥ codebook_size=2048，除控制符外）的 logits 置为
+          <code>-inf</code>，保证采样落到合法 RVQ codes 上。</dd>
+
+      <dt>后置过滤</dt>
+      <dd>即便采到了 2150，Input Processor 还会做一次 frame-level 校验，
+          <code class="ref">qwen3_tts.talker2code2wav</code> 中：
+          <code>valid_mask = audio_codes.any(dim=1) &amp; (audio_codes.max(dim=1).values &lt; 2048)</code>，
+          丢弃任何越界帧，避免 Code2Wav 解码出噪声。</dd>
+
+      <dt>Code2Wav 采样</dt>
+      <dd>无 sampling。<code>execution_type=LLM_GENERATION</code>，
+          ModelRunner 一次前向就把整段 codes 解成 waveform，<code>detokenize=True</code> 仅用来触发文本路径。</dd>
+    </dl>
+
+    <h3 style="margin-top:48px;">⑤ KV cache 的所有权</h3>
+    <p style="color:var(--ink-soft); font-size:15px; max-width:760px;">
+      每个 Stage 副本运行在独立的 EngineCore 进程里，因此 <strong>各自持有一份 KV cache pool</strong>。
+      Thinker 的 KV cache 在 Thinker 进程内复用；Talker / Code2Wav 同理。
+      跨阶段的 KV「过户」只有在 async-chunk 模式下、由 <code class="ref">OmniKVTransferManager</code>
+      与 <code>OmniARScheduler.chunk_transfer_adapter</code> 联动完成。
+    </p>
+    <div class="stack mini">
+<div class="cmt"># vllm_omni/worker/gpu_ar_model_runner.py:79-96</div>
+<div class="l1">self.kv_transfer_manager = <span class="fn">OmniKVTransferManager.from_vllm_config</span>(</div>
+<div class="l2">    self.vllm_config, self.model_config)</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ STREAMING OUTPUT ============ -->
+<section id="streaming">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Streaming Output</div>
+      <h2>最后一公里 · <em>流式</em> 把波形交还给用户</h2>
+      <p class="section-sub">
+        Code2Wav 产出的 <code>[B, samples]</code> 张量怎样变成用户浏览器里能播的 WAV？
+        关键在 <code>FinalOutputModalityType</code> 的判定，以及不同 HTTP endpoint 的封装策略。
+      </p>
+    </div>
+
+    <h3>① 内部输出对象 · OmniRequestOutput</h3>
+    <p style="color:var(--ink-soft); font-size:15px; max-width:760px;">
+      <code class="ref">AsyncOmni.generate()</code> 始终 yield 同一类对象：每个 yield 携带
+      <code>CompletionOutput</code>，其上挂有 <code>multimodal_output</code> 字典。
+      字典里出现什么 modality 由
+      <code class="ref">FinalOutputModalityType</code>（在
+      <code class="ref">vllm_omni/engine/output_modality.py</code>）决定。
+    </p>
+
+    <table class="layer-table">
+      <thead>
+        <tr><th>Stage 类型</th><th><code>final_output</code></th><th>典型 yield 内容</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="layer-name">Thinker</td>
+          <td><code>True</code> · type=<code>"text"</code></td>
+          <td>文本 token delta（增量字符串）</td>
+        </tr>
+        <tr>
+          <td class="layer-name">Talker</td>
+          <td><code>False</code></td>
+          <td>不直接对外 yield；codes 仅作中间产物</td>
+        </tr>
+        <tr>
+          <td class="layer-name">Code2Wav</td>
+          <td><code>True</code> · type=<code>"audio"</code></td>
+          <td><code>multimodal_output["audio"]</code> = <code>torch.Tensor</code>（PCM 样本）</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin-top:48px;">② Async-Chunk 路径 · 边生边出声</h3>
+    <p style="color:var(--ink-soft); font-size:15px; max-width:760px;">
+      在 <code>PipelineConfig</code> 上声明
+      <code class="ref">async_chunk_process_next_stage_input_func</code> 后，
+      Talker 还没结束就会被 Orchestrator 拉一次中间输出，调用
+      <code class="ref">talker2code2wav_async_chunk()</code> 把已生成的若干帧 codes 投递给 Code2Wav；
+      Code2Wav 出一段就 yield 一段，首包延迟显著降低。
+    </p>
+
+    <div class="stack mini">
+<div class="cmt"># Code2Wav 流式解码参数（qwen3_tts_code2wav.py:46）</div>
+<div class="l1">_decode_chunk_frames = 300</div>
+<div class="l1">_decode_left_context_frames = 25</div>
+<div class="cmt"># 相邻 chunk 用 left context 衔接，保证声学连续性</div>
+    </div>
+
+    <h3 style="margin-top:48px;">③ HTTP 层封装</h3>
+    <table class="layer-table">
+      <thead>
+        <tr><th>Endpoint</th><th>封装</th><th>实现位置</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="layer-name"><code>/v1/audio/speech</code></td>
+          <td>WAV 流：起始一个 <strong>占位 size 的 RIFF/fmt/data header</strong>（用 <code>0xFFFFFFFF</code> 占位），
+              后续直接 append PCM 字节，浏览器/客户端边收边播。</td>
+          <td><span class="fileref">vllm_omni/entrypoints/openai/serving_speech.py:105-143</span></td>
+        </tr>
+        <tr>
+          <td class="layer-name"><code>/v1/chat/completions</code></td>
+          <td>SSE：文本 delta 走 <code>chat.completion.chunk</code>；
+              音频片段以扩展字段（在响应 message 上挂 audio 数组）封装。具体编码（base64 / URL）按客户端协商。</td>
+          <td><span class="fileref">vllm_omni/entrypoints/openai/serving_chat.py</span></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="stack">
+<div class="cmt"># vllm_omni/entrypoints/openai/serving_speech.py:105 — WAV 流头</div>
+<div class="l1">header = struct.pack(</div>
+<div class="l2">    <span class="str">"&lt;4sI4s4sIHHIIHH4sI"</span>,</div>
+<div class="l2">    <span class="str">b"RIFF"</span>, placeholder_size,             <span class="cmt"># 0xFFFFFFFF</span></div>
+<div class="l2">    <span class="str">b"WAVE"</span>, <span class="str">b"fmt "</span>, 16,</div>
+<div class="l2">    1, num_channels, sample_rate, byte_rate,</div>
+<div class="l2">    block_align, bits_per_sample,</div>
+<div class="l2">    <span class="str">b"data"</span>, placeholder_size,</div>
+<div class="l1">)</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ END-TO-END JOURNEY ============ -->
+<section id="journey">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">End-to-End</div>
+      <h2>把一切串起来 · <em>一条请求</em> 的旅程</h2>
+      <p class="section-sub">
+        用 QwenTTS 上的一个典型 TTS 请求做完整 walkthrough：
+        <code>POST /v1/audio/speech</code>，<code>input="你好，世界"</code>，<code>voice="alice"</code>。
+        每一格都标注了进程边界、关键调用、和在该步骤"流动的数据形状"。
+      </p>
+    </div>
+
+    <ol class="numbered journey">
+      <li>
+        <div class="num">1</div>
+        <div class="step">
+          <h4>HTTP 入口</h4>
+          <p><span class="proc-tag frontend">FRONTEND</span>
+            FastAPI 路由命中 <code>/v1/audio/speech</code>，进入
+            <code class="ref">OmniOpenAIServingSpeech.create_speech()</code>。</p>
+          <div class="payload">in: JSON · <code>{input: "你好，世界", voice: "alice", ...}</code></div>
+        </div>
+      </li>
+
+      <li>
+        <div class="num">2</div>
+        <div class="step">
+          <h4>文本预处理 / 分词</h4>
+          <p><span class="proc-tag frontend">FRONTEND</span>
+            <code class="ref">OmniInputPreprocessor</code> 走 tokenizer，把
+            <code>"你好，世界"</code> → <code>prompt_token_ids: list[int]</code>，
+            打包成 <code>EngineCoreRequest</code>。</p>
+          <div class="payload">out: <code>EngineCoreRequest(prompt_token_ids=[...], sampling_params=..., additional_information={voice:"alice"})</code></div>
+        </div>
+      </li>
+
+      <li>
+        <div class="num">3</div>
+        <div class="step">
+          <h4>AsyncOmni → Orchestrator 队列</h4>
+          <p><span class="proc-tag frontend">FRONTEND</span>
+            <code class="ref">AsyncOmni.generate()</code> 创建
+            <code>OmniRequestState</code>，把
+            <code>StageSubmissionMessage(type="add_request", final_stage_id=1)</code>
+            <code>put</code> 进 <code class="ref">request_async_queue</code>。</p>
+          <div class="payload">channel: <code>janus.AsyncQueue[EngineQueueMessage]</code></div>
+        </div>
+      </li>
+
+      <li>
+        <div class="num">4</div>
+        <div class="step">
+          <h4>Orchestrator 调度到 Stage 0 (Talker)</h4>
+          <p><span class="proc-tag frontend">FRONTEND</span>
+            Orchestrator 线程取出消息，按 <code>QWEN3_TTS_PIPELINE.stages[0]</code>
+            选定 Talker，调用 <code class="ref">StagePool[0].submit_initial()</code>
+            → 内部 <code>client.add_request_async(request)</code> 经 ZMQ 推到副本子进程。</p>
+          <div class="payload">channel: <code>ZMQ DEALER → ROUTER · ipc:///tmp/...</code></div>
+        </div>
+      </li>
+
+      <li>
+        <div class="num">5</div>
+        <div class="step">
+          <h4>Talker EngineCore · Scheduler 入队</h4>
+          <p><span class="proc-tag talker">TALKER · SUBPROC</span>
+            <code class="ref">OmniARScheduler.add_request()</code> 把请求放进
+            <code>waiting</code> 队列；下一个 step 由 <code>schedule()</code> 决定是否升级到
+            <code>running</code>。</p>
+          <div class="payload">state: waiting deque · running list (vLLM 标准 V1 调度)</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="num">6</div>
+        <div class="step">
+          <h4>Prefill · Talker 前向</h4>
+          <p><span class="proc-tag talker">TALKER · SUBPROC</span>
+            <code class="ref">GPUARModelRunner.execute_model()</code> 一次喂入全部 prompt token，
+            产出 <code>text_hidden_states</code>；如果带参考音色，<code>ECAPA_TDNN</code>
+            把 <code>voice="alice"</code> 对应的参考 wav 编码成 speaker embedding。</p>
+          <div class="payload">shape: <code>hidden: [num_tokens, hidden_size]</code>, <code>speaker_emb: [1, D]</code></div>
+        </div>
+      </li>
+
+      <li>
+        <div class="num">7</div>
+        <div class="step">
+          <h4>Decode · talker_mtp 出 16 层 codes</h4>
+          <p><span class="proc-tag talker">TALKER · SUBPROC</span>
+            每个 decode step：<code class="ref">talker_mtp(hidden, speaker_emb)</code>
+            单次输出 16 层 codes（CUDA Graph 加速）；vLLM Sampler 应用
+            <strong>suppressed-token mask</strong>，落到合法 codec id。
+            采到 <code>2150</code> 触发 stop。</p>
+          <div class="payload">per-step: <code>codes: [1, 16]</code> · 累计写入 <code>mm_accumulated["audio"]</code></div>
+        </div>
+      </li>
+
+      <li>
+        <div class="num">8</div>
+        <div class="step">
+          <h4>Talker 输出回流 · multimodal_output</h4>
+          <p><span class="proc-tag talker">TALKER · SUBPROC</span>
+            每个 step <code class="ref">MultimodalOutputProcessor.process_outputs()</code>
+            拦截 <code>pooling_output</code>，<code class="ref">add_multimodal_tensor()</code>
+            累加；最终 <code>_new_completion_output()</code> 把
+            <code>mm_accumulated</code> 挂上 <code>CompletionOutput.multimodal_output</code>。</p>
+          <div class="payload">channel: ZMQ → 主进程的 StagePool 输出队列</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="num">9</div>
+        <div class="step">
+          <h4>Stage 0 → 1 转发 · 两条路径取其一</h4>
+          <p><span class="proc-tag frontend">PATH A · SYNC</span>
+            Orchestrator 轮询到 Talker finished，调用
+            <code class="ref">next_client.process_engine_inputs([output], prompt, streaming_ctx)</code>
+            → <code class="ref">qwen3_tts.talker2code2wav()</code> 过滤越界帧、reshape codes
+            → 返回 <code>list[OmniTokensPrompt]</code> → ZMQ 投递给 Code2Wav。</p>
+          <p style="margin-top:10px;"><span class="proc-tag talker">PATH B · ASYNC-CHUNK</span>
+            QwenTTS 默认走这条 —— Talker 每 step 末尾，scheduler 自己调
+            <code class="ref">chunk_transfer_adapter.save_async()</code>，
+            后台线程跑 <code class="ref">talker2code2wav_async_chunk()</code>，
+            <code class="ref">SharedMemoryConnector.put()</code> 推到 Code2Wav。
+            <strong>Orchestrator 完全不参与本步</strong>。</p>
+          <div class="payload">transform: <code>[T, 16] → flat list[int]</code> · 通道 A=ZMQ / B=共享内存</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="num">10</div>
+        <div class="step">
+          <h4>Code2Wav · 一次前向出波形</h4>
+          <p><span class="proc-tag code2wav">CODE2WAV · SUBPROC</span>
+            <code class="ref">OmniGenerationScheduler</code> 把整段 codes 一次性 prefill；
+            <code class="ref">Qwen3TTSCode2Wav.forward()</code> 内部按
+            <code>_decode_chunk_frames=300, _decode_left_context_frames=25</code> 分块跑
+            <code>Qwen3TTSTokenizerV2Decoder</code>，输出 <code>[B, samples]</code> 波形。</p>
+          <div class="payload">shape: <code>waveform: [1, sample_count]</code> · sr = <code>_output_sample_rate</code></div>
+        </div>
+      </li>
+
+      <li>
+        <div class="num">11</div>
+        <div class="step">
+          <h4>波形回流 · multimodal_output["audio"]</h4>
+          <p><span class="proc-tag code2wav">CODE2WAV · SUBPROC</span>
+            和 Talker 类似的累积路径，但这是 <code>final_output_type="audio"</code> 的终点 stage，
+            <code>FinalOutputModalityType</code> 决定该 yield 给前端。</p>
+          <div class="payload">channel: ZMQ → 主进程</div>
+        </div>
+      </li>
+
+      <li>
+        <div class="num">12</div>
+        <div class="step">
+          <h4>HTTP 编码 · WAV 流式响应</h4>
+          <p><span class="proc-tag frontend">FRONTEND</span>
+            <code class="ref">OmniOpenAIServingSpeech</code> 把 PCM tensor 转字节，
+            首包带占位 size 的 RIFF/fmt/data header，后续 chunk 直接 append。
+            浏览器即可边收边播。</p>
+          <div class="payload">out: <code>HTTP 200, Content-Type: audio/wav</code> · 流式 PCM</div>
+        </div>
+      </li>
+    </ol>
+
+    <p style="color:var(--ink-mute); font-size:13px; margin-top:18px;">
+      ※ QwenOmni 的旅程多一步：第 5 步之前先经过 Thinker（多模态理解 + 文本生成），
+      Thinker 的 <code>captured_layer_dict</code> 通过
+      <code>thinker2talker</code> Input Processor 注入 Talker，作为 Talker 的初始
+      <code>inputs_embeds</code>。其余环节相同。
+    </p>
+  </div>
+</section>
+
+<!-- ============ DESIGN PATTERNS ============ -->
+<section id="patterns">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Design Patterns</div>
+      <h2>共享的 <em>抽象</em> 与差异点</h2>
+      <p class="section-sub">
+        两个模型共用一套阶段编排骨架，但在阶段数、输入模态与运行器组合上各有特化。
+      </p>
+    </div>
+
+    <div class="cmp">
+      <div class="card">
+        <h4><span class="swatch" style="background:var(--indigo);"></span>QwenOmni</h4>
+        <ul>
+          <li>三阶段流水线，支持 text / audio / vision 多模态输入</li>
+          <li>Thinker 保留多层 hidden states 传给 Talker，实现 LM 状态共享</li>
+          <li>Talker 内置 MTP code predictor，一次预测 16 层 RVQ codes</li>
+          <li>Code2Wav 复用 <code>Qwen3TTSTokenizerV2Decoder</code></li>
+          <li>关注「理解 + 生成」的端到端语义一致性</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4><span class="swatch" style="background:var(--accent);"></span>QwenTTS</h4>
+        <ul>
+          <li>两阶段轻量管道，输入仅为文本 + 可选参考音色</li>
+          <li>ECAPA-TDNN 提供 speaker-aware 合成能力</li>
+          <li>Code2Wav 采用 chunk + left-context 的流式解码</li>
+          <li>桶式 batching 配合 CUDA Graph，主打高并发低延迟</li>
+          <li>关注首包延迟与吞吐，常用于在线语音服务</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3 style="margin-top:48px;">通用设计模式</h3>
+    <table class="layer-table">
+      <thead>
+        <tr><th style="width:30%;">模式</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="layer-name">统一模型壳</td>
+          <td>同一个 <code>XxxForConditionalGeneration</code> 类通过 <code>model_stage</code> 参数切换为 Thinker / Talker / Code2Wav 子模型，简化注册与权重加载。</td>
+        </tr>
+        <tr>
+          <td class="layer-name">Stage Input Processor</td>
+          <td>声明式输入转换函数（<code>stage_input_processors/</code>），把上游 Stage 的输出整形为下游 Stage 期望的 payload。</td>
+        </tr>
+        <tr>
+          <td class="layer-name">OmniPayload &amp; Stage Message</td>
+          <td>跨阶段使用统一的 dict + tensor 结构 <code>OmniPayload</code>，由 <code>StageSubmissionMessage</code> 投递。</td>
+        </tr>
+        <tr>
+          <td class="layer-name">多模态累积</td>
+          <td><code>OmniRequestState.mm_accumulated</code> 在迭代中合并文本 token、codes、waveform，最终由 <code>FinalOutputModalityType</code> 决定输出类型。</td>
+        </tr>
+        <tr>
+          <td class="layer-name">CUDA Graph 包裹</td>
+          <td>Talker / talker_mtp 可选地由 <code>CUDAGraphWrapper</code> 捕获多 batch size 的 graph，AR 阶段单步推理直接命中。</td>
+        </tr>
+        <tr>
+          <td class="layer-name">AR vs Generation Runner</td>
+          <td>自回归阶段 → <code>GPUARModelRunner</code>（带 KV cache、sampler）；非自回归阶段 → <code>GPUGenerationModelRunner</code>（一次前向出整段输出）。</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ FOOTER ============ -->
+<footer>
+  <span class="brand-dot"></span>
+  vLLM-Omni · QwenOmni &amp; QwenTTS Call Stack · drafted with care
+</footer>
+
+<script>
+  (function () {
+    const KEY = 'qwen-callstack-theme';
+    const root = document.documentElement;
+
+    function applyTheme(theme) {
+      if (theme === 'dark') root.setAttribute('data-theme', 'dark');
+      else root.removeAttribute('data-theme');
+    }
+
+    function currentTheme() {
+      return root.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+    }
+
+    // initial: localStorage > prefers-color-scheme > light
+    const stored = localStorage.getItem(KEY);
+    if (stored === 'dark' || stored === 'light') {
+      applyTheme(stored);
+    } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      applyTheme('dark');
+    }
+
+    const btn = document.getElementById('themeToggle');
+    if (btn) {
+      btn.addEventListener('click', () => {
+        const next = currentTheme() === 'dark' ? 'light' : 'dark';
+        applyTheme(next);
+        localStorage.setItem(KEY, next);
+      });
+    }
+  })();
+</script>
+</body>
+</html>
