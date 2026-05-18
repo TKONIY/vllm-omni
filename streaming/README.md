@@ -6,16 +6,18 @@ examples for Qwen3-Omni.
 
 ```
 streaming/
-├── design/                         # design docs & architecture notes
+├── design/                              # design docs & architecture notes
 │   ├── stream_native_engine_plan.md
 │   ├── stream_native_engine_plan_zh.md
-│   └── qwen_call_stack.html        # QwenOmni / QwenTTS call-stack reference
+│   └── qwen_call_stack.html             # QwenOmni / QwenTTS call-stack reference
 └── examples/
-    └── qwen3_omni_pd_disagg/       # 4-stage PD-disaggregated streaming serve
-        ├── qwen3_omni_pd_disagg.yaml
-        ├── run_server_disagg.sh
-        ├── run_all_stages_disagg.sh
-        ├── run_curl_streaming_disagg.sh
+    └── qwen3_omni_pd_disagg/            # Qwen3-Omni streaming serve recipes
+        ├── qwen3_omni_pd_disagg.yaml    # 4-stage PD-disagg (H100/A100-80GB)
+        ├── qwen3_omni_a5000.yaml        # 3-stage non-disagg (8x A5000-24GB)
+        ├── run_server_disagg.sh         # single-process / per-stage launcher
+        ├── run_all_stages_disagg.sh     # 4-stage PD multi-process launcher
+        ├── run_all_stages_nondisagg.sh  # 3-stage non-disagg multi-process launcher
+        ├── run_curl_streaming_disagg.sh # SSE streaming client
         └── stream_run.md
 ```
 
@@ -29,15 +31,30 @@ streaming/
 
 ## Examples
 
-`examples/qwen3_omni_pd_disagg/` runs Qwen3-Omni as four PD-disaggregated
-stages (thinker prefill → thinker decode → talker → code2wav) over Mooncake
-KV transport, with `async_chunk` on so `stream=true` chat requests work
-end-to-end.
+`examples/qwen3_omni_pd_disagg/` ships two streaming-serve flavours of
+Qwen3-Omni; both keep `async_chunk` on so `stream=true` chat requests
+work end-to-end:
+
+| Variant | Stages | YAML | Multi-proc launcher | Target hardware |
+|---|---|---|---|---|
+| PD-disagg | thinker prefill → thinker decode → talker → code2wav (4) | `qwen3_omni_pd_disagg.yaml` | `run_all_stages_disagg.sh` | H100 / A100-80GB |
+| Non-disagg | thinker (merged) → talker → code2wav (3) | `qwen3_omni_a5000.yaml` | `run_all_stages_nondisagg.sh` | 8x A5000-24GB (TP=4 on thinker) |
+
+The PD variant uses Mooncake KV transport between the two thinker
+stages; the non-disagg variant drops Mooncake and merges thinker
+prefill+decode so the 30B MoE fits at TP=4 on 24 GB cards.
 
 ```bash
 cd streaming/examples/qwen3_omni_pd_disagg
-./run_all_stages_disagg.sh         # spawn all four stages
-./run_curl_streaming_disagg.sh     # SSE streaming client
+
+# PD-disagg (4 stages):
+./run_all_stages_disagg.sh
+
+# Non-disagg (3 stages, A5000-friendly):
+./run_all_stages_nondisagg.sh
+
+# SSE streaming client (shared):
+./run_curl_streaming_disagg.sh
 ```
 
 See [`stream_run.md`](examples/qwen3_omni_pd_disagg/stream_run.md) for the

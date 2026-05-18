@@ -40,7 +40,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODEL="Qwen/Qwen3-Omni-30B-A3B-Instruct"
 PORT=8091
 HOST="0.0.0.0"
-STAGE_CONFIGS="${SCRIPT_DIR}/qwen3_omni_pd_disagg.yaml"
+STAGE_CONFIGS="${SCRIPT_DIR}/qwen3_omni_a5000.yaml"
 
 STAGE_ID=""
 MASTER_ADDR="127.0.0.1"
