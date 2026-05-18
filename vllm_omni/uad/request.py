@@ -42,13 +42,18 @@ class UADRequestState:
     """Minimal request ledger for the UAD toy engine.
 
     `engine_tokens` is the full logical context. `materialized_tokens` is the
-    subset visible to the caller. `num_computed_tokens` tracks the committed
-    prefix of `engine_tokens` that has already been run by the model.
+    subset visible to the caller. `ar_sampler_token_ids` is only the AR token
+    sampler history used to build vLLM `SamplingMetadata.output_token_ids`; it
+    is not user output and is intentionally not derived from `engine_tokens`
+    because the engine ledger can contain image context placeholders and other
+    multimodal tokens. `num_computed_tokens` tracks the committed prefix of
+    `engine_tokens` that has already been run by the model.
     """
 
     request_id: str
     engine_tokens: list[UADToken]
     materialized_tokens: list[UADToken] = field(default_factory=list)
+    ar_sampler_token_ids: list[int] = field(default_factory=list)
     phase: UADPhase = "ar_prefill"
     num_computed_tokens: int = 0
     finished: bool = False
@@ -91,6 +96,9 @@ class UADRequestState:
 
     def append_materialized_tokens(self, tokens: list[UADToken]) -> None:
         self.materialized_tokens.extend(tokens)
+
+    def append_ar_sampler_token_ids(self, token_ids: list[int]) -> None:
+        self.ar_sampler_token_ids.extend(token_ids)
 
     def advance_computed_tokens(self, num_tokens: int) -> None:
         next_value = self.num_computed_tokens + num_tokens

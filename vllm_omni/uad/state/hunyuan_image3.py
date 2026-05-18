@@ -518,6 +518,7 @@ class HunyuanImage3UADStateMachine(UADModelStateMachine):
                 request_id=request.request_id,
                 new_engine_tokens=[sampled_token] + image_context_tokens,
                 new_materialized_tokens=[],
+                new_ar_sampler_token_ids=[sampled_token.token_id],
                 phase_update=UADPhaseUpdate(
                     phase="dit_step",
                     dit_step_index=0,
@@ -546,6 +547,7 @@ class HunyuanImage3UADStateMachine(UADModelStateMachine):
             request_id=request.request_id,
             new_engine_tokens=[sampled_token],
             new_materialized_tokens=materialized_tokens,
+            new_ar_sampler_token_ids=[sampled_token.token_id],
             finished=False,
         )
 

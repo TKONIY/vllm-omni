@@ -31,6 +31,11 @@ class UADBatchItem:
             latent/timestep slots.
         dit_step_index: Current DiT denoise step for DiT items.
         total_dit_steps: Total denoise steps for DiT items.
+        ar_sampler_token_ids: AR generated-token history used to build
+            vLLM `SamplingMetadata.output_token_ids`.
+        sample_token_offset: Token offset inside this scheduled item whose
+            hidden state should be projected to logits, matching vLLM's
+            `logits_indices` role.
     """
 
     request_id: str
@@ -44,6 +49,8 @@ class UADBatchItem:
     input_kind: UADInputKind
     dit_step_index: int | None = None
     total_dit_steps: int | None = None
+    ar_sampler_token_ids: tuple[int, ...] = ()
+    sample_token_offset: int | None = None
 
 
 @dataclass(frozen=True)
@@ -121,7 +128,8 @@ class UADBatchItemOutput:
         phase: Phase executed for the item.
         output_index: Scheduler item index used by runner scatter.
         num_scheduled_tokens: Number of token slots completed by the item.
-        next_token_id: Sampled token for AR items. DiT items leave this empty.
+        next_token_id: Toy sampled token for AR items when no backend is used.
+        hidden_states: Backend forward output for runner-side logits/sampling.
     """
 
     request_id: str
@@ -129,6 +137,7 @@ class UADBatchItemOutput:
     output_index: int
     num_scheduled_tokens: int
     next_token_id: int | None = None
+    hidden_states: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)

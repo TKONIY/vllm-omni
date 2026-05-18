@@ -97,32 +97,40 @@ prompt
 
 停点：完成后提交，等待 review。
 
-## 3. Milestone B：真实 AR Path，单请求
+## 3. Milestone B：AR Backend API Smoke Path，单请求
 
-难度：L。目标：UAD runner/model 可以跑真实 HunyuanImage3 AR prefill/decode，直到产生
-普通 text token 或 image boundary token。
+难度：L。状态：完成。
 
-实现步骤：
+目标：UAD 可以把单个 AR item 交给现有 HunyuanImage3-style AR backend，按 vLLM
+runner 职责拆分执行 `forward -> compute_logits -> sample`，直到产生普通 text token
+或 image boundary token。没有 paged KV / attention metadata 前，它不是完整真实 AR
+path。
 
-1. 将 `vllm_omni/uad/model/hunyuan_image3.py` 从 toy shell 改成真实模型 shell：
-   - 复用 `vllm_omni/model_executor/models/hunyuan_image3/hunyuan_image3.py` 的 AR 组件。
-   - 复用现有 embedding、RoPE、decoder layer、MoE、lm head、sampler 逻辑。
-   - 暂时只启用 AR branch。
-2. `UADRunner` 为 AR item 构造真实输入：
-   - token ids。
-   - positions / mRoPE metadata。
-   - block table / slot mapping 的占位字段先保留，真实分配在 Milestone C。
-3. `UADModelRunnerItemOutput.sampled_token` 来自真实 sampler，而不是 toy `+1`。
-4. state machine 消费真实 sampled token，决定 text continuation 或 AR -> DiT transition。
-5. 如果真实 HunyuanImage3 无法单卡加载，则把最小 TP loader 从 Milestone H 提前为本
-   milestone 的 blocking sub-step。
+已实现：
+
+1. `HunyuanImage3UADModel` 保留 toy fallback；传入 `ar_model` 时只调用 backend
+   `forward(input_ids, positions)`。
+2. `UADRunner` 负责 backend `compute_logits(last_hidden_state)` 和
+   `sample(logits, SamplingMetadata)`；不可用时回退到 argmax。
+3. `UADRunner` 显式携带 `sample_token_offset`，对应 vLLM `logits_indices` 的单 item
+   MVP 语义。
+4. `UADRequestState.ar_sampler_token_ids` 单独维护 AR sampler history，不从
+   `engine_tokens` 推导，避免把 image/context placeholder 传给 sampler；它不表示
+   用户可见 text/image 输出。
+5. 真实 backend path 显式限制单 AR request；多请求真实 batch 留给后续 milestone。
+6. 当前 `SamplingMetadata` 只支持 greedy/no-penalty smoke；temperature/top-p、
+   repetition penalty、logprobs、logit bias 仍未接入。
+7. `HunyuanImage3UADStateMachine` 继续消费 sampled token，决定 text continuation 或
+   AR -> DiT transition。
 
 验证：
 
-- text-only prompt：UAD AR 单步 logits / sampled token 与现有 vLLM HunyuanImage3 AR 路径一致。
-- image prompt 前缀：能够 decode 到 image boundary token，并产生正确 `UADStateUpdate`。
-- runner 仍不持有 state machine。
-- 暂不要求真实 DiT、VAE 或 multiturn。
+- fake Hunyuan-style backend 验证 UAD 按 runner 职责调用 `forward / compute_logits / sample`。
+- prefill/decode positions 与 token ids 传递正确。
+- `ar_sampler_token_ids` 只包含 AR sampled token，不包含 image context placeholder。
+- 多 AR item 使用真实 backend 时会报错，避免伪装成 batched vLLM path。
+- sampled ratio token 仍由 state machine 切到 `dit_step`。
+- 不加载真实权重；真实 loader、paged KV、TP/EP 仍留到后续 milestone。
 
 停点：完成后提交，等待 review。
 

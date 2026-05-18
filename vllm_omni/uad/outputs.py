@@ -43,6 +43,7 @@ class UADStateUpdate:
     request_id: str
     new_engine_tokens: list[UADToken] = field(default_factory=list)
     new_materialized_tokens: list[UADToken] = field(default_factory=list)
+    new_ar_sampler_token_ids: list[int] = field(default_factory=list)
     phase_update: UADPhaseUpdate | None = None
     finished: bool = False
 

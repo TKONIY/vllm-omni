@@ -38,6 +38,12 @@ class UADScheduleItem:
     `dit_step_index` and `total_dit_steps` are runner metadata for DiT items.
     They come from scheduler/request state because the runner should not read
     request objects directly.
+
+    `ar_sampler_token_ids` is the AR sampler's generated-token history used
+    to build vLLM `SamplingMetadata.output_token_ids`; it is not a multimodal
+    output ledger and not a slice of the unified engine ledger.
+    `sample_token_offset` mirrors vLLM's logits-index decision for this item;
+    AR samples from the last scheduled token in the current MVP.
     """
 
     request_id: str
@@ -48,6 +54,8 @@ class UADScheduleItem:
     persist: bool = True
     dit_step_index: int | None = None
     total_dit_steps: int | None = None
+    ar_sampler_token_ids: list[int] = field(default_factory=list)
+    sample_token_offset: int | None = None
 
 
 @dataclass
@@ -100,6 +108,7 @@ class UADShadowScheduler:
                         persist=is_final_dit_step,
                         dit_step_index=request.dit_step_index,
                         total_dit_steps=request.total_dit_steps,
+                        ar_sampler_token_ids=list(request.ar_sampler_token_ids),
                     )
                 )
                 continue
@@ -117,6 +126,8 @@ class UADShadowScheduler:
                     token_ids=token_ids,
                     num_scheduled_tokens=len(token_ids),
                     num_computed_tokens=request.num_computed_tokens,
+                    ar_sampler_token_ids=list(request.ar_sampler_token_ids),
+                    sample_token_offset=len(token_ids) - 1,
                 )
             )
 
@@ -192,6 +203,7 @@ class UADToyScheduler(UADShadowScheduler):
             request.advance_computed_tokens(item.num_scheduled_tokens)
         request.append_engine_tokens(output.new_engine_tokens)
         request.append_materialized_tokens(output.new_materialized_tokens)
+        request.append_ar_sampler_token_ids(output.new_ar_sampler_token_ids)
         if output.phase_update is not None:
             request.apply_phase_update(output.phase_update)
         request.finished = output.finished

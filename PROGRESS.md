@@ -258,6 +258,66 @@ Validation:
 - Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step4_batch_model.py tests/uad/test_step5_persist.py -q`.
 - Passed: `git diff --check -- PROGRESS.md docs/uad/design_uad.md docs/uad/plan_uad.md vllm_omni/uad tests/uad`.
 
+## Milestone B: AR Backend API Smoke Path, Single Request
+
+Status: completed.
+
+Completed modifications:
+
+- Rebasing baseline updated to official `upstream/main` from `https://github.com/vllm-project/vllm-omni.git`.
+- Extended `HunyuanImage3UADModel` with an optional AR backend path that reuses an existing HunyuanImage3-style model object's `forward` method.
+- Moved backend `compute_logits` and `sample` into `UADRunner`, matching vLLM runner responsibilities.
+- Kept the existing toy `+1` AR behavior as fallback when no backend is provided.
+- Added an explicit `UADRequestState.ar_sampler_token_ids` sampler-history ledger and plumbed it through `UADScheduleItem.ar_sampler_token_ids` and `UADBatchItem.ar_sampler_token_ids`, matching vLLM sampler metadata semantics without deriving from multimodal `engine_tokens`.
+- Added `sample_token_offset` to make the single-item logits-index decision explicit.
+- Added a real-backend single-AR-item guard so Milestone B cannot masquerade as vLLM batched execution.
+- Added Milestone B tests with a fake reusable Hunyuan-style AR model to verify token/position packing, sampler history, and ratio-token state transition.
+- Updated `docs/uad/plan_uad.md` to mark Milestone B completed and clarify that real loader/KV/TP/EP remain later work.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step4_batch_model.py tests/uad/test_step5_persist.py tests/uad/test_milestone_a_state_metadata.py tests/uad/test_milestone_b_real_ar_path.py -q`.
+- Passed: `git diff --check -- PROGRESS.md docs/uad/plan_uad.md vllm_omni/uad tests/uad`.
+
+## Milestone B Cleanup: vLLM Runner Alignment
+
+Status: completed.
+
+Completed modifications:
+
+- Kept backend `forward()` inside `HunyuanImage3UADModel`, but moved backend `compute_logits()` and `sample()` to `UADRunner`.
+- Added `UADRequestState.ar_sampler_token_ids` as a standalone AR sampler-history ledger and stopped deriving sampler history from multimodal `engine_tokens`.
+- Added `sample_token_offset` to schedule/batch items to make the current logits-index choice explicit.
+- Added a single-real-AR-item guard for the Milestone B backend path.
+- Updated `docs/uad/design_uad.md` and `docs/uad/plan_uad.md` with the corrected scope and current limitations.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step4_batch_model.py tests/uad/test_step5_persist.py tests/uad/test_milestone_a_state_metadata.py tests/uad/test_milestone_b_real_ar_path.py -q`.
+- Passed: `git diff --check -- PROGRESS.md docs/uad/design_uad.md docs/uad/plan_uad.md vllm_omni/uad tests/uad`.
+
+## Milestone B Naming Cleanup: AR Sampler Ledger
+
+Status: completed.
+
+Completed modifications:
+
+- Renamed the misleading `output_token_ids` UAD ledger to `ar_sampler_token_ids`.
+- Renamed `new_output_token_ids` to `new_ar_sampler_token_ids`.
+- Kept vLLM `SamplingMetadata.output_token_ids` only at the boundary where runner calls the backend sampler.
+- Documented that AR sampler history is not multimodal output; image outputs should use materialized/artifact paths.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step4_batch_model.py tests/uad/test_step5_persist.py tests/uad/test_milestone_a_state_metadata.py tests/uad/test_milestone_b_real_ar_path.py -q`.
+- Passed: `git diff --check -- PROGRESS.md docs/uad/design_uad.md docs/uad/plan_uad.md vllm_omni/uad tests/uad`.
+
 ## State Package Cleanup
 
 Status: completed.
