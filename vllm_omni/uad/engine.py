@@ -3,7 +3,7 @@ from __future__ import annotations
 from vllm_omni.uad.outputs import UADEngineCoreOutputs
 from vllm_omni.uad.request import UADRequestState
 from vllm_omni.uad.runner import UADRunner
-from vllm_omni.uad.scheduler import UADToyScheduler
+from vllm_omni.uad.scheduler import UADScheduler
 from vllm_omni.uad.state.base import UADModelStateMachine
 
 
@@ -12,13 +12,13 @@ class UADEngine:
 
     def __init__(
         self,
-        scheduler: UADToyScheduler | None = None,
+        scheduler: UADScheduler | None = None,
         runner: UADRunner | None = None,
         state_machine: UADModelStateMachine | None = None,
     ) -> None:
         if scheduler is not None and state_machine is not None:
             raise ValueError("pass either scheduler or state_machine, not both")
-        self.scheduler = scheduler or UADToyScheduler(state_machine=state_machine)
+        self.scheduler = scheduler or UADScheduler(state_machine=state_machine)
         self.runner = runner or UADRunner()
 
     @property

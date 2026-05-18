@@ -477,3 +477,27 @@ Validation:
 - Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
 - Passed: `uv run --no-sync python -m pytest tests/uad/test_milestone_a_state_metadata.py tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step4_batch_model.py tests/uad/test_step5_persist.py -q`.
 - Passed: `git diff --check -- PROGRESS.md docs/uad/plan_uad.md vllm_omni/uad tests/uad`.
+
+## Nano-style UAD Simplification
+
+Status: completed.
+
+Completed modifications:
+
+- Rewrote `docs/uad/design_uad.md` around the minimal loop:
+  `UADEngine.step -> UADScheduler.schedule -> UADRunner.execute_model -> UADScheduler.update_from_output`.
+- Rewrote `docs/uad/plan_uad.md` to keep the milestone plan compact while preserving target scope,
+  implementation steps, validation, and review stop points.
+- Collapsed the old shadow/toy scheduler split into a single `UADScheduler`.
+- Removed the `UADToyScheduler` compatibility alias and updated scheduler tests to use `UADScheduler`.
+- Removed `UADInputKind` / `input_kind`; batch/model execution now derives AR vs DiT recipe from `phase`.
+- Kept UAD-critical KV semantics explicit: `persist=True/False`, future `block_table` / `slot_mapping`,
+  non-final DiT scratch compute, and final image-context commit.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m compileall -q vllm_omni/uad tests/uad`.
+- Passed: `uv run --no-sync python -m pytest tests/uad/test_step0.py tests/uad/test_step1_scheduler.py tests/uad/test_step2_phase_switch.py tests/uad/test_step3_runner.py tests/uad/test_step4_batch_model.py tests/uad/test_step5_persist.py tests/uad/test_milestone_a_state_metadata.py tests/uad/test_milestone_b_real_ar_path.py -q`.
+- Passed: `git diff --check -- PROGRESS.md docs/uad/design_uad.md docs/uad/plan_uad.md vllm_omni/uad tests/uad`.
+- Passed: no current-code/doc matches for `input_kind`, `UADShadowScheduler`, or `UADToyScheduler`.

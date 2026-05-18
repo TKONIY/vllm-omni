@@ -40,7 +40,7 @@ class HunyuanImage3UADModel(nn.Module):
         for item in batch_inputs.items:
             next_token_id: int | None = None
             hidden_states: torch.Tensor | None = None
-            if item.input_kind == "token_ids":
+            if item.is_ar:
                 next_token_id, hidden_states = self._run_ar_item(batch_inputs, item)
 
             item_outputs.append(

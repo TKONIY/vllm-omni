@@ -76,10 +76,43 @@ class UADSchedulerOutput:
         return {item.request_id: item.num_scheduled_tokens for item in self.scheduled_items}
 
 
-class UADShadowScheduler:
-    """Build UAD scheduler metadata beside an existing scheduler decision."""
+class UADScheduler:
+    """Minimal nano-style scheduler for the UAD research engine.
 
-    def build_shadow_output(
+    It owns request state, turns runnable requests into scheduled work items,
+    and applies runner outputs through the model-specific state machine. Later
+    milestones can swap its toy token-budget logic for vLLM's scheduler/KV
+    manager without changing the runner/state-machine boundary.
+    """
+
+    def __init__(
+        self,
+        state_machine: UADModelStateMachine | None = None,
+    ) -> None:
+        self.state_machine = state_machine or HunyuanImage3UADStateMachine()
+        self.requests: dict[str, UADRequestState] = {}
+
+    def add_request(
+        self,
+        request_id: str,
+        prompt_token_ids: list[int],
+    ) -> UADRequestState:
+        if request_id in self.requests:
+            raise ValueError(f"duplicate UAD request_id: {request_id}")
+        request = UADRequestState.from_prompt_token_ids(request_id, prompt_token_ids)
+        self.requests[request_id] = request
+        return request
+
+    def get_request(self, request_id: str) -> UADRequestState:
+        return self.requests[request_id]
+
+    def schedule(
+        self,
+        base_output: Any | None = None,
+    ) -> UADSchedulerOutput:
+        return self._build_output(list(self.requests.values()), base_output=base_output)
+
+    def _build_output(
         self,
         requests: list[UADRequestState],
         base_output: Any | None = None,
@@ -132,37 +165,6 @@ class UADShadowScheduler:
             )
 
         return UADSchedulerOutput(base_output=base_output, scheduled_items=items)
-
-
-class UADToyScheduler(UADShadowScheduler):
-    """Token-budget-free scheduler used only for UAD toy smoke tests."""
-
-    def __init__(
-        self,
-        state_machine: UADModelStateMachine | None = None,
-    ) -> None:
-        self.state_machine = state_machine or HunyuanImage3UADStateMachine()
-        self.requests: dict[str, UADRequestState] = {}
-
-    def add_request(
-        self,
-        request_id: str,
-        prompt_token_ids: list[int],
-    ) -> UADRequestState:
-        if request_id in self.requests:
-            raise ValueError(f"duplicate UAD request_id: {request_id}")
-        request = UADRequestState.from_prompt_token_ids(request_id, prompt_token_ids)
-        self.requests[request_id] = request
-        return request
-
-    def get_request(self, request_id: str) -> UADRequestState:
-        return self.requests[request_id]
-
-    def schedule(
-        self,
-        base_output: Any | None = None,
-    ) -> UADSchedulerOutput:
-        return self.build_shadow_output(list(self.requests.values()), base_output=base_output)
 
     def update_from_output(
         self,

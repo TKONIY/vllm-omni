@@ -3,13 +3,13 @@ from __future__ import annotations
 import pytest
 
 from vllm_omni.uad.request import UADToken
-from vllm_omni.uad.scheduler import UADToyScheduler
+from vllm_omni.uad.scheduler import UADScheduler
 
 pytestmark = pytest.mark.cpu
 
 
-def test_step1_shadow_scheduler_builds_prefill_item() -> None:
-    scheduler = UADToyScheduler()
+def test_step1_scheduler_builds_prefill_item() -> None:
+    scheduler = UADScheduler()
     scheduler.add_request("req-prefill", [10, 11, 12])
 
     output = scheduler.schedule(base_output={"source": "base"})
@@ -25,8 +25,8 @@ def test_step1_shadow_scheduler_builds_prefill_item() -> None:
     assert item.persist is True
 
 
-def test_step1_shadow_scheduler_builds_decode_item() -> None:
-    scheduler = UADToyScheduler()
+def test_step1_scheduler_builds_decode_item() -> None:
+    scheduler = UADScheduler()
     request = scheduler.add_request("req-decode", [7])
     request.advance_computed_tokens(1)
     request.append_engine_tokens([UADToken(modality="text", token_id=8)])
@@ -41,8 +41,8 @@ def test_step1_shadow_scheduler_builds_decode_item() -> None:
     assert item.persist is True
 
 
-def test_step1_shadow_scheduler_skips_finished_requests() -> None:
-    scheduler = UADToyScheduler()
+def test_step1_scheduler_skips_finished_requests() -> None:
+    scheduler = UADScheduler()
     finished = scheduler.add_request("finished", [1])
     finished.finished = True
     scheduler.add_request("active", [2])
@@ -54,8 +54,8 @@ def test_step1_shadow_scheduler_skips_finished_requests() -> None:
     assert output.total_num_scheduled_tokens == 1
 
 
-def test_step1_shadow_scheduler_totals_match_items() -> None:
-    scheduler = UADToyScheduler()
+def test_step1_scheduler_totals_match_items() -> None:
+    scheduler = UADScheduler()
     scheduler.add_request("req-0", [1, 2])
     scheduler.add_request("req-1", [3])
 

@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 
 import torch
 
 from vllm_omni.uad.request import UADPhase
-
-UADInputKind = Literal["token_ids", "latent_timestep"]
 
 
 @dataclass(frozen=True)
@@ -27,8 +24,6 @@ class UADBatchItem:
             request object.
         persist: Whether successful execution should commit reusable context
             and advance request `num_computed_tokens`.
-        input_kind: Input recipe for this item. AR uses token IDs; DiT uses
-            latent/timestep slots.
         dit_step_index: Current DiT denoise step for DiT items.
         total_dit_steps: Total denoise steps for DiT items.
         ar_sampler_token_ids: AR generated-token history used to build
@@ -46,11 +41,18 @@ class UADBatchItem:
     token_end: int
     num_computed_tokens: int
     persist: bool
-    input_kind: UADInputKind
     dit_step_index: int | None = None
     total_dit_steps: int | None = None
     ar_sampler_token_ids: tuple[int, ...] = ()
     sample_token_offset: int | None = None
+
+    @property
+    def is_ar(self) -> bool:
+        return self.phase in ("ar_prefill", "ar_decode")
+
+    @property
+    def is_dit(self) -> bool:
+        return self.phase == "dit_step"
 
 
 @dataclass(frozen=True)
@@ -59,7 +61,7 @@ class UADBatchInputs:
 
     `input_token_ids` is the flattened token-slot buffer for the whole runner
     tick. AR slots contain real token IDs. DiT slots are fake latent slots in
-    the current toy path and are marked by `input_kind` rather than token ID.
+    the current toy path; the phase identifies the execution recipe.
 
     Attributes:
         items: Per-scheduler-item metadata after runner packing.
@@ -79,12 +81,12 @@ class UADBatchInputs:
     @property
     def num_ar_tokens(self) -> int:
         """Number of flattened token slots using the AR token-id recipe."""
-        return sum(item.num_tokens for item in self.items if item.input_kind == "token_ids")
+        return sum(item.num_tokens for item in self.items if item.is_ar)
 
     @property
     def num_dit_tokens(self) -> int:
         """Number of flattened token slots using the DiT latent/timestep recipe."""
-        return sum(item.num_tokens for item in self.items if item.input_kind == "latent_timestep")
+        return sum(item.num_tokens for item in self.items if item.is_dit)
 
     @property
     def num_ffn_tokens(self) -> int:

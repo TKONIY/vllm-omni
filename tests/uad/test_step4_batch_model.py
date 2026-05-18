@@ -60,8 +60,8 @@ def test_step4_batch_metadata_uses_phase_to_separate_ar_and_dit_work() -> None:
     assert batch_inputs is not None
     assert batch_inputs.ar_item_indices == (1,)
     assert batch_inputs.dit_item_indices == (0,)
-    assert batch_inputs.items[0].input_kind == "latent_timestep"
-    assert batch_inputs.items[1].input_kind == "token_ids"
+    assert batch_inputs.items[0].is_dit is True
+    assert batch_inputs.items[1].is_ar is True
     assert batch_inputs.num_dit_tokens == dit_request.image_context_token_count
     assert batch_inputs.items[0].dit_step_index == 0
     assert batch_inputs.items[0].total_dit_steps == 2

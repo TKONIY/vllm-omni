@@ -71,7 +71,6 @@ class UADRunner:
             )
             token_end = len(token_ids)
 
-            input_kind = "token_ids" if item.phase in ("ar_prefill", "ar_decode") else "latent_timestep"
             batch_items.append(
                 UADBatchItem(
                     request_id=item.request_id,
@@ -82,7 +81,6 @@ class UADRunner:
                     token_end=token_end,
                     num_computed_tokens=item.num_computed_tokens,
                     persist=item.persist,
-                    input_kind=input_kind,
                     dit_step_index=item.dit_step_index,
                     total_dit_steps=item.total_dit_steps,
                     ar_sampler_token_ids=tuple(item.ar_sampler_token_ids),
@@ -212,7 +210,6 @@ class UADRunner:
                 token_end=item.num_scheduled_tokens,
                 num_computed_tokens=item.num_computed_tokens,
                 persist=item.persist,
-                input_kind="token_ids",
                 ar_sampler_token_ids=tuple(item.ar_sampler_token_ids),
                 sample_token_offset=item.sample_token_offset,
             )
