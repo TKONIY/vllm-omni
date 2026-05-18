@@ -4,6 +4,10 @@
 一个 stage 排队，另一个 stage 空闲或低负载。实验只讨论现有 vLLM-Omni HunyuanImage3
 分离 serving，不引入 UAD 执行器。
 
+当前先做 Version A：测真实现状。HunyuanImage3 DiT 仍是 request-mode 单请求执行；
+其他 DiT 请求会在 diffusion scheduler waiting queue 里排队。Version A 不声称 DiT
+phase 内已经 continuous batching，只回答“当前分离部署在在线流量下是否出现阶段负载不均衡”。
+
 ## 0. Gate：先确认 phase 内 continuous batching
 
 公平对比需要先确认每个 phase 内部已经能 batch，否则测到的空闲可能只是单 phase batching
@@ -85,15 +89,28 @@ request rate sweep：
 
 ## 4. 部署配置
 
-Baseline：现有 HunyuanImage3 分离部署，2 卡 AR + 2 卡 DiT：
+Baseline：现有 HunyuanImage3 分离部署，2 卡 AR + 2 卡 DiT。先生成一份 Version A
+实验 deploy YAML：打开 AR stage 和 AR->DiT edge 并发，但保留 DiT 单请求。
+
+```bash
+python docs/uad/script/make_hunyuan_phase_deploy_config.py \
+  --base vllm_omni/deploy/hunyuan_image3.yaml \
+  --output artifacts/uad_phase_imbalance/config/hunyuan_image3_phase_a.yaml \
+  --ar-max-num-seqs 8 \
+  --ar-max-num-batched-tokens 32768 \
+  --dit-max-num-seqs 1 \
+  --edge-max-inflight 64
+```
+
+启动 serving：
 
 ```bash
 vllm-omni serve tencent/HunyuanImage-3.0-Instruct \
-  --deploy-config vllm_omni/deploy/hunyuan_image3.yaml \
+  --deploy-config artifacts/uad_phase_imbalance/config/hunyuan_image3_phase_a.yaml \
   --host 0.0.0.0 --port 8091
 ```
 
-Continuous-batching overlay 需要：
+完整 continuous-batching overlay 需要：
 
 - stage 0：`max_num_seqs > 1`，`max_num_batched_tokens` 足够大。
 - stage 1：必须先支持 HunyuanImage3 DiT `step_execution: true`，否则配置会被降回单请求。
@@ -136,24 +153,91 @@ goodput = completed_requests_within_E2E_SLO / measurement_seconds
 
 建议 SLO 先设为 baseline p90 latency 的 1.2x / 1.5x 两档。
 
-## 6. 执行顺序
+## 6. Version A 执行顺序
 
-1. Gate 0：运行 `check_hunyuan_phase_batching.py`。
-2. 如果 Gate 0 未通过：
-   - 只运行现有 baseline smoke，记录当前分离部署能力和缺口。
-   - 不运行“公平 continuous batching”主实验。
-3. 如果 Gate 0 通过：
-   - 启动 2+2 HunyuanImage3 online serving。
-   - 运行 dataset smoke：每类 workload 8 个请求。
-   - 运行 rate sweep：每个点 warmup 3 分钟，measurement 15 分钟，重复 3 次。
-   - 生成 utilization / queue / stranded capacity / goodput HTML 报告。
+### 6.1 Gate 0
+
+```bash
+python docs/uad/script/check_hunyuan_phase_batching.py \
+  --output-json artifacts/uad_phase_imbalance/preflight/phase_batching.json
+```
+
+### 6.2 生成 workload
+
+```bash
+python docs/uad/script/make_hunyuan_phase_workload.py \
+  --profile dit_heavy \
+  --num-requests 256 \
+  --output artifacts/uad_phase_imbalance/workloads/dit_heavy.jsonl
+
+python docs/uad/script/make_hunyuan_phase_workload.py \
+  --profile ar_heavy \
+  --num-requests 256 \
+  --output artifacts/uad_phase_imbalance/workloads/ar_heavy.jsonl
+
+python docs/uad/script/make_hunyuan_phase_workload.py \
+  --profile bursty_mix \
+  --num-requests 512 \
+  --output artifacts/uad_phase_imbalance/workloads/bursty_mix.jsonl
+```
+
+脚本 dry run：
+
+```bash
+python docs/uad/script/run_hunyuan_phase_load.py \
+  --workload artifacts/uad_phase_imbalance/workloads/dit_heavy.jsonl \
+  --output-jsonl artifacts/uad_phase_imbalance/dryrun/dit_heavy.jsonl \
+  --rate 0.1 \
+  --max-requests 8 \
+  --dry-run
+```
+
+### 6.3 Rate sweep
+
+每个 workload 从低到高扫 rate。先用短 smoke 找到 knee，再做长 measurement。示例：
+
+```bash
+python docs/uad/script/run_hunyuan_phase_load.py \
+  --workload artifacts/uad_phase_imbalance/workloads/dit_heavy.jsonl \
+  --output-jsonl artifacts/uad_phase_imbalance/results/dit_heavy_r0.05.jsonl \
+  --base-url http://127.0.0.1:8091 \
+  --rate 0.05 \
+  --duration-s 600 \
+  --timeout-s 1800 \
+  --nvidia-smi-jsonl artifacts/uad_phase_imbalance/results/dit_heavy_r0.05_gpu.jsonl \
+  --metrics-jsonl artifacts/uad_phase_imbalance/results/dit_heavy_r0.05_metrics.jsonl
+```
+
+推荐第一轮 rates：
+
+```text
+0.02, 0.05, 0.08, 0.10, 0.12, 0.15 req/s
+```
+
+如果 serving 已经明显排队，再围绕 knee 加密；如果所有点都空闲，再继续升高。
+
+### 6.4 生成报告
+
+```bash
+python docs/uad/script/build_phase_imbalance_report.py \
+  --result-jsonl artifacts/uad_phase_imbalance/results/dit_heavy_r0.05.jsonl \
+  --gpu-jsonl artifacts/uad_phase_imbalance/results/dit_heavy_r0.05_gpu.jsonl \
+  --output-html artifacts/uad_phase_imbalance/report/dit_heavy_r0.05.html \
+  --summary-json artifacts/uad_phase_imbalance/report/dit_heavy_r0.05_summary.json \
+  --ar-gpus 0,1 \
+  --dit-gpus 2,3 \
+  --slo-s 120 \
+  --slo-s 180 \
+  --slo-s 300
+```
+
+多个 rate 可以把 `--result-jsonl` 和 `--gpu-jsonl` 重复传入同一个报告命令。
 
 ## 7. 当前执行记录
 
-已执行 Gate 0，结论是 blocked：AR 代码可 batch，但默认配置未打开；DiT 不支持
-HunyuanImage3 stepwise batching，非 stepwise diffusion 会强制单请求执行。
+已执行 Gate 0，结论是 blocked for full continuous batching：AR 代码可 batch，但默认配置未打开；
+DiT 不支持 HunyuanImage3 stepwise batching，非 stepwise diffusion 会强制单请求执行。
 
-下一步需要在两条路线中选择：
-
-- 路线 A：先实现 HunyuanImage3 DiT stepwise execution，再做严格公平实验。
-- 路线 B：先测当前生产形态的分离部署 imbalance，并在报告中明确 DiT phase 内未 continuous batch。
+当前执行 Version A：使用现有分离部署能力做 baseline imbalance 实验，并在报告里明确 DiT
+phase 内未 continuous batch。后续 Version B 再实现 HunyuanImage3 DiT stepwise execution，
+用于严格比较“分离但 phase 内可连续 batch”与 UAD 的差异。

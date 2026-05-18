@@ -148,3 +148,36 @@ Validation:
 Commit and push:
 
 - Commit `9c436dfa` is pushed to `fork/uad-phase-util-exp`.
+
+## Experiment Version A: Current Separated HunyuanImage3 Baseline
+
+Status: completed.
+
+Scope:
+
+- Implement Version A experiment scripts for the current real separated HunyuanImage3 online serving path.
+- Keep DiT in request-mode single-request execution; do not claim HunyuanImage3 DiT phase-internal continuous batching.
+- Open AR stage and AR->DiT edge concurrency through a generated deploy YAML so the experiment can observe DiT queueing
+  without the default edge `max_inflight: 1` serializing the whole pipeline.
+
+Completed modifications:
+
+- Added `docs/uad/script/make_hunyuan_phase_deploy_config.py` to generate a Version A deploy YAML.
+- Added `docs/uad/script/make_hunyuan_phase_workload.py` to generate `dit_heavy`, `ar_heavy`, and `bursty_mix` JSONL
+  workloads.
+- Added `docs/uad/script/run_hunyuan_phase_load.py` as an open-loop Poisson load generator for
+  `/v1/images/generations`, with optional `nvidia-smi` and `/metrics` sampling.
+- Added `docs/uad/script/build_phase_imbalance_report.py` to build a self-contained HTML/JSON report with latency,
+  approximate in-flight requests, GPU utilization, SLO goodput, and AR-vs-DiT GPU-util imbalance heuristics.
+- Updated `docs/uad/phase_imbalance_experiment_plan.md` with Version A deployment, workload, dry-run, rate-sweep,
+  and report commands.
+
+Validation:
+
+- Passed: `uv run --no-sync ruff check docs/uad/script/make_hunyuan_phase_workload.py docs/uad/script/make_hunyuan_phase_deploy_config.py docs/uad/script/run_hunyuan_phase_load.py docs/uad/script/build_phase_imbalance_report.py`.
+- Passed: `uv run --no-sync python -m compileall -q docs/uad/script/make_hunyuan_phase_workload.py docs/uad/script/make_hunyuan_phase_deploy_config.py docs/uad/script/run_hunyuan_phase_load.py docs/uad/script/build_phase_imbalance_report.py`.
+- Passed: generated a Version A deploy YAML under `artifacts/uad_phase_imbalance/validation/` and confirmed
+  stage 0 `max_num_seqs=4`, stage 1 `max_num_seqs=1`, edge `max_inflight=8`.
+- Passed: generated a 12-request `bursty_mix` workload and an 8-request dry-run load JSONL.
+- Passed: generated a dry-run HTML and JSON report from the dry-run load output.
+- Passed: `git diff --check -- docs/uad/phase_imbalance_experiment_plan.md docs/uad/script/build_phase_imbalance_report.py docs/uad/script/make_hunyuan_phase_deploy_config.py docs/uad/script/make_hunyuan_phase_workload.py docs/uad/script/run_hunyuan_phase_load.py`.
