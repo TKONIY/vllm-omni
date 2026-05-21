@@ -1,0 +1,1722 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UAD 统一引擎设计 · vLLM-Omni</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0e0d0a;
+    --bg-elev: #14130f;
+    --bg-card: #1a1814;
+    --fg: #e8e3d8;
+    --fg-dim: #8a857a;
+    --fg-mute: #5a564d;
+    --accent: #d97757;
+    --accent-bright: #e89070;
+    --accent-dim: #8a4d3a;
+    --c-ar: #6c8fa3;       /* AR / text path */
+    --c-dit: #7a9966;      /* DiT path */
+    --c-artifact: #a384b5; /* artifact / materialized */
+    --c-share: #d4b75e;    /* shared / commit / KV */
+    --c-flow: #c98e6f;     /* engine glue / scheduler */
+    --c-warn: #c87060;     /* TODO / unsupported */
+    --line: #2a2722;
+    --line-bright: #3a362e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; scroll-padding-top: 32px; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'Inter', -apple-system, sans-serif;
+    font-weight: 300;
+    line-height: 1.65;
+    font-size: 15px;
+    overflow-x: hidden;
+  }
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.5'/%3E%3C/svg%3E");
+    opacity: 0.025;
+    pointer-events: none;
+    z-index: 100;
+    mix-blend-mode: overlay;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    max-width: 1320px;
+    margin: 0 auto;
+    min-height: 100vh;
+  }
+  nav.sidebar {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    padding: 56px 24px 32px 36px;
+    border-right: 1px solid var(--line);
+    overflow-y: auto;
+  }
+  .brand {
+    font-family: 'Fraunces', serif;
+    font-weight: 600;
+    font-size: 24px;
+    letter-spacing: -0.02em;
+    margin-bottom: 4px;
+  }
+  .brand em { font-style: italic; color: var(--accent); }
+  .brand-sub {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--accent);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-bottom: 48px;
+  }
+  .nav-section { margin-bottom: 24px; }
+  .nav-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    color: var(--fg-mute);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .nav-link {
+    display: block;
+    padding: 5px 0 5px 12px;
+    margin-left: -12px;
+    color: var(--fg-dim);
+    text-decoration: none;
+    font-size: 13px;
+    border-left: 1px solid transparent;
+    transition: all 0.2s;
+  }
+  .nav-link:hover { color: var(--accent); transform: translateX(2px); }
+  .nav-link.active { color: var(--fg); border-left-color: var(--accent); }
+  main { padding: 56px 64px 96px 64px; max-width: 1020px; }
+
+  .hero { margin-bottom: 88px; position: relative; }
+  .hero-tag {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-bottom: 24px;
+    padding: 4px 10px;
+    border: 1px solid var(--accent-dim);
+    border-radius: 2px;
+  }
+  .hero-title {
+    font-family: 'Fraunces', serif;
+    font-weight: 400;
+    font-size: 60px;
+    line-height: 1.05;
+    letter-spacing: -0.03em;
+    margin-bottom: 24px;
+  }
+  .hero-title em { font-style: italic; font-weight: 300; color: var(--accent); }
+  .hero-sub {
+    font-size: 17px;
+    color: var(--fg-dim);
+    max-width: 680px;
+    line-height: 1.6;
+    margin-bottom: 48px;
+  }
+  .meta-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+  }
+  .meta-cell { background: var(--bg); padding: 18px 20px; }
+  .meta-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    color: var(--fg-mute);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .meta-value {
+    font-family: 'Fraunces', serif;
+    font-size: 22px;
+    font-weight: 500;
+  }
+  .meta-unit {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--fg-dim);
+    margin-left: 4px;
+  }
+
+  section { margin-bottom: 88px; scroll-margin-top: 32px; }
+  .section-header {
+    margin-bottom: 32px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--line);
+    position: relative;
+  }
+  .section-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 0.18em;
+    margin-bottom: 8px;
+  }
+  .section-title {
+    font-family: 'Fraunces', serif;
+    font-weight: 400;
+    font-size: 38px;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    margin-bottom: 12px;
+  }
+  .section-title em { font-style: italic; color: var(--accent); font-weight: 300; }
+  .section-desc {
+    color: var(--fg-dim);
+    font-size: 15px;
+    max-width: 760px;
+  }
+  .deco-num {
+    position: absolute;
+    top: -32px;
+    right: -16px;
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-size: 200px;
+    font-weight: 300;
+    color: var(--line);
+    line-height: 1;
+    user-select: none;
+    pointer-events: none;
+  }
+
+  .diagram-frame {
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    padding: 32px;
+    margin: 24px 0;
+    position: relative;
+  }
+  .diagram-label {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--fg-mute);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+  .diagram-caption {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    color: var(--fg-dim);
+    margin-top: 16px;
+    line-height: 1.65;
+  }
+  svg { display: block; max-width: 100%; height: auto; }
+
+  .codeblock {
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--accent);
+    padding: 18px 22px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: var(--fg-dim);
+    margin: 20px 0;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .codeblock .key { color: var(--accent); }
+  .codeblock .var { color: var(--c-ar); }
+  .codeblock .num { color: var(--c-share); }
+  .codeblock .str { color: var(--c-dit); }
+  .codeblock .comment { color: var(--fg-mute); font-style: italic; }
+  .codeblock .ar-c { color: var(--c-ar); }
+  .codeblock .dit-c { color: var(--c-dit); }
+  .codeblock .art-c { color: var(--c-artifact); }
+  .codeblock .share-c { color: var(--c-share); }
+  .codeblock .flow-c { color: var(--c-flow); }
+  .codeblock .warn-c { color: var(--c-warn); }
+
+  p { margin-bottom: 16px; color: var(--fg-dim); }
+  p strong { color: var(--fg); font-weight: 500; }
+  p em { color: var(--accent); font-style: italic; }
+  p code, li code, td code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    color: var(--fg);
+    background: var(--bg-elev);
+    padding: 1px 6px;
+    border: 1px solid var(--line);
+    border-radius: 2px;
+  }
+  ul { margin: 12px 0 16px 24px; color: var(--fg-dim); }
+  li { margin-bottom: 6px; }
+
+  .compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    margin: 24px 0;
+  }
+  .compare-side { background: var(--bg-elev); padding: 24px; }
+  .compare-side h4 {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 19px;
+    margin-bottom: 4px;
+    letter-spacing: -0.01em;
+  }
+  .compare-tag {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 2px;
+    margin-bottom: 16px;
+  }
+  .tag-v1 { color: var(--c-ar); border: 1px solid var(--c-ar); }
+  .tag-uad { color: var(--accent); border: 1px solid var(--accent); }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 24px 0;
+    font-size: 13px;
+  }
+  th, td {
+    padding: 12px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+    color: var(--fg-dim);
+  }
+  th {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg-mute);
+    font-weight: 500;
+  }
+  td.k { color: var(--accent); font-family: 'JetBrains Mono', monospace; font-size: 12.5px; }
+  td.ar { color: var(--c-ar); }
+  td.dit { color: var(--c-dit); }
+  td.share { color: var(--c-share); }
+  td.art { color: var(--c-artifact); }
+  td strong { color: var(--fg); font-weight: 500; }
+  td code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--fg);
+    background: var(--bg);
+    padding: 1px 5px;
+    border: 1px solid var(--line);
+    border-radius: 2px;
+  }
+
+  .pull-quote {
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-weight: 300;
+    font-size: 22px;
+    line-height: 1.45;
+    padding: 24px 0 24px 32px;
+    border-left: 2px solid var(--accent);
+    margin: 32px 0;
+    max-width: 760px;
+    color: var(--fg);
+  }
+  .pull-quote-attr {
+    display: block;
+    margin-top: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-style: normal;
+    font-size: 11px;
+    color: var(--fg-mute);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; color: var(--fg-dim);
+    margin: 12px 0 4px;
+  }
+  .legend-item { display: inline-flex; align-items: center; gap: 6px; }
+  .legend-swatch {
+    width: 10px; height: 10px; border-radius: 1px; display: inline-block;
+  }
+
+  .pill {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    padding: 2px 8px;
+    border-radius: 2px;
+    margin-right: 4px;
+    text-transform: uppercase;
+  }
+  .pill-ar { color: var(--c-ar); border: 1px solid var(--c-ar); }
+  .pill-dit { color: var(--c-dit); border: 1px solid var(--c-dit); }
+  .pill-art { color: var(--c-artifact); border: 1px solid var(--c-artifact); }
+  .pill-share { color: var(--c-share); border: 1px solid var(--c-share); }
+  .pill-todo { color: var(--c-warn); border: 1px solid var(--c-warn); }
+
+  .todo-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    margin: 24px 0;
+  }
+  .todo-cell {
+    background: var(--bg-elev);
+    padding: 18px 20px;
+  }
+  .todo-cell h5 {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 16px;
+    margin-bottom: 4px;
+    color: var(--fg);
+  }
+  .todo-cell p {
+    font-size: 12.5px;
+    color: var(--fg-dim);
+    margin: 0;
+  }
+
+  @media (max-width: 960px) {
+    .layout { grid-template-columns: 1fr; }
+    nav.sidebar { display: none; }
+    main { padding: 32px 24px 64px; }
+    .hero-title { font-size: 38px; }
+    .meta-grid { grid-template-columns: repeat(2, 1fr); }
+    .compare { grid-template-columns: 1fr; }
+    .todo-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+
+<nav class="sidebar">
+  <div class="brand">vLLM-Omni <em>UAD</em></div>
+  <div class="brand-sub">design · v1 EngineCore</div>
+
+  <div class="nav-section">
+    <div class="nav-label">导览</div>
+    <a class="nav-link active" href="#hero">总览</a>
+    <a class="nav-link" href="#integration">§01 接入</a>
+    <a class="nav-link" href="#objects">§02 对象边界</a>
+    <a class="nav-link" href="#classes">§03 类关系</a>
+  </div>
+
+  <div class="nav-section">
+    <div class="nav-label">Step Path</div>
+    <a class="nav-link" href="#step">§04 Step Flow</a>
+    <a class="nav-link" href="#schedout">§05 Scheduler Output</a>
+    <a class="nav-link" href="#item">§06 Work Item</a>
+    <a class="nav-link" href="#reqstate">§07 Request State</a>
+    <a class="nav-link" href="#phase">§08 Phase Output</a>
+  </div>
+
+  <div class="nav-section">
+    <div class="nav-label">语义</div>
+    <a class="nav-link" href="#ownership">§09 状态所有权</a>
+    <a class="nav-link" href="#fsm">§10 State Machine</a>
+    <a class="nav-link" href="#sched">§11 Scheduler 语义</a>
+    <a class="nav-link" href="#kv">§12 KV / Commit</a>
+    <a class="nav-link" href="#attn">§13 Attention</a>
+    <a class="nav-link" href="#exec">§14 Executor / Runner</a>
+  </div>
+
+  <div class="nav-section">
+    <div class="nav-label">应用</div>
+    <a class="nav-link" href="#hy3">§15 HunyuanImage3</a>
+    <a class="nav-link" href="#todo">§16 TODO</a>
+  </div>
+</nav>
+
+<main>
+
+<header class="hero" id="hero">
+  <div class="hero-tag">vLLM-Omni · uad-integration · 2026-05-21</div>
+  <h1 class="hero-title">在同一个 <em>EngineCore</em><br/>调度 AR、DiT、<em>artifact</em></h1>
+  <p class="hero-sub">
+    UAD (Unified AR + DiT) 在 vLLM v1 EngineCore 进程边界内构建 unified engine,
+    让同一个 DP group 可以同时调度 AR token、DiT denoise step 和 artifact decode。
+    第一目标模型是 <strong style="color:var(--fg);">HunyuanImage3</strong>。
+    当前代码是 <em>scaffold</em>, 不是完整 serving path——这份文档说清楚 v1 EngineCore protocol 保持哪些不变,
+    UAD 在哪些边界上做覆盖, 以及 state / commit / attention 的语义如何被严格定义。
+  </p>
+  <div class="meta-grid">
+    <div class="meta-cell">
+      <div class="meta-label">Process</div>
+      <div class="meta-value">UAD<span class="meta-unit">EngineCore</span></div>
+    </div>
+    <div class="meta-cell">
+      <div class="meta-label">Phases</div>
+      <div class="meta-value">4<span class="meta-unit">AR · DiT · artifact</span></div>
+    </div>
+    <div class="meta-cell">
+      <div class="meta-label">Attention</div>
+      <div class="meta-value">causal +<span class="meta-unit">DiT chunk bidi</span></div>
+    </div>
+    <div class="meta-cell">
+      <div class="meta-label">Status</div>
+      <div class="meta-value">scaffold<span class="meta-unit">11 tests passed</span></div>
+    </div>
+  </div>
+
+  <div class="legend" style="margin-top: 32px;">
+    <span class="legend-item"><span class="legend-swatch" style="background: var(--c-ar);"></span>AR / text</span>
+    <span class="legend-item"><span class="legend-swatch" style="background: var(--c-dit);"></span>DiT / latent</span>
+    <span class="legend-item"><span class="legend-swatch" style="background: var(--c-artifact);"></span>artifact / materialized</span>
+    <span class="legend-item"><span class="legend-swatch" style="background: var(--c-share);"></span>shared / commit</span>
+    <span class="legend-item"><span class="legend-swatch" style="background: var(--accent);"></span>UAD glue</span>
+    <span class="legend-item"><span class="legend-swatch" style="background: var(--c-warn);"></span>TODO / unsupported</span>
+  </div>
+</header>
+
+
+<!-- ====================== §01 INTEGRATION ====================== -->
+<section id="integration">
+  <div class="section-header">
+    <div class="deco-num">01</div>
+    <div class="section-num">§ 01 · 接入</div>
+    <h2 class="section-title">从 CLI 到 <em>UADEngineCore</em></h2>
+    <p class="section-desc">
+      入口由 vLLM-Omni serve CLI 触发, 通过环境变量与 stage-startup 决定 EngineCore 类型,
+      最终让 stage process 用 UAD 版本替代标准 v1 EngineCore。
+    </p>
+  </div>
+
+  <div class="diagram-frame">
+    <div class="diagram-label">CLI → process → engine core</div>
+    <svg viewBox="0 0 920 240" xmlns="http://www.w3.org/2000/svg" style="font-family:'JetBrains Mono',monospace;">
+      <defs>
+        <marker id="arr1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97757"/>
+        </marker>
+      </defs>
+
+      <g transform="translate(20, 80)">
+        <rect x="0" y="0" width="180" height="80" fill="#1a1814" stroke="#d97757" stroke-width="1.5"/>
+        <text x="90" y="22" fill="#d97757" font-size="11" text-anchor="middle" font-weight="600">CLI</text>
+        <text x="90" y="42" fill="#e8e3d8" font-size="11" text-anchor="middle" font-family="JetBrains Mono">vllm-omni serve</text>
+        <text x="90" y="58" fill="#e8e3d8" font-size="11" text-anchor="middle" font-family="JetBrains Mono">--uad-engine</text>
+        <text x="90" y="74" fill="#8a857a" font-size="9.5" text-anchor="middle">entrypoints/cli/serve.py</text>
+      </g>
+
+      <line x1="205" y1="120" x2="245" y2="120" stroke="#d97757" stroke-width="1" marker-end="url(#arr1)"/>
+
+      <g transform="translate(250, 80)">
+        <rect x="0" y="0" width="200" height="80" fill="#14130f" stroke="#d4b75e"/>
+        <text x="100" y="22" fill="#d4b75e" font-size="11" text-anchor="middle" font-weight="600">ENV switch</text>
+        <text x="100" y="42" fill="#e8e3d8" font-size="11" text-anchor="middle" font-family="JetBrains Mono">VLLM_OMNI_USE_UAD</text>
+        <text x="100" y="56" fill="#e8e3d8" font-size="11" text-anchor="middle" font-family="JetBrains Mono">_ENGINE = 1</text>
+        <text x="100" y="74" fill="#8a857a" font-size="9.5" text-anchor="middle">stage_engine_startup.py</text>
+      </g>
+
+      <line x1="455" y1="120" x2="495" y2="120" stroke="#d97757" stroke-width="1" marker-end="url(#arr1)"/>
+
+      <g transform="translate(500, 80)">
+        <rect x="0" y="0" width="200" height="80" fill="#14130f" stroke="#c98e6f"/>
+        <text x="100" y="22" fill="#c98e6f" font-size="11" text-anchor="middle" font-weight="600">Stage Process</text>
+        <text x="100" y="42" fill="#e8e3d8" font-size="11" text-anchor="middle" font-family="JetBrains Mono">StageEngineCoreProc</text>
+        <text x="100" y="58" fill="#e8e3d8" font-size="11" text-anchor="middle" font-family="JetBrains Mono">.run_stage_core()</text>
+        <text x="100" y="74" fill="#8a857a" font-size="9.5" text-anchor="middle">resolves engine class</text>
+      </g>
+
+      <line x1="705" y1="120" x2="745" y2="120" stroke="#d97757" stroke-width="1" marker-end="url(#arr1)"/>
+
+      <g transform="translate(750, 80)">
+        <rect x="0" y="0" width="150" height="80" fill="#1a1814" stroke="#d97757" stroke-width="2"/>
+        <text x="75" y="24" fill="#d97757" font-size="12" text-anchor="middle" font-weight="600" font-family="Fraunces">UADEngineCore</text>
+        <text x="75" y="44" fill="#e8e3d8" font-size="10" text-anchor="middle">extends</text>
+        <text x="75" y="58" fill="#e8e3d8" font-size="10" text-anchor="middle" font-family="JetBrains Mono">StageEngineCoreProc</text>
+        <text x="75" y="74" fill="#8a857a" font-size="9.5" text-anchor="middle">uad_vllm/engine_core.py</text>
+      </g>
+
+      <!-- Bottom note -->
+      <g transform="translate(20, 200)">
+        <text x="0" y="0" fill="#8a857a" font-size="10.5" letter-spacing="0.1em">
+          INPUTS 仍是 <tspan fill="#d4b75e">EngineCoreRequest</tspan>, OUTPUTS 仍是 <tspan fill="#d4b75e">EngineCoreOutputs</tspan> —— v1 protocol 保持不变
+        </text>
+      </g>
+    </svg>
+    <div class="diagram-caption">
+      <strong>关键决定</strong>: 不在 worker / model_runner 层做切换, 而是直接替换 EngineCore 类。
+      这样 step 调度循环、scheduler/executor 组合、output 处理全部在一个对象内被覆盖,
+      上层 multiprocessing 和 lifecycle 路径完全沿用 v1。
+    </div>
+  </div>
+
+  <pre class="codeblock"><span class="comment"># 启动链</span>
+vllm-omni serve --uad-engine
+  <span class="warn-c">→</span> os.environ[<span class="str">"VLLM_OMNI_USE_UAD_ENGINE"</span>] = <span class="str">"1"</span>
+  <span class="warn-c">→</span> StageEngineCoreProc.run_stage_core()
+  <span class="warn-c">→</span> <span class="key">if</span> uad_engine_enabled(): engine_cls = <span class="ar-c">UADEngineCore</span>
+  <span class="warn-c">→</span> UADEngineCore(StageEngineCoreProc)  <span class="comment"># 替换标准 v1 EngineCore</span></pre>
+</section>
+
+
+<!-- ====================== §02 OBJECT BOUNDARIES ====================== -->
+<section id="objects">
+  <div class="section-header">
+    <div class="deco-num">02</div>
+    <div class="section-num">§ 02 · 对象边界</div>
+    <h2 class="section-title">两条平行路径在 <em>一个</em> 进程里</h2>
+    <p class="section-desc">
+      <code>UADEngineCore</code> 同时持有 v1 原生 scheduler / executor (给 EngineCoreProc lifecycle 用)
+      和 UAD-native scheduler / executor / runner (UAD step path 用)——这是一个 narrow facade, 不是 wrapper。
+    </p>
+  </div>
+
+  <div class="diagram-frame">
+    <div class="diagram-label">UADEngineCore 内部对象表</div>
+    <svg viewBox="0 0 920 360" xmlns="http://www.w3.org/2000/svg" style="font-family:'JetBrains Mono',monospace;">
+      <defs>
+        <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#5a564d"/>
+        </marker>
+      </defs>
+
+      <!-- UADEngineCore container -->
+      <rect x="40" y="20" width="840" height="320" fill="#0e0d0a" stroke="#d97757" stroke-width="1.5" stroke-dasharray="6,4"/>
+      <text x="60" y="44" fill="#d97757" font-size="12" font-weight="600" font-family="Fraunces">UADEngineCore (= StageEngineCoreProc)</text>
+
+      <!-- Left: v1 lifecycle path -->
+      <g transform="translate(70, 70)">
+        <text x="0" y="-4" fill="#8a857a" font-size="10" letter-spacing="0.15em">V1 LIFECYCLE PATH (preserved)</text>
+        <rect x="0" y="6" width="360" height="240" fill="#14130f" stroke="#6c8fa3"/>
+
+        <g transform="translate(16, 30)">
+          <text x="0" y="0" fill="#6c8fa3" font-size="11" font-weight="600">self.scheduler</text>
+          <text x="0" y="18" fill="#8a857a" font-size="10">原生 v1 scheduler</text>
+          <text x="0" y="32" fill="#8a857a" font-size="10">— EngineCoreProc 调用</text>
+        </g>
+
+        <line x1="16" y1="86" x2="328" y2="86" stroke="#2a2722" stroke-dasharray="2,3"/>
+
+        <g transform="translate(16, 100)">
+          <text x="0" y="0" fill="#6c8fa3" font-size="11" font-weight="600">self.model_executor</text>
+          <text x="0" y="18" fill="#8a857a" font-size="10">原生 v1 executor</text>
+          <text x="0" y="32" fill="#8a857a" font-size="10">— lifecycle / shutdown</text>
+        </g>
+
+        <line x1="16" y1="156" x2="328" y2="156" stroke="#2a2722" stroke-dasharray="2,3"/>
+
+        <g transform="translate(16, 170)">
+          <text x="0" y="0" fill="#6c8fa3" font-size="11" font-weight="600">add_request / abort / ...</text>
+          <text x="0" y="18" fill="#8a857a" font-size="10">这些 lifecycle 接口</text>
+          <text x="0" y="32" fill="#8a857a" font-size="10">完全由 v1 路径处理</text>
+        </g>
+      </g>
+
+      <!-- Right: UAD step path -->
+      <g transform="translate(490, 70)">
+        <text x="0" y="-4" fill="#d97757" font-size="10" letter-spacing="0.15em">UAD STEP PATH (override)</text>
+        <rect x="0" y="6" width="360" height="240" fill="#14130f" stroke="#d97757"/>
+
+        <g transform="translate(16, 30)">
+          <text x="0" y="0" fill="#d97757" font-size="11" font-weight="600">self.uad_scheduler</text>
+          <text x="0" y="18" fill="#8a857a" font-size="10">UAD-native scaffold</text>
+          <text x="0" y="32" fill="#8a857a" font-size="10">— 自有 request state 表</text>
+        </g>
+
+        <line x1="16" y1="86" x2="328" y2="86" stroke="#2a2722" stroke-dasharray="2,3"/>
+
+        <g transform="translate(16, 100)">
+          <text x="0" y="0" fill="#d97757" font-size="11" font-weight="600">self.uad_executor</text>
+          <text x="0" y="18" fill="#8a857a" font-size="10">UAD-native scaffold</text>
+          <text x="0" y="32" fill="#8a857a" font-size="10">— execute / sample</text>
+        </g>
+
+        <line x1="16" y1="156" x2="328" y2="156" stroke="#2a2722" stroke-dasharray="2,3"/>
+
+        <g transform="translate(16, 170)">
+          <text x="0" y="0" fill="#a384b5" font-size="11" font-weight="600">self.uad_runner</text>
+          <text x="0" y="18" fill="#8a857a" font-size="10">output processor boundary</text>
+          <text x="0" y="32" fill="#8a857a" font-size="10">— PhaseOutput → state</text>
+        </g>
+      </g>
+
+      <!-- step() arrow connecting both -->
+      <g transform="translate(430, 290)">
+        <rect x="0" y="0" width="120" height="32" fill="#0e0d0a" stroke="#d97757" stroke-width="1.5"/>
+        <text x="60" y="20" fill="#d97757" font-size="11" text-anchor="middle" font-weight="600" font-family="Fraunces">step()</text>
+      </g>
+      <line x1="430" y1="306" x2="345" y2="306" stroke="#5a564d" stroke-dasharray="2,3"/>
+      <line x1="550" y1="306" x2="635" y2="306" stroke="#d97757" stroke-width="1.2"/>
+      <text x="190" y="324" fill="#5a564d" font-size="9.5" text-anchor="middle">EngineCoreProc lifecycle calls v1 side</text>
+      <text x="700" y="324" fill="#5a564d" font-size="9.5" text-anchor="middle">UAD step() drives UAD side</text>
+    </svg>
+    <div class="diagram-caption">
+      <strong>UAD 不持有 base_scheduler / base_executor</strong>—— 这是从 a55947aa 到 61934ecd 的一个明确清理:
+      早期版本曾让 UAD facade 同时持有并 delegate base 实例, 后来简化为 UAD-native scaffold,
+      v1 实例继续由 <code>EngineCoreProc.scheduler</code> / <code>self.model_executor</code> 拥有, 互不混淆。
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>对象</th><th>角色</th><th>所有者</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="k">self.scheduler</td><td>原生 v1 scheduler — 保留给 EngineCoreProc lifecycle 路径</td><td class="ar">v1</td></tr>
+      <tr><td class="k">self.model_executor</td><td>原生 v1 executor — 保留给 EngineCoreProc lifecycle 路径</td><td class="ar">v1</td></tr>
+      <tr><td class="k">self.uad_scheduler</td><td>UAD step path 的 scheduler scaffold</td><td>UAD</td></tr>
+      <tr><td class="k">self.uad_executor</td><td>UAD step path 的 executor scaffold</td><td>UAD</td></tr>
+      <tr><td class="k">self.uad_runner</td><td>UAD output processor boundary</td><td class="art">UAD</td></tr>
+    </tbody>
+  </table>
+</section>
+
+
+<!-- ====================== §03 CLASSES ====================== -->
+<section id="classes">
+  <div class="section-header">
+    <div class="deco-num">03</div>
+    <div class="section-num">§ 03 · 类关系</div>
+    <h2 class="section-title">继承用于<em>接口可读性</em>, 不用于复用</h2>
+    <p class="section-desc">
+      UAD 类继承 v1 interface / base class, 只用于接口可读性和 abstract method 检查;
+      UAD 不再持有 <code>base_scheduler</code> 或 <code>base_executor</code>。
+    </p>
+  </div>
+
+  <div class="diagram-frame">
+    <div class="diagram-label">UAD class hierarchy</div>
+    <svg viewBox="0 0 920 380" xmlns="http://www.w3.org/2000/svg" style="font-family:'JetBrains Mono',monospace;">
+      <defs>
+        <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#8a857a"/>
+        </marker>
+      </defs>
+
+      <!-- v1 base classes row -->
+      <text x="20" y="28" fill="#8a857a" font-size="11" letter-spacing="2">V1 PROTOCOL (parent)</text>
+      <g transform="translate(40, 50)">
+        <rect x="0" y="0" width="160" height="40" fill="#0e0d0a" stroke="#6c8fa3"/>
+        <text x="80" y="18" fill="#6c8fa3" font-size="11" text-anchor="middle" font-weight="600">StageEngineCoreProc</text>
+        <text x="80" y="32" fill="#5a564d" font-size="9" text-anchor="middle">(vllm-omni stage proc)</text>
+      </g>
+      <g transform="translate(220, 50)">
+        <rect x="0" y="0" width="140" height="40" fill="#0e0d0a" stroke="#6c8fa3"/>
+        <text x="70" y="18" fill="#6c8fa3" font-size="11" text-anchor="middle" font-weight="600">SchedulerInterface</text>
+        <text x="70" y="32" fill="#5a564d" font-size="9" text-anchor="middle">(v1 abstract)</text>
+      </g>
+      <g transform="translate(380, 50)">
+        <rect x="0" y="0" width="140" height="40" fill="#0e0d0a" stroke="#6c8fa3"/>
+        <text x="70" y="18" fill="#6c8fa3" font-size="11" text-anchor="middle" font-weight="600">SchedulerOutput</text>
+        <text x="70" y="32" fill="#5a564d" font-size="9" text-anchor="middle">(v1 dataclass)</text>
+      </g>
+      <g transform="translate(540, 50)">
+        <rect x="0" y="0" width="100" height="40" fill="#0e0d0a" stroke="#6c8fa3"/>
+        <text x="50" y="18" fill="#6c8fa3" font-size="11" text-anchor="middle" font-weight="600">Executor</text>
+        <text x="50" y="32" fill="#5a564d" font-size="9" text-anchor="middle">(v1 abstract)</text>
+      </g>
+      <g transform="translate(660, 50)">
+        <rect x="0" y="0" width="140" height="40" fill="#0e0d0a" stroke="#6c8fa3"/>
+        <text x="70" y="18" fill="#6c8fa3" font-size="11" text-anchor="middle" font-weight="600">ModelRunnerOutput</text>
+        <text x="70" y="32" fill="#5a564d" font-size="9" text-anchor="middle">(v1 dataclass)</text>
+      </g>
+
+      <!-- Inheritance arrows -->
+      <line x1="120" y1="120" x2="120" y2="98" stroke="#8a857a" stroke-width="0.8" marker-end="url(#arr3)"/>
+      <line x1="290" y1="120" x2="290" y2="98" stroke="#8a857a" stroke-width="0.8" marker-end="url(#arr3)"/>
+      <line x1="450" y1="120" x2="450" y2="98" stroke="#8a857a" stroke-width="0.8" marker-end="url(#arr3)"/>
+      <line x1="590" y1="120" x2="590" y2="98" stroke="#8a857a" stroke-width="0.8" marker-end="url(#arr3)"/>
+      <line x1="730" y1="120" x2="730" y2="98" stroke="#8a857a" stroke-width="0.8" marker-end="url(#arr3)"/>
+
+      <!-- UAD subclasses -->
+      <text x="20" y="148" fill="#d97757" font-size="11" letter-spacing="2">UAD FACADES (child)</text>
+      <g transform="translate(40, 168)">
+        <rect x="0" y="0" width="160" height="50" fill="#1a1814" stroke="#d97757" stroke-width="1.5"/>
+        <text x="80" y="20" fill="#d97757" font-size="12" text-anchor="middle" font-weight="600" font-family="Fraunces">UADEngineCore</text>
+        <text x="80" y="36" fill="#8a857a" font-size="9.5" text-anchor="middle">override step() only</text>
+      </g>
+      <g transform="translate(220, 168)">
+        <rect x="0" y="0" width="140" height="50" fill="#1a1814" stroke="#d97757" stroke-width="1.5"/>
+        <text x="70" y="20" fill="#d97757" font-size="12" text-anchor="middle" font-weight="600" font-family="Fraunces">UADScheduler</text>
+        <text x="70" y="36" fill="#8a857a" font-size="9.5" text-anchor="middle">native scaffold</text>
+      </g>
+      <g transform="translate(380, 168)">
+        <rect x="0" y="0" width="140" height="50" fill="#1a1814" stroke="#d97757" stroke-width="1.5"/>
+        <text x="70" y="20" fill="#d97757" font-size="12" text-anchor="middle" font-weight="600" font-family="Fraunces">UADSchedulerOutput</text>
+        <text x="70" y="36" fill="#8a857a" font-size="9.5" text-anchor="middle">+ uad_items</text>
+      </g>
+      <g transform="translate(540, 168)">
+        <rect x="0" y="0" width="100" height="50" fill="#1a1814" stroke="#d97757" stroke-width="1.5"/>
+        <text x="50" y="20" fill="#d97757" font-size="12" text-anchor="middle" font-weight="600" font-family="Fraunces">UADExecutor</text>
+        <text x="50" y="36" fill="#8a857a" font-size="9.5" text-anchor="middle">native scaffold</text>
+      </g>
+      <g transform="translate(660, 168)">
+        <rect x="0" y="0" width="140" height="50" fill="#1a1814" stroke="#d97757" stroke-width="1.5"/>
+        <text x="70" y="20" fill="#d97757" font-size="12" text-anchor="middle" font-weight="600" font-family="Fraunces">UADModelRunnerOutput</text>
+        <text x="70" y="36" fill="#8a857a" font-size="9.5" text-anchor="middle">+ phase_outputs</text>
+      </g>
+
+      <!-- WorkerBase + UADGPUWorker -->
+      <g transform="translate(380, 250)">
+        <rect x="0" y="0" width="140" height="40" fill="#0e0d0a" stroke="#6c8fa3"/>
+        <text x="70" y="18" fill="#6c8fa3" font-size="11" text-anchor="middle" font-weight="600">WorkerBase</text>
+        <text x="70" y="32" fill="#5a564d" font-size="9" text-anchor="middle">(v1 abstract)</text>
+      </g>
+      <line x1="450" y1="320" x2="450" y2="298" stroke="#8a857a" stroke-width="0.8" marker-end="url(#arr3)"/>
+      <g transform="translate(380, 320)">
+        <rect x="0" y="0" width="140" height="46" fill="#1a1814" stroke="#d97757" stroke-width="1.5"/>
+        <text x="70" y="20" fill="#d97757" font-size="12" text-anchor="middle" font-weight="600" font-family="Fraunces">UADGPUWorker</text>
+        <text x="70" y="34" fill="#8a857a" font-size="9.5" text-anchor="middle">future placeholder</text>
+      </g>
+
+      <!-- UAD-internal pure dataclasses -->
+      <g transform="translate(620, 250)">
+        <text x="0" y="-4" fill="#a384b5" font-size="10" letter-spacing="0.15em">UAD-INTERNAL (no v1 parent)</text>
+        <rect x="0" y="6" width="240" height="120" fill="#14130f" stroke="#a384b5"/>
+        <text x="120" y="28" fill="#a384b5" font-size="11" text-anchor="middle" font-weight="600">UADRequestState</text>
+        <text x="120" y="46" fill="#a384b5" font-size="11" text-anchor="middle" font-weight="600">UADScheduleItem</text>
+        <text x="120" y="64" fill="#a384b5" font-size="11" text-anchor="middle" font-weight="600">UADPhaseOutput / Update</text>
+        <text x="120" y="84" fill="#8a857a" font-size="9.5" text-anchor="middle">纯 UAD 概念, 无 v1 等价物</text>
+        <text x="120" y="100" fill="#8a857a" font-size="9.5" text-anchor="middle">不继承 v1 dataclass</text>
+      </g>
+    </svg>
+    <div class="diagram-caption">
+      <strong>继承 ≠ 复用</strong>: UAD facade 只用 v1 父类做接口可读性, 实际行为完全 native。
+      <code>UADScheduleItem</code>、<code>UADRequestState</code>、<code>UADPhaseOutput</code> 是纯 UAD 概念,
+      没有 v1 等价物, 因此不挂任何父类。
+    </div>
+  </div>
+</section>
+
+
+<!-- ====================== §04 STEP FLOW ====================== -->
+<section id="step">
+  <div class="section-header">
+    <div class="deco-num">04</div>
+    <div class="section-num">§ 04 · STEP FLOW</div>
+    <h2 class="section-title">一次 <em>step()</em> 的七步</h2>
+    <p class="section-desc">
+      <code>UADEngineCore.step()</code> 替换 v1 的 step orchestration——schedule → execute → grammar → sample → process → update,
+      按顺序覆盖 AR、DiT、artifact 三类 work, 保留 sample tokens 作为 AR 专属的 optional 步骤。
+    </p>
+  </div>
+
+  <div class="diagram-frame">
+    <div class="diagram-label">UADEngineCore.step() orchestration</div>
+    <svg viewBox="0 0 920 480" xmlns="http://www.w3.org/2000/svg" style="font-family:'JetBrains Mono',monospace;">
+      <defs>
+        <marker id="arr4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97757"/>
+        </marker>
+      </defs>
+
+      <!-- step boxes -->
+      <g transform="translate(40, 30)">
+        <rect x="0" y="0" width="840" height="48" fill="#1a1814" stroke="#d97757"/>
+        <text x="20" y="20" fill="#d97757" font-size="11" font-weight="600">1.</text>
+        <text x="40" y="20" fill="#e8e3d8" font-size="12" font-family="JetBrains Mono">uad_scheduler.has_requests()</text>
+        <text x="40" y="36" fill="#8a857a" font-size="10">→ 是否有任意 UAD request 处于可调度 phase (scaffold: returns False)</text>
+      </g>
+
+      <line x1="460" y1="80" x2="460" y2="100" stroke="#d97757" stroke-width="1" marker-end="url(#arr4)"/>
+
+      <g transform="translate(40, 102)">
+        <rect x="0" y="0" width="840" height="48" fill="#1a1814" stroke="#d97757"/>
+        <text x="20" y="20" fill="#d97757" font-size="11" font-weight="600">2.</text>
+        <text x="40" y="20" fill="#e8e3d8" font-size="12" font-family="JetBrains Mono">uad_scheduler.schedule()  →  UADSchedulerOutput</text>
+        <text x="40" y="36" fill="#8a857a" font-size="10">→ 产出 AR field + uad_items (DiT / artifact) (scaffold: returns empty)</text>
+      </g>
+
+      <line x1="460" y1="152" x2="460" y2="172" stroke="#d97757" stroke-width="1" marker-end="url(#arr4)"/>
+
+      <g transform="translate(40, 174)">
+        <rect x="0" y="0" width="840" height="48" fill="#1a1814" stroke="#7a9966"/>
+        <text x="20" y="20" fill="#7a9966" font-size="11" font-weight="600">3.</text>
+        <text x="40" y="20" fill="#e8e3d8" font-size="12" font-family="JetBrains Mono">uad_executor.execute_model()</text>
+        <text x="40" y="36" fill="#8a857a" font-size="10">→ 跑 forward (AR hidden + DiT denoise 合批) (scaffold: no-op future / None)</text>
+      </g>
+
+      <line x1="460" y1="224" x2="460" y2="244" stroke="#d97757" stroke-width="1" marker-end="url(#arr4)"/>
+
+      <g transform="translate(40, 246)">
+        <rect x="0" y="0" width="840" height="48" fill="#1a1814" stroke="#6c8fa3"/>
+        <text x="20" y="20" fill="#6c8fa3" font-size="11" font-weight="600">4.</text>
+        <text x="40" y="20" fill="#e8e3d8" font-size="12" font-family="JetBrains Mono">uad_scheduler.get_grammar_bitmask()</text>
+        <text x="40" y="36" fill="#8a857a" font-size="10">→ AR sampler 需要的 structured-output mask</text>
+      </g>
+
+      <line x1="460" y1="296" x2="460" y2="316" stroke="#d97757" stroke-width="1" marker-end="url(#arr4)"/>
+
+      <g transform="translate(40, 318)">
+        <rect x="0" y="0" width="840" height="48" fill="#1a1814" stroke="#6c8fa3" stroke-dasharray="4,3"/>
+        <text x="20" y="20" fill="#6c8fa3" font-size="11" font-weight="600">5.</text>
+        <text x="40" y="20" fill="#e8e3d8" font-size="12" font-family="JetBrains Mono">uad_executor.sample_tokens()      <tspan fill="#8a857a">if AR sampling is needed</tspan></text>
+        <text x="40" y="36" fill="#8a857a" font-size="10">→ 仅 AR 路径有此步骤 (scaffold: returns empty UADModelRunnerOutput)</text>
+      </g>
+
+      <line x1="460" y1="368" x2="460" y2="388" stroke="#d97757" stroke-width="1" marker-end="url(#arr4)"/>
+
+      <g transform="translate(40, 390)">
+        <rect x="0" y="0" width="840" height="48" fill="#1a1814" stroke="#a384b5"/>
+        <text x="20" y="20" fill="#a384b5" font-size="11" font-weight="600">6.</text>
+        <text x="40" y="20" fill="#e8e3d8" font-size="12" font-family="JetBrains Mono">uad_runner.process_outputs()</text>
+        <text x="40" y="36" fill="#8a857a" font-size="10">→ 把 raw runner output 映射为 list[UADPhaseOutput]</text>
+      </g>
+
+      <line x1="460" y1="440" x2="460" y2="460" stroke="#d97757" stroke-width="1" marker-end="url(#arr4)"/>
+
+      <g transform="translate(40, 462)">
+        <rect x="0" y="0" width="840" height="36" fill="#1a1814" stroke="#d4b75e"/>
+        <text x="20" y="14" fill="#d4b75e" font-size="11" font-weight="600">7.</text>
+        <text x="40" y="14" fill="#e8e3d8" font-size="12" font-family="JetBrains Mono">uad_scheduler.update_from_output()</text>
+        <text x="40" y="30" fill="#8a857a" font-size="10">→ 应用 phase_outputs, 推进 state machine, commit KV / engine tokens</text>
+      </g>
+    </svg>
+    <div class="diagram-caption">
+      <strong>当前 scaffold 行为</strong>:
+      <code>has_requests()</code> 返回 <code>False</code>; <code>schedule()</code> 返回 empty <code>UADSchedulerOutput</code>;
+      <code>execute_model()</code> 返回 no-op future / <code>None</code>; <code>sample_tokens()</code> 返回 empty <code>UADModelRunnerOutput</code>。
+      整条链已经被 wired up, 但单元 step 实现是后续 commit 的 TODO。
+    </div>
+  </div>
+</section>
+
+
+<!-- ====================== §05 SCHEDULER OUTPUT ====================== -->
+<section id="schedout">
+  <div class="section-header">
+    <div class="deco-num">05</div>
+    <div class="section-num">§ 05 · SCHEDULER OUTPUT</div>
+    <h2 class="section-title">v1 字段 + <em>uad_items</em></h2>
+    <p class="section-desc">
+      <code>UADSchedulerOutput</code> 是对 v1 <code>SchedulerOutput</code> 的 additive 扩展: AR 字段语义不变, 新增轻量
+      <code>uad_items</code> metadata 列表用于 DiT / artifact work。
+    </p>
+  </div>
+
+  <pre class="codeblock"><span class="key">@dataclass</span>
+<span class="key">class</span> <span class="dit-c">UADSchedulerOutput</span>(<span class="ar-c">SchedulerOutput</span>):
+    uad_items: <span class="var">list</span>[<span class="dit-c">UADScheduleItem</span>]</pre>
+
+  <div class="compare">
+    <div class="compare-side">
+      <span class="compare-tag tag-v1">v1 inherited 字段</span>
+      <h4>AR work — 复用原语义</h4>
+      <p style="margin-top: 12px; font-size:13.5px;">
+        <code>num_scheduled_tokens</code>, <code>num_common_prefix_blocks</code>,
+        <code>scheduled_new_reqs</code>, <code>scheduled_cached_reqs</code>, ...
+      </p>
+      <p style="margin-top: 12px; font-size:13px; color: var(--fg-mute);">
+        AR prefill / decode 完全沿用 v1 chunked-prefill / decode 语义。
+        不引入新的 phase budget。
+      </p>
+    </div>
+    <div class="compare-side">
+      <span class="compare-tag tag-uad">UAD 新增字段</span>
+      <h4>uad_items — DiT / artifact</h4>
+      <p style="margin-top: 12px; font-size:13.5px;">
+        每个 <code>UADScheduleItem</code> 描述<strong>一个</strong> DiT step
+        或一次 artifact decode, 仅放轻量 metadata。
+      </p>
+      <p style="margin-top: 12px; font-size:13px; color: var(--c-warn);">
+        ✗ 不放大 tensor<br/>
+        ✗ 不放 CUDA tensor<br/>
+        ✓ 仅 request_id / phase / shape bucket / step index
+      </p>
+    </div>
+  </div>
+
+  <p>约束: <strong>同一个 <code>UADSchedulerOutput</code> 可以同时包含 AR work 和 DiT/artifact items</strong>——
+  这是 unified engine 的关键, executor 应在兼容层做合批。</p>
+</section>
+
+
+<!-- ====================== §06 WORK ITEM ====================== -->
+<section id="item">
+  <div class="section-header">
+    <div class="deco-num">06</div>
+    <div class="section-num">§ 06 · WORK ITEM</div>
+    <h2 class="section-title">每个 DiT step 是一个 <em>UADScheduleItem</em></h2>
+    <p class="section-desc">
+      <code>UADScheduleItem</code> 是 frozen dataclass, schedule 时一次性写入,
+      携带 attention 与 commit 行为所需的全部 metadata。
+    </p>
+  </div>
+
+  <pre class="codeblock"><span class="key">@dataclass</span>(frozen=True)
+<span class="key">class</span> <span class="dit-c">UADScheduleItem</span>:
+    request_id: <span class="var">str</span>
+    phase: <span class="dit-c">UADPhase</span>
+    num_scheduled_tokens: <span class="var">int</span>
+    input_kind: <span class="var">Literal</span>[<span class="str">"ar_tokens"</span>, <span class="str">"dit_latent_step"</span>, <span class="str">"artifact_decode"</span>]
+    output_kind: <span class="var">Literal</span>[<span class="str">"sample_tokens"</span>, <span class="str">"denoise_pred"</span>, <span class="str">"artifact"</span>, <span class="str">"none"</span>]
+    needs_kv_slots: <span class="var">bool</span> = <span class="key">False</span>
+    num_persistent_tokens: <span class="var">int</span> = <span class="num">0</span>
+    step_index: <span class="var">int</span> | <span class="key">None</span> = <span class="key">None</span>
+    total_steps: <span class="var">int</span> | <span class="key">None</span> = <span class="key">None</span>
+    shape_bucket: <span class="var">tuple</span>[<span class="var">int</span>, <span class="num">...</span>] | <span class="key">None</span> = <span class="key">None</span></pre>
+
+  <table>
+    <thead>
+      <tr><th>字段</th><th>写入时机</th><th>含义</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="k">num_scheduled_tokens</td><td>schedule</td><td>本 tick 的 token-like compute budget</td></tr>
+      <tr><td class="k">num_persistent_tokens</td><td>schedule</td><td>本 item 成功后预计 commit 到 reusable engine context / KV 的 token 数</td></tr>
+      <tr><td class="k">needs_kv_slots</td><td>schedule</td><td>executor 是否需要物理 KV slot / slot mapping</td></tr>
+      <tr><td class="k">step_index / total_steps</td><td>schedule</td><td>DiT step batching metadata</td></tr>
+      <tr><td class="k">shape_bucket</td><td>schedule</td><td>DiT shape batching metadata</td></tr>
+    </tbody>
+  </table>
+
+  <div class="diagram-frame">
+    <div class="diagram-label">DiT step 的 token 语义</div>
+    <svg viewBox="0 0 920 220" xmlns="http://www.w3.org/2000/svg" style="font-family:'JetBrains Mono',monospace;">
+      <!-- Non-final DiT step -->
+      <g transform="translate(20, 30)">
+        <text x="0" y="-4" fill="#7a9966" font-size="10" letter-spacing="0.15em">DIT NON-FINAL STEP</text>
+        <rect x="0" y="6" width="420" height="160" fill="#14130f" stroke="#7a9966"/>
+        <text x="20" y="36" fill="#e8e3d8" font-size="12" font-family="JetBrains Mono">num_scheduled_tokens</text>
+        <text x="380" y="36" fill="#7a9966" font-size="12" text-anchor="end" font-family="JetBrains Mono">&gt; 0</text>
+        <text x="20" y="58" fill="#e8e3d8" font-size="12" font-family="JetBrains Mono">num_persistent_tokens</text>
+        <text x="380" y="58" fill="#c87060" font-size="12" text-anchor="end" font-family="JetBrains Mono">= 0</text>
+        <text x="20" y="80" fill="#e8e3d8" font-size="12" font-family="JetBrains Mono">num_new_computed_tokens</text>
+        <text x="380" y="80" fill="#c87060" font-size="12" text-anchor="end" font-family="JetBrains Mono">= 0</text>
+        <line x1="20" y1="96" x2="400" y2="96" stroke="#2a2722" stroke-dasharray="2,3"/>
+        <text x="20" y="118" fill="#8a857a" font-size="10.5">forward 跑了, 但不推进 reusable</text>
+        <text x="20" y="134" fill="#8a857a" font-size="10.5">context / KV—— denoise 中间态</text>
+        <text x="20" y="150" fill="#8a857a" font-size="10.5">归 runtime_state 管理</text>
+      </g>
+
+      <!-- Final DiT step -->
+      <g transform="translate(480, 30)">
+        <text x="0" y="-4" fill="#d4b75e" font-size="10" letter-spacing="0.15em">DIT FINAL STEP (commit)</text>
+        <rect x="0" y="6" width="420" height="160" fill="#14130f" stroke="#d4b75e"/>
+        <text x="20" y="36" fill="#e8e3d8" font-size="12" font-family="JetBrains Mono">num_scheduled_tokens</text>
+        <text x="380" y="36" fill="#7a9966" font-size="12" text-anchor="end" font-family="JetBrains Mono">image query tokens</text>
+        <text x="20" y="58" fill="#e8e3d8" font-size="12" font-family="JetBrains Mono">num_persistent_tokens</text>
+        <text x="380" y="58" fill="#d4b75e" font-size="12" text-anchor="end" font-family="JetBrains Mono">image context tokens</text>
+        <text x="20" y="80" fill="#e8e3d8" font-size="12" font-family="JetBrains Mono">num_new_computed_tokens</text>
+        <text x="380" y="80" fill="#d4b75e" font-size="12" text-anchor="end" font-family="JetBrains Mono">= num_persistent</text>
+        <line x1="20" y1="96" x2="400" y2="96" stroke="#2a2722" stroke-dasharray="2,3"/>
+        <text x="20" y="118" fill="#8a857a" font-size="10.5">commit image context tokens / KV</text>
+        <text x="20" y="134" fill="#8a857a" font-size="10.5">追加到 engine_tokens, 后续 AR / DiT</text>
+        <text x="20" y="150" fill="#8a857a" font-size="10.5">可见——原生支持 multiturn</text>
+      </g>
+    </svg>
+    <div class="diagram-caption">
+      DiT non-final step 通常 <code>num_scheduled_tokens &gt; 0</code>、<code>num_persistent_tokens = 0</code>。
+      DiT final image-context commit 通常 <code>num_persistent_tokens = image context token count</code>。
+    </div>
+  </div>
+</section>
+
+
+<!-- ====================== §07 REQUEST STATE ====================== -->
+<section id="reqstate">
+  <div class="section-header">
+    <div class="deco-num">07</div>
+    <div class="section-num">§ 07 · REQUEST STATE</div>
+    <h2 class="section-title">每个 request 的 <em>UAD ledger</em></h2>
+    <p class="section-desc">
+      <code>UADRequestState</code> 是 scheduler-owned, 维护 phase 进度、统一 token ledger 和模型私有状态。
+      AR sampler history 不复制——继续由 v1 字段维护。
+    </p>
+  </div>
+
+  <pre class="codeblock"><span class="key">class</span> <span class="dit-c">UADPhase</span>(<span class="var">str</span>, <span class="var">Enum</span>):
+    AR_PREFILL = <span class="str">"ar_prefill"</span>
+    AR_DECODE = <span class="str">"ar_decode"</span>
+    DIT_STEP = <span class="str">"dit_step"</span>
+    ARTIFACT_DECODE = <span class="str">"artifact_decode"</span>
+
+<span class="key">@dataclass</span>
+<span class="key">class</span> <span class="dit-c">UADRequestState</span>:
+    request_id: <span class="var">str</span>
+    phase: <span class="dit-c">UADPhase</span>
+    engine_tokens: <span class="var">list</span>[<span class="dit-c">UADToken</span>]
+    materialized_tokens: <span class="var">list</span>[<span class="dit-c">UADToken</span>]
+    dit_step_index: <span class="var">int</span>
+    dit_num_steps: <span class="var">int</span>
+    dit_query_tokens: <span class="var">int</span>
+    runtime_state: <span class="var">dict</span>[<span class="var">str</span>, <span class="var">Any</span>]</pre>
+
+  <table>
+    <thead>
+      <tr><th>字段</th><th>含义</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="k">phase</td><td>请求当前阶段 (AR_PREFILL / AR_DECODE / DIT_STEP / ARTIFACT_DECODE)</td></tr>
+      <tr><td class="k">engine_tokens</td><td>后续模型可见的<strong>统一多模态 logical token ledger</strong></td></tr>
+      <tr><td class="k">materialized_tokens</td><td>对外 streaming / artifact output ledger</td></tr>
+      <tr><td class="k">dit_step_index / dit_num_steps</td><td>DiT 进度</td></tr>
+      <tr><td class="k">dit_query_tokens</td><td>本图像 context 的 token-like 数量</td></tr>
+      <tr><td class="k">runtime_state</td><td>模型私有状态: image size、seed、CFG、latent shape</td></tr>
+    </tbody>
+  </table>
+
+  <div class="pull-quote">
+    UAD 不维护独立 <code style="font-style: normal;">ar_sampler_token_ids</code>。
+    AR sampler history 继续由 v1 request / scheduler / model runner 原生字段维护。
+    <span class="pull-quote-attr">— design_uad.md §6</span>
+  </div>
+</section>
+
+
+<!-- ====================== §08 PHASE OUTPUT ====================== -->
+<section id="phase">
+  <div class="section-header">
+    <div class="deco-num">08</div>
+    <div class="section-num">§ 08 · PHASE OUTPUT</div>
+    <h2 class="section-title">Runner 只返回 <em>delta</em>, 不改 state</h2>
+    <p class="section-desc">
+      Runner output 是只读 delta; scheduler 在 step 7 接收并 apply, 这样 ownership 不混。
+    </p>
+  </div>
+
+  <pre class="codeblock"><span class="key">@dataclass</span>
+<span class="key">class</span> <span class="dit-c">UADPhaseUpdate</span>:
+    new_engine_tokens: <span class="var">list</span>[<span class="dit-c">UADToken</span>]
+    new_materialized_tokens: <span class="var">list</span>[<span class="dit-c">UADToken</span>]
+    num_new_computed_tokens: <span class="var">int</span>
+    next_phase: <span class="dit-c">UADPhase</span> | <span class="key">None</span>
+    runtime_state_delta: <span class="var">dict</span>[<span class="var">str</span>, <span class="var">Any</span>]
+
+<span class="key">@dataclass</span>
+<span class="key">class</span> <span class="dit-c">UADPhaseOutput</span>:
+    request_id: <span class="var">str</span>
+    phase: <span class="dit-c">UADPhase</span>
+    update: <span class="dit-c">UADPhaseUpdate</span>
+    raw_output: <span class="var">Any</span> | <span class="key">None</span> = <span class="key">None</span></pre>
+
+  <table>
+    <thead>
+      <tr><th>字段</th><th>写入时机</th><th>含义</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="k">new_engine_tokens</td><td>runner output</td><td>新增到 UAD logical engine ledger 的 token</td></tr>
+      <tr><td class="k">new_materialized_tokens</td><td>runner output</td><td>新增到对外输出 ledger 的 token / artifact</td></tr>
+      <tr><td class="k">num_new_computed_tokens</td><td>runner output</td><td>实际推进 reusable computed-prefix / KV 语义的 token 数</td></tr>
+      <tr><td class="k">next_phase</td><td>runner output</td><td>phase transition 目标</td></tr>
+      <tr><td class="k">runtime_state_delta</td><td>runner output</td><td>模型私有状态增量</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    <strong>第一版可要求</strong>
+    <code>num_new_computed_tokens == UADScheduleItem.num_persistent_tokens</code>。
+    后续支持 partial commit / preemption 时二者可以不同。
+  </p>
+</section>
+
+
+<!-- ====================== §09 OWNERSHIP ====================== -->
+<section id="ownership">
+  <div class="section-header">
+    <div class="deco-num">09</div>
+    <div class="section-num">§ 09 · 状态所有权</div>
+    <h2 class="section-title">谁<em>拥有</em>哪段状态</h2>
+    <p class="section-desc">
+      整个 UAD 设计的核心矛盾在于: 怎么让 v1 的 sampler / KV / num_computed_tokens 路径继续工作,
+      同时让 UAD 拥有 phase / engine_tokens / materialized 的新概念。下表把 ownership 写清楚。
+    </p>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>状态</th><th>Owner</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="k">Request.prompt_token_ids</td><td class="ar">v1 request</td></tr>
+      <tr><td class="k">v1 generated token ledger</td><td class="ar">v1 scheduler / request</td></tr>
+      <tr><td class="k">Request.num_computed_tokens</td><td class="ar">v1 scheduler / KV path</td></tr>
+      <tr><td class="k">SchedulerOutput.num_scheduled_tokens</td><td class="ar">v1 scheduler</td></tr>
+      <tr><td class="k">ModelRunnerOutput.sampled_token_ids</td><td class="ar">v1 model runner / sampler</td></tr>
+      <tr><td class="k">UADRequestState.phase</td><td style="color: var(--accent);">UAD scheduler / state machine</td></tr>
+      <tr><td class="k">UADRequestState.engine_tokens</td><td style="color: var(--accent);">UAD state</td></tr>
+      <tr><td class="k">UADRequestState.materialized_tokens</td><td class="art">UAD state / output path</td></tr>
+      <tr><td class="k">UADScheduleItem.num_persistent_tokens</td><td style="color: var(--accent);">UAD scheduler</td></tr>
+      <tr><td class="k">UADPhaseUpdate.num_new_computed_tokens</td><td style="color: var(--accent);">UAD update</td></tr>
+    </tbody>
+  </table>
+
+  <div class="pull-quote">
+    <code style="font-style: normal;">num_computed_tokens</code> 只在 token 真正 commit 到后续可复用 engine state / KV 后推进。
+    一次 forward 不必然增加 computed tokens。
+    <span class="pull-quote-attr">— design_uad.md §8</span>
+  </div>
+</section>
+
+
+<!-- ====================== §10 STATE MACHINE ====================== -->
+<section id="fsm">
+  <div class="section-header">
+    <div class="deco-num">10</div>
+    <div class="section-num">§ 10 · STATE MACHINE</div>
+    <h2 class="section-title">Phase 是<em>下一次</em>可调度 work 的类型</h2>
+    <p class="section-desc">
+      UAD request state machine 是 scheduler-owned。phase 只表示下一次可调度 work 的类型, 而不是每个 Python
+      后处理函数都要变成 scheduler-visible phase。
+    </p>
+  </div>
+
+  <div class="diagram-frame">
+    <div class="diagram-label">UAD phase transition graph</div>
+    <svg viewBox="0 0 920 380" xmlns="http://www.w3.org/2000/svg" style="font-family:'JetBrains Mono',monospace;">
+      <defs>
+        <marker id="arr5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97757"/>
+        </marker>
+        <marker id="arr5-loop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6c8fa3"/>
+        </marker>
+      </defs>
+
+      <!-- AR_PREFILL -->
+      <g transform="translate(40, 140)">
+        <rect x="0" y="0" width="140" height="60" fill="#1a1814" stroke="#6c8fa3" stroke-width="1.5" rx="4"/>
+        <text x="70" y="26" fill="#6c8fa3" font-size="13" text-anchor="middle" font-weight="600" font-family="Fraunces">AR_PREFILL</text>
+        <text x="70" y="44" fill="#8a857a" font-size="9.5" text-anchor="middle">prompt prefill</text>
+      </g>
+
+      <!-- AR_DECODE -->
+      <g transform="translate(260, 140)">
+        <rect x="0" y="0" width="140" height="60" fill="#1a1814" stroke="#6c8fa3" stroke-width="1.5" rx="4"/>
+        <text x="70" y="26" fill="#6c8fa3" font-size="13" text-anchor="middle" font-weight="600" font-family="Fraunces">AR_DECODE</text>
+        <text x="70" y="44" fill="#8a857a" font-size="9.5" text-anchor="middle">text token loop</text>
+      </g>
+
+      <!-- DIT_STEP -->
+      <g transform="translate(480, 140)">
+        <rect x="0" y="0" width="140" height="60" fill="#1a1814" stroke="#7a9966" stroke-width="1.5" rx="4"/>
+        <text x="70" y="26" fill="#7a9966" font-size="13" text-anchor="middle" font-weight="600" font-family="Fraunces">DIT_STEP</text>
+        <text x="70" y="44" fill="#8a857a" font-size="9.5" text-anchor="middle">denoise loop</text>
+      </g>
+
+      <!-- ARTIFACT_DECODE -->
+      <g transform="translate(700, 140)">
+        <rect x="0" y="0" width="180" height="60" fill="#1a1814" stroke="#a384b5" stroke-width="1.5" rx="4"/>
+        <text x="90" y="26" fill="#a384b5" font-size="13" text-anchor="middle" font-weight="600" font-family="Fraunces">ARTIFACT_DECODE</text>
+        <text x="90" y="44" fill="#8a857a" font-size="9.5" text-anchor="middle">VAE / output materialize</text>
+      </g>
+
+      <!-- Arrows -->
+      <line x1="180" y1="170" x2="255" y2="170" stroke="#d97757" stroke-width="1.2" marker-end="url(#arr5)"/>
+      <text x="218" y="160" fill="#d97757" font-size="10" text-anchor="middle">prefill done</text>
+
+      <line x1="400" y1="170" x2="475" y2="170" stroke="#d97757" stroke-width="1.2" marker-end="url(#arr5)"/>
+      <text x="437" y="160" fill="#d97757" font-size="10" text-anchor="middle">&lt;img_ratio_*&gt;</text>
+      <text x="437" y="184" fill="#8a857a" font-size="9">写 dit_query_tokens etc.</text>
+
+      <line x1="620" y1="170" x2="695" y2="170" stroke="#d4b75e" stroke-width="1.2" marker-end="url(#arr5)"/>
+      <text x="657" y="160" fill="#d4b75e" font-size="10" text-anchor="middle">final step</text>
+      <text x="657" y="184" fill="#8a857a" font-size="9">commit image context</text>
+
+      <!-- AR_DECODE self loop -->
+      <path d="M 330 140 Q 330 80 380 80 Q 430 80 400 140" stroke="#6c8fa3" stroke-width="1" fill="none" marker-end="url(#arr5-loop)"/>
+      <text x="370" y="74" fill="#6c8fa3" font-size="10" text-anchor="middle">normal text token</text>
+
+      <!-- DIT_STEP self loop -->
+      <path d="M 550 140 Q 550 80 600 80 Q 650 80 620 140" stroke="#7a9966" stroke-width="1" fill="none" marker-end="url(#arr5-loop)"/>
+      <text x="590" y="74" fill="#7a9966" font-size="10" text-anchor="middle">non-final step</text>
+
+      <!-- ARTIFACT_DECODE → finished or AR -->
+      <path d="M 790 200 Q 790 280 600 290 Q 410 300 330 200" stroke="#d97757" stroke-width="1" fill="none" marker-end="url(#arr5)"/>
+      <text x="560" y="318" fill="#d97757" font-size="10" text-anchor="middle">artifact done → next AR (multiturn) or finished</text>
+
+      <!-- Legend -->
+      <g transform="translate(40, 30)">
+        <text x="0" y="0" fill="#8a857a" font-size="10" letter-spacing="0.15em">PHASE = NEXT SCHEDULABLE WORK TYPE</text>
+        <text x="0" y="18" fill="#8a857a" font-size="10.5">每条 arrow 上的 label 是 transition trigger; loop 表示同一 phase 内的多次 schedule。</text>
+      </g>
+    </svg>
+    <div class="diagram-caption">
+      <code>ARTIFACT_DECODE</code> 类似输出 materialization, 不等价于 v1 text sampling。
+      它是否由 scheduler 感知取决于是否占用 GPU / model budget; 纯 CPU / IO 后处理可以从 scheduler 隐藏。
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>当前 phase</th><th>触发</th><th>下一 phase</th><th>关键更新</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="k ar">AR_PREFILL</td><td>prompt prefill 完成</td><td class="k">AR_DECODE</td><td>v1 computed-token / KV 进度更新</td></tr>
+      <tr><td class="k ar">AR_DECODE</td><td>普通 text token</td><td class="k">AR_DECODE</td><td>v1 sampled token ledger 更新; 可产生 materialized text</td></tr>
+      <tr><td class="k ar">AR_DECODE</td><td><code>&lt;img_ratio_*&gt;</code></td><td class="k dit">DIT_STEP</td><td>写入 image size、<code>dit_query_tokens</code>、<code>dit_num_steps</code>、latent / noise seed</td></tr>
+      <tr><td class="k dit">DIT_STEP</td><td>non-final denoise step 完成</td><td class="k">DIT_STEP</td><td><code>dit_step_index += 1</code>; 不推进 computed-token / KV 语义</td></tr>
+      <tr><td class="k dit">DIT_STEP</td><td>final denoise step 完成</td><td class="k art">ARTIFACT_DECODE</td><td>commit image context tokens / KV; 追加 <code>engine_tokens</code></td></tr>
+      <tr><td class="k art">ARTIFACT_DECODE</td><td>artifact 生成完成</td><td class="k">finished 或下一轮 AR</td><td>追加 <code>materialized_tokens</code></td></tr>
+    </tbody>
+  </table>
+</section>
+
+
+<!-- ====================== §11 SCHEDULER ====================== -->
+<section id="sched">
+  <div class="section-header">
+    <div class="deco-num">11</div>
+    <div class="section-num">§ 11 · SCHEDULER 语义</div>
+    <h2 class="section-title">统一在 <em>token-like</em> budget 之下</h2>
+    <p class="section-desc">
+      UAD scheduler 仍按 token-like budget 工作, 不引入独立的 phase budget——这样 AR 和 DiT 能在同一个调度循环里
+      被一致比较。
+    </p>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Work</th><th>表示方式</th><th>调度粒度</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><span class="pill pill-ar">AR</span> prefill / decode</td><td>inherited <code>SchedulerOutput</code> 字段</td><td>复用 v1 chunked prefill / decode 语义</td></tr>
+      <tr><td><span class="pill pill-dit">DiT</span> step</td><td><code>UADScheduleItem</code></td><td>一个 denoise step 是一个调度单元</td></tr>
+      <tr><td><span class="pill pill-art">artifact</span> decode</td><td><code>UADScheduleItem</code> 或 scheduler 外后处理</td><td>取决于是否占 GPU / model budget</td></tr>
+    </tbody>
+  </table>
+
+  <div class="pull-quote">
+    第一版不把一个 DiT denoise step 再切成任意小 chunk —— timestep、latent、CFG 和 image query 是耦合的;
+    除非具体模型显式支持 partial step。
+    <span class="pull-quote-attr">— design_uad.md §10</span>
+  </div>
+
+  <p>
+    同一个 <code>UADSchedulerOutput</code> 可以同时包含 AR work 和 DiT / artifact <code>uad_items</code>。
+    executor 可以按 attention 约束拆 kernel, <strong>但 FFN / MoE 只要 hidden size、dtype、layer、TP / EP mesh 和 backend 兼容,
+    就应尽量合批</strong>——这是 unified engine 的吞吐来源。
+  </p>
+</section>
+
+
+<!-- ====================== §12 KV / COMMIT ====================== -->
+<section id="kv">
+  <div class="section-header">
+    <div class="deco-num">12</div>
+    <div class="section-num">§ 12 · KV / PERSIST COMMIT</div>
+    <h2 class="section-title">三个 token 数, <em>三个不同时机</em></h2>
+    <p class="section-desc">
+      <code>num_scheduled_tokens</code> 是 compute budget; <code>num_persistent_tokens</code> 是 schedule-time commit 预期;
+      <code>num_new_computed_tokens</code> 是 update-time commit 事实——三者都是 int, 但语义截然不同。
+    </p>
+  </div>
+
+  <div class="diagram-frame">
+    <div class="diagram-label">commit 数字在不同时机的语义</div>
+    <svg viewBox="0 0 920 280" xmlns="http://www.w3.org/2000/svg" style="font-family:'JetBrains Mono',monospace;">
+      <defs>
+        <marker id="arr6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97757"/>
+        </marker>
+      </defs>
+
+      <!-- Timeline -->
+      <line x1="40" y1="160" x2="880" y2="160" stroke="#3a362e" stroke-width="2"/>
+      <circle cx="180" cy="160" r="6" fill="#d97757"/>
+      <circle cx="460" cy="160" r="6" fill="#7a9966"/>
+      <circle cx="740" cy="160" r="6" fill="#d4b75e"/>
+
+      <!-- Schedule time -->
+      <g transform="translate(60, 30)">
+        <text x="0" y="0" fill="#d97757" font-size="10" letter-spacing="0.15em">SCHEDULE TIME</text>
+        <rect x="0" y="6" width="240" height="100" fill="#14130f" stroke="#d97757"/>
+        <text x="120" y="32" fill="#e8e3d8" font-size="13" text-anchor="middle" font-family="JetBrains Mono">num_scheduled_tokens</text>
+        <text x="120" y="50" fill="#8a857a" font-size="10" text-anchor="middle">compute budget</text>
+        <line x1="20" y1="60" x2="220" y2="60" stroke="#2a2722" stroke-dasharray="2,3"/>
+        <text x="120" y="80" fill="#e8e3d8" font-size="13" text-anchor="middle" font-family="JetBrains Mono">num_persistent_tokens</text>
+        <text x="120" y="98" fill="#8a857a" font-size="10" text-anchor="middle">expected commit</text>
+      </g>
+      <line x1="180" y1="135" x2="180" y2="155" stroke="#d97757" stroke-width="1"/>
+      <text x="180" y="180" fill="#d97757" font-size="11" text-anchor="middle" font-family="JetBrains Mono">schedule()</text>
+
+      <!-- Execute -->
+      <g transform="translate(340, 30)">
+        <text x="0" y="0" fill="#7a9966" font-size="10" letter-spacing="0.15em">EXECUTE TIME</text>
+        <rect x="0" y="6" width="240" height="100" fill="#14130f" stroke="#7a9966"/>
+        <text x="120" y="40" fill="#e8e3d8" font-size="13" text-anchor="middle" font-family="JetBrains Mono">model forward</text>
+        <text x="120" y="58" fill="#8a857a" font-size="10" text-anchor="middle">runner produces raw output</text>
+        <text x="120" y="80" fill="#8a857a" font-size="10" text-anchor="middle">不直接改 state</text>
+      </g>
+      <line x1="460" y1="135" x2="460" y2="155" stroke="#7a9966" stroke-width="1"/>
+      <text x="460" y="180" fill="#7a9966" font-size="11" text-anchor="middle" font-family="JetBrains Mono">execute_model()</text>
+
+      <!-- Update -->
+      <g transform="translate(620, 30)">
+        <text x="0" y="0" fill="#d4b75e" font-size="10" letter-spacing="0.15em">UPDATE TIME</text>
+        <rect x="0" y="6" width="240" height="100" fill="#14130f" stroke="#d4b75e"/>
+        <text x="120" y="32" fill="#e8e3d8" font-size="13" text-anchor="middle" font-family="JetBrains Mono">num_new_computed</text>
+        <text x="120" y="46" fill="#e8e3d8" font-size="13" text-anchor="middle" font-family="JetBrains Mono">_tokens</text>
+        <text x="120" y="64" fill="#8a857a" font-size="10" text-anchor="middle">actual commit fact</text>
+        <line x1="20" y1="74" x2="220" y2="74" stroke="#2a2722" stroke-dasharray="2,3"/>
+        <text x="120" y="92" fill="#d4b75e" font-size="10" text-anchor="middle">推进 reusable KV / context</text>
+      </g>
+      <line x1="740" y1="135" x2="740" y2="155" stroke="#d4b75e" stroke-width="1"/>
+      <text x="740" y="180" fill="#d4b75e" font-size="11" text-anchor="middle" font-family="JetBrains Mono">update_from_output()</text>
+
+      <!-- Bottom equivalence note -->
+      <g transform="translate(40, 220)">
+        <rect x="0" y="0" width="840" height="48" fill="#0e0d0a" stroke="#3a362e" stroke-dasharray="3,3"/>
+        <text x="420" y="20" fill="#d97757" font-size="11" text-anchor="middle" font-family="Fraunces" font-style="italic">第一版约束</text>
+        <text x="420" y="38" fill="#e8e3d8" font-size="11.5" text-anchor="middle" font-family="JetBrains Mono">num_new_computed_tokens == UADScheduleItem.num_persistent_tokens</text>
+      </g>
+    </svg>
+    <div class="diagram-caption">
+      DiT non-final step 不产生 reusable context / KV, 因此 <code>num_persistent_tokens = 0</code>、<code>num_new_computed_tokens = 0</code>。
+      DiT final step 默认 commit image context tokens / KV——<strong>原生支持 multiturn</strong>;
+      即使当前 response 后马上结束, 也不把"不 commit"作为默认语义。
+    </div>
+  </div>
+</section>
+
+
+<!-- ====================== §13 ATTENTION ====================== -->
+<section id="attn">
+  <div class="section-header">
+    <div class="deco-num">13</div>
+    <div class="section-num">§ 13 · ATTENTION 实现</div>
+    <h2 class="section-title">Causal paged + DiT chunk <em>bidirectional</em></h2>
+    <p class="section-desc">
+      第一版只保留一种方案: 复用 vLLM causal paged attention, 再补 DiT chunk 内 bidirectional attention,
+      最终在 softmax / logsumexp 语义下合并两段。
+    </p>
+  </div>
+
+  <div class="diagram-frame">
+    <div class="diagram-label">UAD attention semantics</div>
+    <svg viewBox="0 0 920 400" xmlns="http://www.w3.org/2000/svg" style="font-family:'JetBrains Mono',monospace;">
+      <defs>
+        <marker id="arr7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97757"/>
+        </marker>
+      </defs>
+
+      <!-- Token sequence with chunks -->
+      <text x="20" y="28" fill="#8a857a" font-size="11" letter-spacing="2">SEQUENCE (per request)</text>
+      <g transform="translate(40, 50)">
+        <!-- Text tokens -->
+        <rect x="0" y="0" width="20" height="32" fill="#6c8fa3" fill-opacity="0.4" stroke="#6c8fa3"/>
+        <rect x="22" y="0" width="20" height="32" fill="#6c8fa3" fill-opacity="0.4" stroke="#6c8fa3"/>
+        <rect x="44" y="0" width="20" height="32" fill="#6c8fa3" fill-opacity="0.4" stroke="#6c8fa3"/>
+        <rect x="66" y="0" width="20" height="32" fill="#6c8fa3" fill-opacity="0.4" stroke="#6c8fa3"/>
+        <text x="43" y="50" fill="#6c8fa3" font-size="10" text-anchor="middle">AR text</text>
+
+        <!-- DiT chunk A (image 1 query tokens this step) -->
+        <rect x="110" y="0" width="20" height="32" fill="#7a9966" fill-opacity="0.5" stroke="#7a9966" stroke-width="1.5"/>
+        <rect x="132" y="0" width="20" height="32" fill="#7a9966" fill-opacity="0.5" stroke="#7a9966" stroke-width="1.5"/>
+        <rect x="154" y="0" width="20" height="32" fill="#7a9966" fill-opacity="0.5" stroke="#7a9966" stroke-width="1.5"/>
+        <rect x="176" y="0" width="20" height="32" fill="#7a9966" fill-opacity="0.5" stroke="#7a9966" stroke-width="1.5"/>
+        <rect x="198" y="0" width="20" height="32" fill="#7a9966" fill-opacity="0.5" stroke="#7a9966" stroke-width="1.5"/>
+        <rect x="220" y="0" width="20" height="32" fill="#7a9966" fill-opacity="0.5" stroke="#7a9966" stroke-width="1.5"/>
+        <text x="174" y="50" fill="#7a9966" font-size="10" text-anchor="middle">DiT chunk (request A · 1 denoise step)</text>
+
+        <!-- AR text -->
+        <rect x="280" y="0" width="20" height="32" fill="#6c8fa3" fill-opacity="0.4" stroke="#6c8fa3"/>
+        <rect x="302" y="0" width="20" height="32" fill="#6c8fa3" fill-opacity="0.4" stroke="#6c8fa3"/>
+        <text x="310" y="50" fill="#6c8fa3" font-size="10" text-anchor="middle">AR text</text>
+
+        <!-- DiT chunk B (different request) -->
+        <rect x="350" y="0" width="20" height="32" fill="#d4b75e" fill-opacity="0.5" stroke="#d4b75e" stroke-width="1.5"/>
+        <rect x="372" y="0" width="20" height="32" fill="#d4b75e" fill-opacity="0.5" stroke="#d4b75e" stroke-width="1.5"/>
+        <rect x="394" y="0" width="20" height="32" fill="#d4b75e" fill-opacity="0.5" stroke="#d4b75e" stroke-width="1.5"/>
+        <text x="382" y="50" fill="#d4b75e" font-size="10" text-anchor="middle">DiT chunk (request B)</text>
+      </g>
+
+      <!-- Two phases -->
+      <g transform="translate(40, 110)">
+        <text x="0" y="0" fill="#8a857a" font-size="11" letter-spacing="2">PHASE 1 — vLLM CAUSAL PAGED ATTENTION</text>
+        <rect x="0" y="14" width="840" height="60" fill="#14130f" stroke="#6c8fa3"/>
+        <text x="20" y="34" fill="#6c8fa3" font-size="11" font-weight="600">所有 token 按 causal 规则看见自己的前文</text>
+        <text x="20" y="50" fill="#8a857a" font-size="10">使用现有 attention metadata / block table / slot mapping; 没有任何 UAD-specific kernel</text>
+        <text x="20" y="64" fill="#8a857a" font-size="10">AR token 没有 bidirectional patch, causal output 就是最终 attention output</text>
+      </g>
+
+      <g transform="translate(40, 196)">
+        <text x="0" y="0" fill="#8a857a" font-size="11" letter-spacing="2">PHASE 2 — DIT CHUNK BIDIRECTIONAL</text>
+        <rect x="0" y="14" width="840" height="60" fill="#14130f" stroke="#7a9966"/>
+        <text x="20" y="34" fill="#7a9966" font-size="11" font-weight="600">仅对每个 DiT chunk 跑 chunk-internal bidirectional</text>
+        <text x="20" y="50" fill="#8a857a" font-size="10">同 request 的当前 DiT step 内 image query tokens 互相可见</text>
+        <text x="20" y="64" fill="#8a857a" font-size="10">不同 request 的 DiT chunks 之间互不可见</text>
+      </g>
+
+      <!-- Merge -->
+      <g transform="translate(40, 282)">
+        <text x="0" y="0" fill="#d4b75e" font-size="11" letter-spacing="2">PHASE 3 — SOFTMAX / LOGSUMEXP CORRECT MERGE</text>
+        <rect x="0" y="14" width="840" height="74" fill="#14130f" stroke="#d4b75e" stroke-width="1.5"/>
+        <text x="20" y="34" fill="#d4b75e" font-size="11" font-weight="600">在 softmax score / logsumexp 语义下合并 causal 部分和 bidirectional 部分</text>
+        <text x="20" y="50" fill="#c87060" font-size="10">✗ 不能简单把两个 attention output 相加</text>
+        <text x="20" y="64" fill="#8a857a" font-size="10">✓ 保留 softmax normalization (先 reference mixed attention 验证语义)</text>
+        <text x="20" y="78" fill="#8a857a" font-size="10">✓ 再替换成高性能 kernel</text>
+      </g>
+    </svg>
+    <div class="diagram-caption">
+      <strong>不单独引入 <code>attention_signature</code> 字段</strong>。第一版由 <code>phase</code>、<code>input_kind</code>、
+      DiT chunk range、slot mapping 和 shape metadata 推导 attention 行为——保持 metadata 最小化。
+    </div>
+  </div>
+</section>
+
+
+<!-- ====================== §14 EXECUTOR / RUNNER ====================== -->
+<section id="exec">
+  <div class="section-header">
+    <div class="deco-num">14</div>
+    <div class="section-num">§ 14 · EXECUTOR / RUNNER</div>
+    <h2 class="section-title">拆 Attention 可以, <em>不要</em>拆 FFN/MoE</h2>
+    <p class="section-desc">
+      <code>UADInputs</code> 由 runner 组装, 内容因 work 类型而异。executor 在合批策略上做出明确取舍:
+      attention 可以拆, FFN/MoE 只要兼容就合批。
+    </p>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Work</th><th>输入</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="pill pill-ar">AR</span></td>
+        <td>token ids / positions / block tables / slot mapping</td>
+      </tr>
+      <tr>
+        <td><span class="pill pill-dit">DiT</span></td>
+        <td>latent or image-query embeds、timestep、positions、context KV / block tables、DiT chunk ranges</td>
+      </tr>
+      <tr>
+        <td><span class="pill pill-art">artifact</span></td>
+        <td>VAE / artifact decode 所需 handle 或 latent</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="compare">
+    <div class="compare-side">
+      <span class="compare-tag" style="color: var(--c-ar); border-color: var(--c-ar);">ATTENTION</span>
+      <h4>可以按约束拆 kernel</h4>
+      <p style="margin-top: 12px; font-size:13.5px;">
+        AR causal、DiT chunk bidirectional 是两种 attention 模式,
+        合并到一个 kernel 可能不经济, 拆开是合理的。
+      </p>
+    </div>
+    <div class="compare-side">
+      <span class="compare-tag" style="color: var(--accent); border-color: var(--accent);">FFN / MoE</span>
+      <h4>能合批就合批</h4>
+      <p style="margin-top: 12px; font-size:13.5px;">
+        只要 hidden size、dtype、layer、TP / EP mesh 和 backend 兼容, AR hidden 和 DiT hidden
+        <strong>应在兼容层上形成更大的 FFN / MoE batch</strong>——这是 unified engine 的吞吐主体。
+      </p>
+    </div>
+  </div>
+
+  <p><strong>Output 处理规则</strong>:</p>
+  <ul>
+    <li>AR sample 输出进入 v1 sampled-token 路径。</li>
+    <li>DiT denoise 输出进入 <code>UADPhaseOutput.raw_output</code> 和 <code>runtime_state_delta</code>。</li>
+    <li>final DiT context commit 通过 <code>new_engine_tokens</code> 和 <code>num_new_computed_tokens</code>
+      推进 UAD / v1 reusable context。</li>
+    <li>artifact decode 输出进入 <code>new_materialized_tokens</code>, 用于 streaming 或最终 response。</li>
+  </ul>
+</section>
+
+
+<!-- ====================== §15 HUNYUAN ====================== -->
+<section id="hy3">
+  <div class="section-header">
+    <div class="deco-num">15</div>
+    <div class="section-num">§ 15 · HUNYUANIMAGE3 FLOW</div>
+    <h2 class="section-title">第一目标模型的 <em>端到端</em></h2>
+    <p class="section-desc">
+      把所有概念串到 HunyuanImage3: text → image-emitting AR → DiT denoise → artifact decode → multiturn 继续。
+    </p>
+  </div>
+
+  <div class="diagram-frame">
+    <div class="diagram-label">HunyuanImage3 request 全生命周期</div>
+    <svg viewBox="0 0 920 520" xmlns="http://www.w3.org/2000/svg" style="font-family:'JetBrains Mono',monospace;">
+      <defs>
+        <marker id="arr8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97757"/>
+        </marker>
+      </defs>
+
+      <!-- Step 1: request add -->
+      <g transform="translate(40, 30)">
+        <rect x="0" y="0" width="840" height="44" fill="#1a1814" stroke="#d97757"/>
+        <text x="20" y="20" fill="#d97757" font-size="11" font-weight="600">①</text>
+        <text x="40" y="20" fill="#e8e3d8" font-size="12" font-family="JetBrains Mono">request add</text>
+        <text x="40" y="34" fill="#8a857a" font-size="10">→ phase = AR_PREFILL</text>
+      </g>
+      <line x1="460" y1="78" x2="460" y2="98" stroke="#d97757" stroke-width="1" marker-end="url(#arr8)"/>
+
+      <!-- Step 2: AR text -->
+      <g transform="translate(40, 100)">
+        <rect x="0" y="0" width="840" height="56" fill="#1a1814" stroke="#6c8fa3"/>
+        <text x="20" y="22" fill="#6c8fa3" font-size="11" font-weight="600">②</text>
+        <text x="40" y="22" fill="#e8e3d8" font-size="12" font-family="JetBrains Mono">AR emits normal text token</text>
+        <text x="40" y="38" fill="#8a857a" font-size="10">→ v1 sampled token ledger updates</text>
+        <text x="40" y="52" fill="#8a857a" font-size="10">→ optional materialized text output</text>
+      </g>
+      <line x1="460" y1="160" x2="460" y2="180" stroke="#d97757" stroke-width="1" marker-end="url(#arr8)"/>
+
+      <!-- Step 3: img_ratio_* trigger -->
+      <g transform="translate(40, 182)">
+        <rect x="0" y="0" width="840" height="64" fill="#1a1814" stroke="#d97757" stroke-width="1.5"/>
+        <text x="20" y="22" fill="#d97757" font-size="11" font-weight="600">③</text>
+        <text x="40" y="22" fill="#e8e3d8" font-size="12" font-family="JetBrains Mono">AR emits &lt;img_ratio_*&gt;</text>
+        <text x="40" y="38" fill="#8a857a" font-size="10">→ phase = DIT_STEP</text>
+        <text x="40" y="52" fill="#8a857a" font-size="10">→ fill dit_num_steps / dit_query_tokens / runtime_state (image size, seed, CFG, latent shape)</text>
+      </g>
+      <line x1="460" y1="250" x2="460" y2="270" stroke="#d97757" stroke-width="1" marker-end="url(#arr8)"/>
+
+      <!-- Step 4: DiT non-final -->
+      <g transform="translate(40, 272)">
+        <rect x="0" y="0" width="840" height="44" fill="#1a1814" stroke="#7a9966"/>
+        <text x="20" y="20" fill="#7a9966" font-size="11" font-weight="600">④</text>
+        <text x="40" y="20" fill="#e8e3d8" font-size="12" font-family="JetBrains Mono">DiT non-final step (× N-1)</text>
+        <text x="40" y="34" fill="#8a857a" font-size="10">→ denoise state update; num_new_computed_tokens = 0</text>
+      </g>
+      <line x1="460" y1="320" x2="460" y2="340" stroke="#d97757" stroke-width="1" marker-end="url(#arr8)"/>
+
+      <!-- Step 5: DiT final -->
+      <g transform="translate(40, 342)">
+        <rect x="0" y="0" width="840" height="56" fill="#1a1814" stroke="#d4b75e" stroke-width="1.5"/>
+        <text x="20" y="22" fill="#d4b75e" font-size="11" font-weight="600">⑤</text>
+        <text x="40" y="22" fill="#e8e3d8" font-size="12" font-family="JetBrains Mono">DiT final step</text>
+        <text x="40" y="38" fill="#8a857a" font-size="10">→ commit image context tokens / KV</text>
+        <text x="40" y="52" fill="#8a857a" font-size="10">→ append image engine_tokens (后续 AR 可见)</text>
+      </g>
+      <line x1="460" y1="402" x2="460" y2="422" stroke="#d97757" stroke-width="1" marker-end="url(#arr8)"/>
+
+      <!-- Step 6: artifact -->
+      <g transform="translate(40, 424)">
+        <rect x="0" y="0" width="840" height="44" fill="#1a1814" stroke="#a384b5"/>
+        <text x="20" y="20" fill="#a384b5" font-size="11" font-weight="600">⑥</text>
+        <text x="40" y="20" fill="#e8e3d8" font-size="12" font-family="JetBrains Mono">artifact decode</text>
+        <text x="40" y="34" fill="#8a857a" font-size="10">→ append materialized image artifact (streaming or final response)</text>
+      </g>
+      <line x1="460" y1="472" x2="460" y2="492" stroke="#d97757" stroke-width="1" marker-end="url(#arr8)"/>
+
+      <!-- Step 7: multiturn -->
+      <g transform="translate(40, 494)">
+        <rect x="0" y="0" width="840" height="22" fill="#0e0d0a" stroke="#d97757" stroke-dasharray="3,3"/>
+        <text x="20" y="15" fill="#d97757" font-size="11" font-weight="600" font-family="Fraunces" font-style="italic">⑦ multiturn next AR — sees committed text + image context</text>
+      </g>
+    </svg>
+    <div class="diagram-caption">
+      整条 pipeline 把 §05–§12 串了一遍: <strong>AR sample → image transition → DiT loop → final commit → artifact → 下一轮可见</strong>。
+      <code>&lt;img_ratio_*&gt;</code> 是 AR→DiT 的具体 trigger; final step 的 KV commit 是 multiturn 能跨轮看到 image context 的前提。
+    </div>
+  </div>
+</section>
+
+
+<!-- ====================== §16 TODO ====================== -->
+<section id="todo">
+  <div class="section-header">
+    <div class="deco-num">16</div>
+    <div class="section-num">§ 16 · TODO</div>
+    <h2 class="section-title">Scaffold → 真实 serving 还差什么</h2>
+    <p class="section-desc">
+      当前 11 个单元测试已经验证 scaffold 路径接通; 从 scaffold 到 production serving 需要逐项实现下面这些 boundary。
+    </p>
+  </div>
+
+  <div class="todo-grid">
+    <div class="todo-cell">
+      <span class="pill pill-todo">UAD state</span>
+      <h5>连接 <code>UADRequestState</code> 和真实 v1 request lifecycle</h5>
+      <p>当前 scaffold 没有把 UAD state 接到 v1 add_request / abort。这是让 UAD step 实际看到请求的前提。</p>
+    </div>
+    <div class="todo-cell">
+      <span class="pill pill-todo">phase trigger</span>
+      <h5>实现 <code>&lt;img_ratio_*&gt;</code> 到 DiT phase 的 transition</h5>
+      <p>AR sampler 输出 image-trigger token 时, 把 phase 切到 DIT_STEP 并填 runtime_state。</p>
+    </div>
+    <div class="todo-cell">
+      <span class="pill pill-todo">scheduling</span>
+      <h5>AR / DiT scheduler budget、shape bucket、step batching</h5>
+      <p>实现真正的合批策略, 让 token-like budget 在两类 work 之间被一致比较。</p>
+    </div>
+    <div class="todo-cell">
+      <span class="pill pill-todo">runner</span>
+      <h5>DiT executor / worker / model runner</h5>
+      <p>当前 <code>UADExecutor</code> 是 no-op scaffold; 需要实际的 DiT forward path。</p>
+    </div>
+    <div class="todo-cell">
+      <span class="pill pill-todo">attention</span>
+      <h5>Causal paged + chunk bidirectional attention metadata / kernel</h5>
+      <p>§13 描述的 reference 实现 + 高性能 kernel 替换。</p>
+    </div>
+    <div class="todo-cell">
+      <span class="pill pill-todo">KV commit</span>
+      <h5>Final image context KV commit</h5>
+      <p>DiT 最后一步要把 image context tokens / KV 持久化, 这样后续 AR 能复用。</p>
+    </div>
+    <div class="todo-cell">
+      <span class="pill pill-todo">output</span>
+      <h5>Artifact output processor</h5>
+      <p>VAE decode / artifact materialization 进入对外 ledger。</p>
+    </div>
+    <div class="todo-cell">
+      <span class="pill pill-todo">parallel</span>
+      <h5>CFG parallel、SP / sequence parallel、AR + DiT FFN/MoE hidden 合批</h5>
+      <p>从 unified engine 拿到吞吐红利的关键。需要更深的设计讨论。</p>
+    </div>
+  </div>
+
+  <div class="pull-quote">
+    UAD 不是一次性大重构, 而是<em style="font-style: italic;">分层落地</em>:
+    先让 step path 接通, 再逐步让 phase、attention、commit、合批每一项都达到 production 质量。
+    <span class="pull-quote-attr">— PROGRESS.md 五次推进路径</span>
+  </div>
+
+  <p style="margin-top: 48px; font-size: 12.5px; color: var(--fg-mute); font-family: 'JetBrains Mono', monospace; letter-spacing: 0.08em;">
+    Source: <code>docs/uad/design_uad.md</code> · branch <code>uad-integration</code> · commits
+    <code>18331459 → a6a55377</code>
+  </p>
+</main>
+</div>
+
+<script>
+  const sections = document.querySelectorAll('section[id], header.hero');
+  const navLinks = document.querySelectorAll('.nav-link');
+  function updateNav() {
+    let current = 'hero';
+    sections.forEach(sec => {
+      const rect = sec.getBoundingClientRect();
+      if (rect.top < 200) current = sec.id || 'hero';
+    });
+    navLinks.forEach(link => {
+      link.classList.toggle('active', link.getAttribute('href') === '#' + current);
+    });
+  }
+  window.addEventListener('scroll', updateNav, { passive: true });
+  updateNav();
+</script>
+
+</body>
+</html>
