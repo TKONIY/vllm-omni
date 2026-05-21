@@ -187,7 +187,92 @@ class UADPhaseOutput:
 
 `num_computed_tokens` 只在 token 真正 commit 到后续可复用 engine state/KV 后推进。一次 forward 不必然增加 computed tokens。
 
-## 9. HunyuanImage3 Flow
+## 9. State Machine
+
+UAD request state machine 是 scheduler-owned state。phase 只表示下一次可调度 work 的类型，不表示每个 Python 后处理函数都要变成 scheduler-visible phase。
+
+| 当前 phase | 触发 | 下一 phase | 关键更新 |
+|---|---|---|---|
+| `AR_PREFILL` | prompt prefill 完成 | `AR_DECODE` | v1 computed-token/KV 进度更新 |
+| `AR_DECODE` | 普通 text token | `AR_DECODE` | v1 sampled token ledger 更新；可产生 materialized text |
+| `AR_DECODE` | `<img_ratio_*>` | `DIT_STEP` | 写入 image size、`dit_query_tokens`、`dit_num_steps`、latent/noise seed |
+| `DIT_STEP` | non-final denoise step 完成 | `DIT_STEP` | `dit_step_index += 1`；不推进 computed-token/KV 语义 |
+| `DIT_STEP` | final denoise step 完成 | `ARTIFACT_DECODE` | commit image context tokens/KV；追加 `engine_tokens` |
+| `ARTIFACT_DECODE` | artifact 生成完成 | finished 或下一轮 AR | 追加 `materialized_tokens` |
+
+`ARTIFACT_DECODE` 类似输出 materialization，不等价于 v1 text sampling。它是否由 scheduler 感知取决于是否占用 GPU/model budget；纯 CPU/IO 后处理可以从 scheduler 隐藏。
+
+## 10. Scheduler 语义
+
+UAD scheduler 仍按 token-like budget 工作，不引入独立的 phase budget。
+
+| Work | 表示方式 | 调度粒度 |
+|---|---|---|
+| AR prefill/decode | inherited `SchedulerOutput` 字段 | 复用 v1 chunked prefill / decode 语义 |
+| DiT step | `UADScheduleItem` | 一个 denoise step 是一个调度单元 |
+| artifact decode | `UADScheduleItem` 或 scheduler 外后处理 | 取决于是否占 GPU/model budget |
+
+DiT step 的 `num_scheduled_tokens` 通常等于该 step 的 image query token 数。第一版不把一个 DiT denoise step 再切成任意小 chunk，因为 timestep、latent、CFG 和 image query 是耦合的；除非具体模型显式支持 partial step。
+
+同一个 `UADSchedulerOutput` 可以同时包含 AR work 和 DiT/artifact `uad_items`。executor 可以按 attention 约束拆 kernel，但 FFN/MoE 只要 hidden size、dtype、layer、TP/EP mesh 和 backend 兼容，就应尽量合批。
+
+## 11. Attention 实现
+
+第一版只保留一种方案：复用 vLLM causal paged attention，再补 DiT chunk 内 bidirectional attention。
+
+有效 attention 语义：
+
+- 所有 token 都能按 causal 规则看见自己的前文，这部分与 vLLM paged attention 一致。
+- AR token 没有 bidirectional patch，causal output 就是最终 attention output。
+- DiT 当前 step 的 image query tokens 除了看前文，还需要在本 request 的当前 DiT chunk 内做 bidirectional attention。
+- 不同 request 的 DiT chunks 之间互不可见。
+
+执行形态：
+
+```text
+1. 用 vLLM attention metadata / block table / slot mapping 跑 causal paged attention
+2. 对每个 DiT chunk 跑 chunk-internal bidirectional attention
+3. 在 softmax score / logsumexp 语义下合并 causal 部分和 bidirectional 部分
+```
+
+第三步不能简单把两个 attention output 相加；需要保留 softmax normalization。实现上可以先用 reference mixed attention 验证语义，再替换成高性能 kernel。
+
+不单独引入 `attention_signature` 字段。第一版由 `phase`、`input_kind`、DiT chunk range、slot mapping 和 shape metadata 推导 attention 行为。
+
+## 12. Executor / Runner 实现约束
+
+`UADInputs` 应由 runner 组装，内容取决于 work 类型：
+
+| Work | 输入 |
+|---|---|
+| AR | token ids / positions / block tables / slot mapping |
+| DiT | latent or image-query embeds、timestep、positions、context KV/block tables、DiT chunk ranges |
+| artifact | VAE/artifact decode 所需 handle 或 latent |
+
+executor 可以拆 attention，但不应该无理由拆 FFN/MoE。目标是让 AR hidden 和 DiT hidden 在兼容层上形成更大的 FFN/MoE batch。
+
+output 处理规则：
+
+- AR sample 输出进入 v1 sampled-token 路径。
+- DiT denoise 输出进入 `UADPhaseOutput.raw_output` 和 `runtime_state_delta`。
+- final DiT context commit 通过 `new_engine_tokens` 和 `num_new_computed_tokens` 推进 UAD/v1 reusable context。
+- artifact decode 输出进入 `new_materialized_tokens`，用于 streaming 或最终 response。
+
+## 13. KV / Persist Commit
+
+`num_scheduled_tokens` 是 compute budget；`num_persistent_tokens` 是 schedule-time commit 预期；`num_new_computed_tokens` 是 update-time commit 事实。
+
+DiT non-final step 不产生 reusable context/KV，因此：
+
+```text
+num_scheduled_tokens = image query tokens
+num_persistent_tokens = 0
+num_new_computed_tokens = 0
+```
+
+DiT final step 默认要 commit image context tokens/KV，以原生支持 multiturn。即使当前 response 后马上结束，也不把“不 commit”作为默认语义；是否为了内存优化跳过 commit 应是显式策略。
+
+## 14. HunyuanImage3 Flow
 
 ```text
 request add
@@ -210,13 +295,13 @@ multiturn next AR
   -> sees committed text + image context
 ```
 
-## 10. TODO
+## 15. TODO
 
 - 连接 `UADRequestState` 和真实 v1 request lifecycle。
 - 实现 `<img_ratio_*>` 到 DiT phase 的 transition。
 - 实现 AR/DiT scheduler budget、shape bucket、step batching。
 - 实现 DiT executor / worker / model runner。
-- 实现 causal paged + chunk bidirectional attention metadata。
+- 实现 causal paged + chunk bidirectional attention metadata/kernel。
 - 实现 final image context KV commit。
 - 实现 artifact output processor。
 - 讨论并实现 CFG parallel、SP / sequence parallel、AR + DiT FFN/MoE hidden 合批。

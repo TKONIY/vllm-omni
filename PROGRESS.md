@@ -107,3 +107,18 @@ Validation:
 
 - `git diff --check -- docs/uad/design_uad.md PROGRESS.md`
 - `uv run --no-sync python -m pytest tests/uad_vllm -q`
+
+## 2026-05-21: Restore lower-level UAD implementation constraints
+
+Completed:
+
+- Added concise lower-level sections back to `docs/uad/design_uad.md`.
+- Documented the UAD request state machine and phase transition triggers.
+- Documented scheduler token-like budget semantics for AR, DiT step, and artifact work.
+- Documented the first attention implementation plan: vLLM causal paged attention plus DiT chunk-internal bidirectional attention with softmax/logsumexp-correct merge.
+- Documented executor/runner constraints for `UADInputs`, AR/DiT output handling, FFN/MoE batching, and final DiT KV commit.
+
+Validation:
+
+- `git diff --check -- docs/uad/design_uad.md PROGRESS.md`
+- `uv run --no-sync python -m pytest tests/uad_vllm -q`
