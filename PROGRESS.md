@@ -93,3 +93,17 @@ Validation:
 - `uv run --no-sync ruff check uad_vllm tests/uad_vllm`
 - `uv run --no-sync python -m compileall -q uad_vllm tests/uad_vllm`
 - `uv run --no-sync python -m pytest tests/uad_vllm -q` (`11 passed`)
+
+## 2026-05-21: Simplify UAD design document
+
+Completed:
+
+- Rewrote `docs/uad/design_uad.md` into a shorter current-state design note.
+- Kept only the active UAD scaffold decisions: v1 EngineCore boundary, inherited facades, UAD step flow, scheduler output, request state, phase update, state ownership, and TODOs.
+- Removed duplicated historical discussion and stale variable explanations.
+- Preserved exact timing semantics for `num_scheduled_tokens`, `num_persistent_tokens`, `new_engine_tokens`, `new_materialized_tokens`, and `num_new_computed_tokens`.
+
+Validation:
+
+- `git diff --check -- docs/uad/design_uad.md PROGRESS.md`
+- `uv run --no-sync python -m pytest tests/uad_vllm -q`
