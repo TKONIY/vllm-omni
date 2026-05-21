@@ -20,7 +20,7 @@ vllm-omni serve --uad-engine
 - 输出仍是 v1 `EngineCoreOutputs`。
 - `self.scheduler` 仍指向原生 v1 scheduler 实例。
 - `self.model_executor` 仍指向原生 v1 executor 实例。
-- UAD 只在 `UADEngineCore.step()` 内用 `self.uad_scheduler`、`self.uad_executor`、`self.uad_runner` 串起扩展路径。
+- UAD 只在 `UADEngineCore.step()` 内用独立的 `self.uad_scheduler`、`self.uad_executor`、`self.uad_runner` 串起扩展路径。
 
 这样做的原因是 v1 core 的 add/abort/pause/reset/stats/KV connector/health 等辅助路径会直接访问 `self.scheduler` 和 `self.model_executor`，这些路径必须继续看到原生 v1 interface 语义。
 
@@ -31,9 +31,9 @@ vllm-omni serve --uad-engine
 | UAD 类 | v1 父类 | 语义 |
 |---|---|---|
 | `UADEngineCore` | `StageEngineCoreProc` | 覆盖 step orchestration，保留 EngineCoreProc 协议 |
-| `UADScheduler` | `SchedulerInterface` | 组合 `base_scheduler`，只代理 UAD step 需要的 v1 scheduler 方法 |
+| `UADScheduler` | `SchedulerInterface` | UAD-native scheduler scaffold，不持有 `base_scheduler` |
 | `UADSchedulerOutput` | `SchedulerOutput` | 保留全部 v1 scheduler output 字段，额外加 `uad_items` |
-| `UADExecutor` | `Executor` | 组合 `base_executor`，只代理 UAD step 需要的 v1 executor 方法 |
+| `UADExecutor` | `Executor` | UAD-native executor scaffold，不持有 `base_executor` |
 | `UADModelRunnerOutput` | `ModelRunnerOutput` | 保留全部 v1 model runner output 字段，额外加 `phase_outputs` |
 | `UADGPUWorker` | `WorkerBase` | 未来 UAD worker backend 的 v1-compatible placeholder |
 
@@ -55,30 +55,34 @@ UADEngineCore.step()
   -> EngineCoreOutputs
 ```
 
-当前 AR path 是 passthrough：`UADScheduler` 调 base scheduler，`UADExecutor` 调 base executor，`UADModelRunnerOutput` 从 base `ModelRunnerOutput` 复制字段。DiT/artifact work 还没有真实调度和执行，只保留接口位置。
+当前 UAD path 只跑 scaffold：`UADScheduler` 返回 empty `UADSchedulerOutput`，`UADExecutor` 返回 empty/no-op model output，DiT/artifact work 还没有真实调度和执行。原生 `self.scheduler/self.model_executor` 保留给 v1 lifecycle 路径，但 UAD scheduler/executor 不再通过 `base_scheduler/base_executor` composition 复用它们。
 
 ## 4. Scheduler Contract
 
-`UADScheduler` 是 v1 `SchedulerInterface` 的实现，但不是完整 v1 scheduler replacement。当前采用 subclass + composition，只实现 `UADEngineCore.step()` 需要的最小路径：
+`UADScheduler` 是 v1 `SchedulerInterface` 的实现，但不是完整 v1 scheduler replacement。当前是 UAD-native scaffold，不持有 `base_scheduler`：
 
 ```python
 class UADScheduler(SchedulerInterface):
-    def __init__(self, base_scheduler: SchedulerInterface) -> None:
-        self.base_scheduler = base_scheduler
+    def __init__(self) -> None:
+        self.request_states: dict[str, UADRequestState] = {}
 
     def schedule(self) -> UADSchedulerOutput:
-        base_output = self.base_scheduler.schedule()
-        uad_items = ...  # TODO
-        return UADSchedulerOutput.from_base(base_output, uad_items)
+        # TODO: schedule AR/DiT/artifact items from request_states.
+        return UADSchedulerOutput.make_empty()
 ```
 
 UAD step path 的 v1 methods 必须保留 v1 语义：
 
-- `schedule()` 返回 `SchedulerOutput` 兼容对象。
+- `schedule()` 返回 `SchedulerOutput` 兼容对象；当前 scaffold 返回 empty output。
 - `get_grammar_bitmask()` 接收 `SchedulerOutput`。
 - `update_from_output()` 接收 `SchedulerOutput` 和 `ModelRunnerOutput`。
 
-其他 v1 lifecycle 方法，例如 `add_request()`、`finish_requests()`、`pause_state`、`reset_prefix_cache()`、`make_stats()`，在 `UADScheduler` 上明确是 unsupported stub。EngineCoreProc 的这些路径继续使用原生 `self.scheduler`，不是 `self.uad_scheduler`。
+其他 v1 lifecycle 方法按 ownership 分类：
+
+- `add_request()`、`finish_requests()`、`get_num_unfinished_requests()`、`pause_state`、`make_stats()`：UAD 后续需要自己的状态管理，当前保留最小 UAD-local scaffold/TODO。
+- `update_draft_token_ids()`、`update_draft_token_ids_in_output()`、`reset_prefix_cache()`、`reset_encoder_cache()`：当前不打算由 UAD scheduler facade 承担，明确 `NotImplementedError`。
+
+EngineCoreProc 的生产 v1 lifecycle 路径继续使用原生 `self.scheduler`，不是 `self.uad_scheduler`。
 
 `UADSchedulerOutput` 继承 `SchedulerOutput`，额外字段：
 
@@ -249,11 +253,12 @@ class UADPhaseOutput:
 
 ## 7. Executor / Runner Contract
 
-`UADExecutor(Executor)` 当前组合 `base_executor`：
+`UADExecutor(Executor)` 当前是 UAD-native scaffold：
 
-- `execute_model(SchedulerOutput, non_block)` 直接 delegate 到 base executor。
-- `sample_tokens(GrammarOutput, non_block)` 直接 delegate 到 base executor。
-- `collective_rpc()`、`check_health()` 等 v1 executor lifecycle 方法在 `UADExecutor` 上明确是 unsupported stub。
+- `execute_model(SchedulerOutput, non_block)` 当前记录 scheduler output，并返回 no-op future/`None`。
+- `sample_tokens(GrammarOutput, non_block)` 当前返回 empty `UADModelRunnerOutput`。
+- `collective_rpc()` 不是当前 UAD executor scaffold 的职责，明确 `NotImplementedError`。
+- `check_health()` 当前 no-op，后续有 UAD worker/model-runner backend 后补真实检查。
 - `max_concurrent_batches` 暂时固定为 1，因为 `UADEngineCore` 当前禁用 upstream batch queue。
 
 后续 DiT execution 会在这个边界扩展，但不能改变 v1 executor 方法签名。

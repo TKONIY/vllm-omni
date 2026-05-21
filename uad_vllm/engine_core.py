@@ -17,8 +17,8 @@ class UADEngineCore(StageEngineCoreProc):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.uad_scheduler = UADScheduler(self.scheduler)
-        self.uad_executor = UADExecutor(self.model_executor)
+        self.uad_scheduler = UADScheduler()
+        self.uad_executor = UADExecutor()
         self.uad_runner = UADRunner()
 
         if self.batch_queue is not None:

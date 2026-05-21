@@ -125,4 +125,6 @@ def test_uad_engine_core_keeps_v1_scheduler_interface(monkeypatch: pytest.Monkey
     engine = UADEngineCore()
 
     assert engine.scheduler is base_scheduler
-    assert engine.uad_scheduler.base_scheduler is base_scheduler
+    assert engine.model_executor is base_executor
+    assert not hasattr(engine.uad_scheduler, "base_scheduler")
+    assert not hasattr(engine.uad_executor, "base_executor")

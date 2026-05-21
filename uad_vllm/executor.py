@@ -1,33 +1,23 @@
 from __future__ import annotations
 
 from concurrent.futures import Future
-from typing import Any, NoReturn
+from typing import Any
 
 from vllm.v1.core.sched.output import GrammarOutput, SchedulerOutput
 from vllm.v1.executor import Executor
 from vllm.v1.outputs import ModelRunnerOutput
 
+from uad_vllm.outputs import UADModelRunnerOutput
+
 
 class UADExecutor(Executor):
-    """Minimal UAD executor facade over a base v1 executor.
+    """UAD-native executor scaffold with a v1-shaped interface."""
 
-    It inherits Executor for interface visibility and ABC checks, but it is not
-    installed as EngineCoreProc.model_executor.  Only UADEngineCore.step() uses
-    it in this scaffold.
-    """
-
-    def __init__(self, base_executor: Any) -> None:
-        self.base_executor = base_executor
-
-    def _unsupported_v1_method(self, name: str) -> NoReturn:
-        raise NotImplementedError(
-            f"UADExecutor.{name} is outside the UAD step scaffold. "
-            "Use EngineCoreProc.model_executor for the v1 executor lifecycle."
-        )
+    def __init__(self) -> None:
+        self.last_scheduler_output: SchedulerOutput | None = None
 
     def _init_executor(self) -> None:
-        # The wrapped executor was initialized by EngineCoreProc before this
-        # facade was created.
+        # TODO: initialize UAD worker/model-runner backend.
         return None
 
     def collective_rpc(
@@ -38,25 +28,38 @@ class UADExecutor(Executor):
         kwargs: dict[str, Any] | None = None,
         non_block: bool = False,
     ) -> Any:
-        self._unsupported_v1_method("collective_rpc")
+        del method, timeout, args, kwargs, non_block
+        raise NotImplementedError("UADExecutor.collective_rpc is not implemented in the scaffold.")
 
     def execute_model(
         self,
         scheduler_output: SchedulerOutput,
         non_block: bool = False,
     ) -> ModelRunnerOutput | None | Future[ModelRunnerOutput | None]:
-        # TODO: execute UAD DiT/artifact items in the same worker group.
-        return self.base_executor.execute_model(scheduler_output, non_block=non_block)
+        self.last_scheduler_output = scheduler_output
+        # TODO: execute UAD AR/DiT/artifact items in the same worker group.
+        if non_block:
+            future: Future[ModelRunnerOutput | None] = Future()
+            future.set_result(None)
+            return future
+        return None
 
     def sample_tokens(
         self,
         grammar_output: GrammarOutput | None,
         non_block: bool = False,
     ) -> ModelRunnerOutput | Future[ModelRunnerOutput]:
-        return self.base_executor.sample_tokens(grammar_output, non_block=non_block)
+        del grammar_output
+        output = UADModelRunnerOutput.make_empty()
+        if non_block:
+            future: Future[ModelRunnerOutput] = Future()
+            future.set_result(output)
+            return future
+        return output
 
     def check_health(self) -> None:
-        self._unsupported_v1_method("check_health")
+        # TODO: check the UAD worker/model-runner backend once it exists.
+        return None
 
     @property
     def max_concurrent_batches(self) -> int:

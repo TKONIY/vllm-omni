@@ -75,3 +75,21 @@ Validation:
 - `uv run --no-sync ruff check uad_vllm tests/uad_vllm`
 - `uv run --no-sync python -m compileall -q uad_vllm tests/uad_vllm`
 - `uv run --no-sync python -m pytest tests/uad_vllm -q` (`10 passed`)
+
+## 2026-05-21: Remove base scheduler/executor composition
+
+Completed:
+
+- Removed `base_scheduler` from `UADScheduler`.
+- Removed `base_executor` from `UADExecutor`.
+- Kept v1 inheritance for interface visibility: `UADScheduler(SchedulerInterface)` and `UADExecutor(Executor)`.
+- Made `UADScheduler` a UAD-native scaffold with its own request state table and empty schedule output.
+- Made `UADExecutor` a UAD-native scaffold that returns no-op/empty outputs until a real worker backend is added.
+- Updated tests and design docs to reflect that UAD facades no longer compose base v1 scheduler/executor instances.
+- Classified unowned v1 lifecycle methods as explicit unsupported stubs, while leaving planned UAD-owned behavior as TODO scaffold.
+
+Validation:
+
+- `uv run --no-sync ruff check uad_vllm tests/uad_vllm`
+- `uv run --no-sync python -m compileall -q uad_vllm tests/uad_vllm`
+- `uv run --no-sync python -m pytest tests/uad_vllm -q` (`11 passed`)
