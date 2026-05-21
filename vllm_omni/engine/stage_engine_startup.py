@@ -28,6 +28,8 @@ from vllm.v1.engine.utils import (
 )
 from vllm.v1.executor import Executor
 
+from uad_vllm.config import should_use_uad_engine
+
 logger = init_logger(__name__)
 
 StageRoute = tuple[int, int]
@@ -920,9 +922,10 @@ def launch_omni_core_engines(
     handshake_bind_address = omni_master_server.get_allocation(stage_id, replica_id=replica_id).handshake_bind_address
 
     with zmq_socket_ctx(handshake_bind_address, zmq.ROUTER, bind=True) as handshake_socket:
-        if omni_coordinator_address is not None:
+        if omni_coordinator_address is not None or should_use_uad_engine(vllm_config):
             # Use the omni subclass so each spawned subprocess instantiates
-            # an OmniCoordClientForStage and heartbeats to the coordinator.
+            # an OmniCoordClientForStage when a coordinator is present, and so
+            # UAD can route through StageEngineCoreProc even without one.
             from vllm_omni.engine.omni_core_engine_proc_manager import OmniCoreEngineProcManager
 
             local_engine_manager: CoreEngineProcManager = OmniCoreEngineProcManager(

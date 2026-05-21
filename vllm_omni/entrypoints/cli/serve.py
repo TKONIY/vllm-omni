@@ -21,6 +21,7 @@ from vllm.entrypoints.utils import VLLM_SUBCMD_PARSER_EPILOG
 from vllm.logger import init_logger
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 
+from uad_vllm.config import configure_uad_engine_env
 from vllm_omni.engine.arg_utils import nullify_stage_engine_defaults
 from vllm_omni.entrypoints.cli.logo import log_logo
 from vllm_omni.entrypoints.openai.api_server import omni_run_server
@@ -95,6 +96,8 @@ class OmniServeCommand(CLISubcommand):
         # If model is specified in CLI (as positional arg), it takes precedence
         if hasattr(args, "model_tag") and args.model_tag is not None:
             args.model = args.model_tag
+
+        configure_uad_engine_env(getattr(args, "uad_engine", False))
 
         if args.headless:
             run_headless(args)
@@ -191,6 +194,12 @@ class OmniServeCommand(CLISubcommand):
             "--omni",
             action="store_true",
             help="Enable vLLM-Omni mode for multi-modal and diffusion models",
+        )
+        omni_config_group.add_argument(
+            "--uad-engine",
+            action="store_true",
+            default=False,
+            help="Use the experimental UAD EngineCore path for non-diffusion stages.",
         )
 
         try:

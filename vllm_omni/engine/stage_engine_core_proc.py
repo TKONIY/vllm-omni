@@ -44,6 +44,18 @@ if TYPE_CHECKING:
 logger = init_logger(__name__)
 
 
+def resolve_stage_engine_core_cls(vllm_config: VllmConfig) -> type[StageEngineCoreProc]:
+    """Resolve the concrete EngineCoreProc class for an omni stage."""
+
+    from uad_vllm.config import should_use_uad_engine
+
+    if should_use_uad_engine(vllm_config):
+        from uad_vllm.engine_core import UADEngineCore
+
+        return UADEngineCore
+    return StageEngineCoreProc
+
+
 class StageEngineCoreProc(EngineCoreProc):
     """Stage-specific engine core process for vLLM-Omni.
 
@@ -93,7 +105,8 @@ class StageEngineCoreProc(EngineCoreProc):
             decorate_logs()
             os.environ["VLLM_OMNI_REPLICA_ID"] = str(max(int(omni_replica_id), 0))
 
-            engine_core = StageEngineCoreProc(
+            engine_core_cls = resolve_stage_engine_core_cls(kwargs["vllm_config"])
+            engine_core = engine_core_cls(
                 *args,
                 engine_index=dp_rank,
                 **kwargs,
