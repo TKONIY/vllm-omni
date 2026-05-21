@@ -81,3 +81,10 @@ def test_uad_scheduler_output_tracks_persistent_uad_tokens() -> None:
     assert output.total_num_scheduled_uad_tokens == 4
     assert output.total_num_persistent_uad_tokens == 2
     assert output.total_num_scheduled_work == 4
+
+
+def test_uad_scheduler_lifecycle_methods_are_not_part_of_step_facade() -> None:
+    scheduler = UADScheduler(_BaseScheduler())
+
+    with pytest.raises(NotImplementedError, match="EngineCoreProc.scheduler"):
+        scheduler.add_request(object())

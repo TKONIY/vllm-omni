@@ -31,9 +31,9 @@ vllm-omni serve --uad-engine
 | UAD 类 | v1 父类 | 语义 |
 |---|---|---|
 | `UADEngineCore` | `StageEngineCoreProc` | 覆盖 step orchestration，保留 EngineCoreProc 协议 |
-| `UADScheduler` | `SchedulerInterface` | 组合 `base_scheduler`，显式 delegate v1 scheduler 方法 |
+| `UADScheduler` | `SchedulerInterface` | 组合 `base_scheduler`，只代理 UAD step 需要的 v1 scheduler 方法 |
 | `UADSchedulerOutput` | `SchedulerOutput` | 保留全部 v1 scheduler output 字段，额外加 `uad_items` |
-| `UADExecutor` | `Executor` | 组合 `base_executor`，显式 delegate v1 executor 方法 |
+| `UADExecutor` | `Executor` | 组合 `base_executor`，只代理 UAD step 需要的 v1 executor 方法 |
 | `UADModelRunnerOutput` | `ModelRunnerOutput` | 保留全部 v1 model runner output 字段，额外加 `phase_outputs` |
 | `UADGPUWorker` | `WorkerBase` | 未来 UAD worker backend 的 v1-compatible placeholder |
 
@@ -59,7 +59,7 @@ UADEngineCore.step()
 
 ## 4. Scheduler Contract
 
-`UADScheduler` 是 v1 `SchedulerInterface` 的实现，但不是完整重写 v1 scheduler 状态机。当前采用 subclass + composition：
+`UADScheduler` 是 v1 `SchedulerInterface` 的实现，但不是完整 v1 scheduler replacement。当前采用 subclass + composition，只实现 `UADEngineCore.step()` 需要的最小路径：
 
 ```python
 class UADScheduler(SchedulerInterface):
@@ -72,12 +72,13 @@ class UADScheduler(SchedulerInterface):
         return UADSchedulerOutput.from_base(base_output, uad_items)
 ```
 
-所有 v1 methods 必须保留 v1 语义：
+UAD step path 的 v1 methods 必须保留 v1 语义：
 
 - `schedule()` 返回 `SchedulerOutput` 兼容对象。
 - `get_grammar_bitmask()` 接收 `SchedulerOutput`。
 - `update_from_output()` 接收 `SchedulerOutput` 和 `ModelRunnerOutput`。
-- `add_request()`、`finish_requests()`、`pause_state`、`reset_prefix_cache()`、`make_stats()` 等显式 delegate 到 base scheduler。
+
+其他 v1 lifecycle 方法，例如 `add_request()`、`finish_requests()`、`pause_state`、`reset_prefix_cache()`、`make_stats()`，在 `UADScheduler` 上明确是 unsupported stub。EngineCoreProc 的这些路径继续使用原生 `self.scheduler`，不是 `self.uad_scheduler`。
 
 `UADSchedulerOutput` 继承 `SchedulerOutput`，额外字段：
 
@@ -252,7 +253,8 @@ class UADPhaseOutput:
 
 - `execute_model(SchedulerOutput, non_block)` 直接 delegate 到 base executor。
 - `sample_tokens(GrammarOutput, non_block)` 直接 delegate 到 base executor。
-- `collective_rpc()`、`check_health()`、`max_concurrent_batches` delegate 到 base executor。
+- `collective_rpc()`、`check_health()` 等 v1 executor lifecycle 方法在 `UADExecutor` 上明确是 unsupported stub。
+- `max_concurrent_batches` 暂时固定为 1，因为 `UADEngineCore` 当前禁用 upstream batch queue。
 
 后续 DiT execution 会在这个边界扩展，但不能改变 v1 executor 方法签名。
 

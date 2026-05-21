@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from concurrent.futures import Future
-from typing import Any
+from typing import Any, NoReturn
 
 from vllm.v1.core.sched.output import GrammarOutput, SchedulerOutput
 from vllm.v1.executor import Executor
@@ -10,55 +9,36 @@ from vllm.v1.outputs import ModelRunnerOutput
 
 
 class UADExecutor(Executor):
-    """Executor implementation that delegates to an existing v1 executor.
+    """Minimal UAD executor facade over a base v1 executor.
 
-    The scaffold delegates AR work to the existing vLLM executor.  Future UAD
-    steps can replace this facade with a full executor/worker stack while
-    keeping UADEngineCore's step orchestration stable.
+    It inherits Executor for interface visibility and ABC checks, but it is not
+    installed as EngineCoreProc.model_executor.  Only UADEngineCore.step() uses
+    it in this scaffold.
     """
 
     def __init__(self, base_executor: Any) -> None:
         self.base_executor = base_executor
-        for attr in (
-            "vllm_config",
-            "model_config",
-            "cache_config",
-            "lora_config",
-            "load_config",
-            "parallel_config",
-            "scheduler_config",
-            "device_config",
-            "speculative_config",
-            "observability_config",
-            "kv_output_aggregator",
-            "is_sleeping",
-            "sleeping_tags",
-        ):
-            if hasattr(base_executor, attr):
-                setattr(self, attr, getattr(base_executor, attr))
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.base_executor, name)
+    def _unsupported_v1_method(self, name: str) -> NoReturn:
+        raise NotImplementedError(
+            f"UADExecutor.{name} is outside the UAD step scaffold. "
+            "Use EngineCoreProc.model_executor for the v1 executor lifecycle."
+        )
 
     def _init_executor(self) -> None:
-        # The wrapped executor is already initialized by EngineCoreProc.
+        # The wrapped executor was initialized by EngineCoreProc before this
+        # facade was created.
         return None
 
     def collective_rpc(
         self,
-        method: str | Callable[..., Any],
+        method: Any,
         timeout: float | None = None,
         args: tuple[Any, ...] = (),
         kwargs: dict[str, Any] | None = None,
         non_block: bool = False,
     ) -> Any:
-        return self.base_executor.collective_rpc(
-            method,
-            timeout=timeout,
-            args=args,
-            kwargs=kwargs,
-            non_block=non_block,
-        )
+        self._unsupported_v1_method("collective_rpc")
 
     def execute_model(
         self,
@@ -76,8 +56,9 @@ class UADExecutor(Executor):
         return self.base_executor.sample_tokens(grammar_output, non_block=non_block)
 
     def check_health(self) -> None:
-        return self.base_executor.check_health()
+        self._unsupported_v1_method("check_health")
 
     @property
     def max_concurrent_batches(self) -> int:
-        return self.base_executor.max_concurrent_batches
+        # UADEngineCore disables the upstream batch_queue for now.
+        return 1

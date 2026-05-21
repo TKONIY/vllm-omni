@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 
-from vllm.v1.core.sched.interface import PauseState, SchedulerInterface
+from vllm.v1.core.sched.interface import SchedulerInterface
 from vllm.v1.core.sched.output import GrammarOutput, SchedulerOutput
 from vllm.v1.engine import EngineCoreOutputs
-from vllm.v1.outputs import DraftTokenIds, ModelRunnerOutput
-from vllm.v1.request import Request, RequestStatus
+from vllm.v1.outputs import ModelRunnerOutput
 
 from uad_vllm.request import UADPhase
 
@@ -74,13 +72,22 @@ class UADSchedulerOutput(SchedulerOutput):
 
 
 class UADScheduler(SchedulerInterface):
-    """SchedulerInterface implementation that reuses a base v1 scheduler."""
+    """Minimal UAD scheduler facade over a base v1 scheduler.
+
+    This class inherits SchedulerInterface for interface visibility and ABC
+    checks, but it is not a full replacement for EngineCoreProc.scheduler.
+    EngineCoreProc.scheduler remains the base scheduler; this object is used
+    only by UADEngineCore.step().
+    """
 
     def __init__(self, base_scheduler: SchedulerInterface) -> None:
         self.base_scheduler = base_scheduler
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.base_scheduler, name)
+    def _unsupported_v1_method(self, name: str) -> NoReturn:
+        raise NotImplementedError(
+            f"UADScheduler.{name} is outside the UAD step scaffold. "
+            "Use EngineCoreProc.scheduler for the v1 scheduler lifecycle."
+        )
 
     def has_requests(self) -> bool:
         return self.base_scheduler.has_requests()
@@ -101,57 +108,46 @@ class UADScheduler(SchedulerInterface):
         # TODO: apply UADModelRunnerOutput.phase_outputs before/after base scheduler update.
         return self.base_scheduler.update_from_output(scheduler_output, model_runner_output)
 
-    def update_draft_token_ids(self, draft_token_ids: DraftTokenIds) -> None:
-        return self.base_scheduler.update_draft_token_ids(draft_token_ids)
+    def update_draft_token_ids(self, draft_token_ids: Any) -> None:
+        self._unsupported_v1_method("update_draft_token_ids")
 
-    def update_draft_token_ids_in_output(
-        self,
-        draft_token_ids: DraftTokenIds,
-        scheduler_output: SchedulerOutput,
-    ) -> None:
-        return self.base_scheduler.update_draft_token_ids_in_output(draft_token_ids, scheduler_output)
+    def update_draft_token_ids_in_output(self, draft_token_ids: Any, scheduler_output: SchedulerOutput) -> None:
+        self._unsupported_v1_method("update_draft_token_ids_in_output")
 
-    def add_request(self, request: Request) -> None:
-        return self.base_scheduler.add_request(request)
+    def add_request(self, request: Any) -> None:
+        self._unsupported_v1_method("add_request")
 
-    def finish_requests(
-        self,
-        request_ids: str | Iterable[str] | None,
-        finished_status: RequestStatus,
-    ) -> list[tuple[str, int]]:
-        return self.base_scheduler.finish_requests(request_ids, finished_status)
+    def finish_requests(self, request_ids: Any, finished_status: Any) -> list[tuple[str, int]]:
+        self._unsupported_v1_method("finish_requests")
 
     def get_num_unfinished_requests(self) -> int:
-        return self.base_scheduler.get_num_unfinished_requests()
+        self._unsupported_v1_method("get_num_unfinished_requests")
 
     def has_finished_requests(self) -> bool:
-        return self.base_scheduler.has_finished_requests()
+        self._unsupported_v1_method("has_finished_requests")
 
     @property
-    def pause_state(self) -> PauseState:
-        return self.base_scheduler.pause_state
+    def pause_state(self) -> Any:
+        self._unsupported_v1_method("pause_state")
 
-    def set_pause_state(self, pause_state: PauseState) -> None:
-        return self.base_scheduler.set_pause_state(pause_state)
+    def set_pause_state(self, pause_state: Any) -> None:
+        self._unsupported_v1_method("set_pause_state")
 
     def reset_prefix_cache(
         self,
         reset_running_requests: bool = False,
         reset_connector: bool = False,
     ) -> bool:
-        return self.base_scheduler.reset_prefix_cache(reset_running_requests, reset_connector)
+        self._unsupported_v1_method("reset_prefix_cache")
 
     def reset_encoder_cache(self) -> None:
-        return self.base_scheduler.reset_encoder_cache()
+        self._unsupported_v1_method("reset_encoder_cache")
 
     def get_request_counts(self) -> tuple[int, int]:
-        return self.base_scheduler.get_request_counts()
+        self._unsupported_v1_method("get_request_counts")
 
     def make_stats(self) -> Any:
-        return self.base_scheduler.make_stats()
+        self._unsupported_v1_method("make_stats")
 
     def shutdown(self) -> None:
-        return self.base_scheduler.shutdown()
-
-    def get_kv_connector(self) -> Any:
-        return self.base_scheduler.get_kv_connector()
+        self._unsupported_v1_method("shutdown")

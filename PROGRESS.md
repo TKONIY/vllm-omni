@@ -59,3 +59,19 @@ Validation:
 - `uv run --no-sync ruff check uad_vllm tests/uad_vllm`
 - `uv run --no-sync python -m compileall -q uad_vllm tests/uad_vllm`
 - `uv run --no-sync python -m pytest tests/uad_vllm -q` (`9 passed`)
+
+## 2026-05-21: Minimal inherited facade cleanup
+
+Completed:
+
+- Kept `UADScheduler(SchedulerInterface)` and `UADExecutor(Executor)` inheritance.
+- Removed broad v1 lifecycle delegation from UAD facades.
+- Kept only the UAD step path delegates: schedule, grammar, scheduler update, execute, and sample.
+- Marked unsupported v1 lifecycle methods as explicit `NotImplementedError` stubs because `EngineCoreProc.scheduler` and `EngineCoreProc.model_executor` remain the real v1 lifecycle owners.
+- Updated the design document and tests to reflect the narrower facade contract.
+
+Validation:
+
+- `uv run --no-sync ruff check uad_vllm tests/uad_vllm`
+- `uv run --no-sync python -m compileall -q uad_vllm tests/uad_vllm`
+- `uv run --no-sync python -m pytest tests/uad_vllm -q` (`10 passed`)
