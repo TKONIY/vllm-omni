@@ -1,0 +1,1657 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Ray Stream-Native Engine · 架构设计</title>
+<script>
+  (function () {
+    try {
+      var saved = localStorage.getItem('rsne-theme');
+      var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var theme = saved || (prefersDark ? 'dark' : 'light');
+      if (theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+    } catch (e) {}
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+:root {
+  --bg:            #F5F1E8;
+  --bg-soft:       #EFE9DC;
+  --paper:         #FAF7F0;
+  --ink:           #1F1E1C;
+  --ink-soft:      #4A4642;
+  --ink-mute:      #756F68;
+  --line:          #DCD3BE;
+  --line-soft:     #E8E0CB;
+  --accent:        #CC785C;
+  --accent-deep:   #A85940;
+  --accent-soft:   #E8A38A;
+  --accent-wash:   #F4E2D7;
+  --sage:          #6E8B6A;
+  --sage-wash:     #E0E8DC;
+  --indigo:        #4A5A78;
+  --indigo-wash:   #DCE0E8;
+  --indigo-chip:   #DFE3F0;
+  --gold:          #B8862E;
+  --gold-wash:     #F0E4C9;
+  --code-bg:       #1B1A18;
+  --code-fg:       #E8E2D4;
+  --code-mute:     #908779;
+  --code-key:      #E8A38A;
+  --code-str:      #B8B070;
+  --code-num:      #C49A6C;
+  --bar-bg:        rgba(245, 241, 232, 0.92);
+  --shadow-sm:     0 1px 2px rgba(31,30,28,.04), 0 1px 1px rgba(31,30,28,.03);
+  --shadow-md:     0 2px 6px rgba(31,30,28,.05), 0 8px 24px rgba(31,30,28,.04);
+  color-scheme: light;
+}
+[data-theme="dark"] {
+  --bg:            #1A1613;
+  --bg-soft:       #221D19;
+  --paper:         #2A2520;
+  --ink:           #ECE3D1;
+  --ink-soft:      #BFB5A2;
+  --ink-mute:      #877E70;
+  --line:          #3A332B;
+  --line-soft:     #2E2823;
+  --accent:        #E59377;
+  --accent-deep:   #F0B89E;
+  --accent-soft:   #F4C8B3;
+  --accent-wash:   #3A2820;
+  --sage:          #A3BFA0;
+  --sage-wash:     #243029;
+  --indigo:        #A3B4D0;
+  --indigo-wash:   #232C3B;
+  --indigo-chip:   #2B364A;
+  --gold:          #D4A953;
+  --gold-wash:     #2E2719;
+  --code-bg:       #131210;
+  --code-fg:       #ECE3D1;
+  --code-mute:     #87796A;
+  --code-key:      #F0B89E;
+  --code-str:      #C8BC78;
+  --code-num:      #D4A678;
+  --bar-bg:        rgba(26, 22, 19, 0.92);
+  --shadow-sm:     0 1px 2px rgba(0,0,0,.25), 0 1px 1px rgba(0,0,0,.18);
+  --shadow-md:     0 2px 6px rgba(0,0,0,.3),  0 8px 24px rgba(0,0,0,.22);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent-deep); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ── layout ── */
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 32px; }
+.topbar {
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--bar-bg);
+  backdrop-filter: blur(10px);
+  position: sticky; top: 0; z-index: 30;
+}
+.topbar-inner {
+  display: flex; align-items: center; justify-content: space-between;
+  height: 60px;
+}
+.brand {
+  display: flex; align-items: center; gap: 10px;
+  font-family: 'Fraunces', serif; font-weight: 600; font-size: 18px;
+  letter-spacing: -0.01em;
+}
+.brand-dot {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, var(--accent-soft), var(--accent) 70%, var(--accent-deep));
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.05);
+}
+.topnav { display: flex; gap: 22px; font-size: 13px; color: var(--ink-soft); }
+.topnav a { color: var(--ink-soft); }
+.topnav a:hover { color: var(--accent-deep); text-decoration: none; }
+.theme-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border: 1px solid var(--line);
+  background: var(--paper); color: var(--ink-soft);
+  border-radius: 50%; cursor: pointer; padding: 0; margin-left: 4px;
+}
+.theme-toggle:hover { color: var(--accent-deep); border-color: var(--accent); }
+.theme-toggle .icon-sun { display: none; }
+.theme-toggle .icon-moon { display: block; }
+[data-theme="dark"] .theme-toggle .icon-sun  { display: block; }
+[data-theme="dark"] .theme-toggle .icon-moon { display: none; }
+@media (max-width: 720px) {
+  .topnav { gap: 12px; font-size: 12px; }
+  .topnav a:not(:first-child):not(:last-child) { display: none; }
+}
+
+/* ── hero ── */
+.hero {
+  padding: 72px 0 56px;
+  border-bottom: 1px solid var(--line-soft);
+  background:
+    radial-gradient(ellipse 600px 320px at 88% 0%, var(--accent-wash) 0%, transparent 70%),
+    radial-gradient(ellipse 500px 280px at 10% 90%, var(--sage-wash) 0%, transparent 70%);
+}
+.eyebrow {
+  display: inline-block; font-size: 12px; text-transform: uppercase;
+  letter-spacing: 0.14em; font-weight: 600;
+  color: var(--accent-deep); background: var(--accent-wash);
+  padding: 6px 12px; border-radius: 100px; margin-bottom: 20px;
+}
+h1 {
+  font-family: 'Fraunces', serif; font-weight: 500;
+  font-size: clamp(34px, 4.6vw, 56px); line-height: 1.08;
+  letter-spacing: -0.025em; margin: 0 0 18px;
+}
+h1 em { font-style: italic; color: var(--accent-deep); font-weight: 400; }
+.lede {
+  font-size: 18px; line-height: 1.6; color: var(--ink-soft);
+  max-width: 760px; margin: 0 0 26px;
+}
+.hero-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 13px; border-radius: 100px; font-size: 12.5px;
+  font-weight: 500; background: var(--paper); color: var(--ink-soft);
+  border: 1px solid var(--line);
+}
+.chip-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.chip.sage   .chip-dot { background: var(--sage); }
+.chip.indigo .chip-dot { background: var(--indigo); }
+.chip.gold   .chip-dot { background: var(--gold); }
+
+/* ── section ── */
+section { padding: 72px 0; border-bottom: 1px solid var(--line-soft); }
+section:last-child { border-bottom: none; }
+.section-head { margin-bottom: 36px; }
+.section-eyebrow {
+  font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.14em;
+  font-weight: 600; color: var(--accent-deep); margin-bottom: 12px;
+}
+h2 {
+  font-family: 'Fraunces', serif; font-weight: 500;
+  font-size: clamp(26px, 3.2vw, 38px); line-height: 1.15;
+  letter-spacing: -0.02em; margin: 0 0 12px;
+}
+h2 em { color: var(--accent-deep); font-style: italic; font-weight: 400; }
+.section-sub {
+  font-size: 16px; color: var(--ink-soft);
+  max-width: 760px; margin: 0;
+}
+h3 {
+  font-family: 'Fraunces', serif; font-weight: 500;
+  font-size: 21px; letter-spacing: -0.01em; margin: 28px 0 10px;
+}
+h4 {
+  font-family: 'Fraunces', serif; font-weight: 500;
+  font-size: 16.5px; letter-spacing: -0.005em; margin: 18px 0 8px;
+}
+p { color: var(--ink-soft); margin: 0 0 12px; }
+
+/* ── cards & grids ── */
+.card {
+  background: var(--paper); border: 1px solid var(--line);
+  border-radius: 14px; padding: 24px;
+  box-shadow: var(--shadow-sm);
+}
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+@media (max-width: 860px) {
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+}
+
+/* ── role card ── */
+.role-card {
+  background: var(--paper); border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 12px; padding: 22px 24px;
+  box-shadow: var(--shadow-sm);
+}
+.role-card.indigo { border-left-color: var(--indigo); }
+.role-card.sage   { border-left-color: var(--sage); }
+.role-card.gold   { border-left-color: var(--gold); }
+.role-card.accent { border-left-color: var(--accent-deep); }
+.role-name {
+  display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px;
+}
+.role-name .tag {
+  font-family: 'JetBrains Mono', monospace; font-size: 10.5px;
+  background: var(--accent-wash); color: var(--accent-deep);
+  padding: 2px 7px; border-radius: 4px; font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.role-name .tag.indigo { background: var(--indigo-wash); color: var(--indigo); }
+.role-name .tag.sage   { background: var(--sage-wash);   color: var(--sage); }
+.role-name .tag.gold   { background: var(--gold-wash);   color: var(--gold); }
+.role-card h4 { margin: 0; font-family: 'Fraunces', serif; font-weight: 500; font-size: 18px; color: var(--ink); }
+.role-card .role-sub { color: var(--ink-mute); font-size: 13px; margin: 0; }
+.role-card ul { padding-left: 18px; margin: 12px 0 4px; color: var(--ink-soft); font-size: 14px; }
+.role-card ul li { margin: 5px 0; }
+.role-card code {
+  font-family: 'JetBrains Mono', monospace; font-size: 12.5px;
+  background: var(--bg-soft); color: var(--accent-deep);
+  padding: 1px 6px; border-radius: 3px; border: 1px solid var(--line-soft);
+}
+
+/* ── code block ── */
+.code {
+  background: var(--code-bg); color: var(--code-fg);
+  border-radius: 12px; padding: 18px 22px;
+  font-family: 'JetBrains Mono', monospace; font-size: 12.5px;
+  line-height: 1.75; overflow-x: auto;
+  box-shadow: var(--shadow-md);
+  margin: 14px 0;
+}
+.code .kw  { color: var(--code-key); }
+.code .str { color: var(--code-str); }
+.code .num { color: var(--code-num); }
+.code .cmt { color: var(--code-mute); font-style: italic; }
+.code .ty  { color: #B6CFC9; }
+.code .fn  { color: #E8C68A; }
+
+/* ── mermaid wrapper ── */
+.mermaid-wrap {
+  background: var(--paper); border: 1px solid var(--line);
+  border-radius: 14px; padding: 26px 22px; margin: 18px 0;
+  box-shadow: var(--shadow-sm); overflow-x: auto;
+}
+.mermaid-wrap .m-title {
+  font-family: 'Fraunces', serif; font-size: 16px; font-weight: 500;
+  margin-bottom: 6px;
+}
+.mermaid-wrap .m-sub {
+  font-size: 13px; color: var(--ink-mute); margin-bottom: 16px;
+}
+.mermaid { display: flex; justify-content: center; }
+.mermaid svg { max-width: 100%; height: auto; }
+
+/* ── flow steps ── */
+.flow {
+  display: grid; gap: 14px; counter-reset: step;
+  margin: 18px 0;
+}
+.flow-step {
+  display: grid; grid-template-columns: 56px 1fr; gap: 18px;
+  align-items: stretch;
+}
+.flow-step .num {
+  font-family: 'Fraunces', serif; font-size: 26px; font-weight: 500;
+  color: var(--accent); line-height: 1; padding-top: 16px;
+  text-align: center; border-right: 1px dashed var(--line);
+}
+.flow-step .body {
+  background: var(--paper); border: 1px solid var(--line);
+  border-radius: 12px; padding: 16px 20px; box-shadow: var(--shadow-sm);
+}
+.flow-step h4 {
+  font-family: 'Fraunces', serif; font-size: 16px; font-weight: 500;
+  margin: 0 0 4px; color: var(--ink);
+}
+.flow-step p { margin: 0 0 8px; font-size: 13.5px; color: var(--ink-soft); }
+.flow-step .loc {
+  font-family: 'JetBrains Mono', monospace; font-size: 11.5px;
+  color: var(--ink-mute); margin-top: 4px;
+}
+.flow-step .payload {
+  margin-top: 8px; padding: 8px 12px;
+  background: var(--bg-soft); border-left: 3px solid var(--accent);
+  border-radius: 4px; font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px; color: var(--ink-soft);
+}
+.flow-step .payload code {
+  background: transparent; padding: 0; color: var(--accent-deep);
+  border: none;
+}
+
+/* ── pipeline diagram (CSS) ── */
+.pipeline-css {
+  background: var(--paper); border: 1px solid var(--line);
+  border-radius: 16px; padding: 28px; margin-top: 22px;
+  box-shadow: var(--shadow-sm);
+}
+.pipe-row {
+  display: grid; gap: 12px;
+  grid-template-columns: 1fr 28px 1fr 28px 1fr;
+  align-items: center;
+}
+@media (max-width: 880px) {
+  .pipe-row { grid-template-columns: 1fr; }
+  .pipe-arrow { transform: rotate(90deg); justify-self: center; padding: 4px 0; }
+}
+.pipe-cell {
+  background: var(--bg-soft); border: 1px solid var(--line);
+  border-radius: 10px; padding: 14px 16px; min-height: 110px;
+}
+.pipe-cell.entry { border-left: 3px solid var(--indigo); background: var(--indigo-wash); }
+.pipe-cell.mid   { border-left: 3px solid var(--accent); }
+.pipe-cell.exit  { border-left: 3px solid var(--sage); background: var(--sage-wash); }
+.pipe-cell .name {
+  font-family: 'Fraunces', serif; font-size: 15.5px; font-weight: 500;
+  color: var(--ink); margin-bottom: 6px;
+}
+.pipe-cell .desc {
+  font-size: 12.5px; color: var(--ink-soft); line-height: 1.55;
+}
+.pipe-cell code {
+  font-family: 'JetBrains Mono', monospace; font-size: 11.5px;
+  color: var(--accent-deep);
+}
+.pipe-arrow {
+  text-align: center; color: var(--accent); font-size: 22px; line-height: 1;
+}
+
+/* ── tables ── */
+.table {
+  width: 100%; border-collapse: separate; border-spacing: 0;
+  margin: 18px 0; background: var(--paper);
+  border: 1px solid var(--line); border-radius: 12px;
+  overflow: hidden; box-shadow: var(--shadow-sm);
+  font-size: 14px;
+}
+.table th {
+  text-align: left; background: var(--bg-soft);
+  padding: 12px 16px; font-size: 11.5px; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--ink-soft); border-bottom: 1px solid var(--line);
+}
+.table td {
+  padding: 12px 16px; border-bottom: 1px solid var(--line-soft);
+  vertical-align: top; color: var(--ink-soft);
+}
+.table tr:last-child td { border-bottom: none; }
+.table td code, .table th code {
+  font-family: 'JetBrains Mono', monospace; font-size: 12px;
+  background: var(--bg-soft); color: var(--accent-deep);
+  padding: 1px 6px; border-radius: 3px; border: 1px solid var(--line-soft);
+}
+.table .pill {
+  display: inline-block; font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px; font-weight: 600;
+  padding: 2px 8px; border-radius: 4px; letter-spacing: 0.04em;
+  background: var(--accent-wash); color: var(--accent-deep);
+}
+.table .pill.indigo { background: var(--indigo-wash); color: var(--indigo); }
+.table .pill.sage   { background: var(--sage-wash);   color: var(--sage); }
+.table .pill.gold   { background: var(--gold-wash);   color: var(--gold); }
+
+/* ── callout ── */
+.callout {
+  margin: 18px 0; padding: 16px 20px;
+  background: var(--accent-wash);
+  border-left: 4px solid var(--accent);
+  border-radius: 8px; color: var(--accent-deep);
+  font-size: 14px;
+}
+.callout.sage   { background: var(--sage-wash);   border-left-color: var(--sage);   color: var(--sage); }
+.callout.indigo { background: var(--indigo-wash); border-left-color: var(--indigo); color: var(--indigo); }
+.callout.gold   { background: var(--gold-wash);   border-left-color: var(--gold);   color: var(--gold); }
+.callout strong { font-weight: 600; }
+
+/* ── inline code ── */
+code.inline, .body code {
+  font-family: 'JetBrains Mono', monospace; font-size: 12.5px;
+  background: var(--bg-soft); color: var(--accent-deep);
+  padding: 1px 6px; border-radius: 3px; border: 1px solid var(--line-soft);
+  white-space: nowrap;
+}
+p code, li code {
+  font-family: 'JetBrains Mono', monospace; font-size: 12.5px;
+  background: var(--bg-soft); color: var(--accent-deep);
+  padding: 1px 6px; border-radius: 3px; border: 1px solid var(--line-soft);
+}
+
+/* ── kv list ── */
+.kv {
+  display: grid; grid-template-columns: 200px 1fr;
+  gap: 12px 24px; margin: 14px 0;
+}
+.kv dt {
+  font-family: 'Fraunces', serif; font-weight: 500; font-size: 15.5px;
+  color: var(--accent-deep); padding-top: 2px;
+}
+.kv dd { margin: 0; color: var(--ink-soft); font-size: 14px; }
+@media (max-width: 760px) {
+  .kv { grid-template-columns: 1fr; gap: 4px 0; }
+  .kv dt { margin-top: 12px; }
+}
+
+/* ── TOC ── */
+.toc {
+  background: var(--paper); border: 1px solid var(--line);
+  border-radius: 12px; padding: 18px 22px;
+  box-shadow: var(--shadow-sm); font-size: 13.5px;
+}
+.toc-title {
+  font-family: 'Fraunces', serif; font-weight: 500; font-size: 14px;
+  color: var(--ink-mute); margin-bottom: 10px; letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.toc ol { margin: 0; padding-left: 22px; color: var(--ink-soft); }
+.toc ol li { margin: 4px 0; }
+.toc ol li a { color: var(--ink); }
+.toc ol li a:hover { color: var(--accent-deep); }
+
+/* ── footer ── */
+.footer {
+  padding: 36px 0 56px; color: var(--ink-mute);
+  font-size: 13px; text-align: center;
+}
+.footer a { color: var(--ink-mute); }
+</style>
+</head>
+<body>
+
+<!-- topbar -->
+<header class="topbar">
+  <div class="wrap topbar-inner">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      Ray Stream-Native Engine
+    </div>
+    <nav class="topnav">
+      <a href="#overview">概览</a>
+      <a href="#rpc-loop">RPC / Loop</a>
+      <a href="#components">组件</a>
+      <a href="#data-flow">数据流</a>
+      <a href="#duplex">Duplex</a>
+      <a href="#roadmap">Roadmap</a>
+    </nav>
+    <button class="theme-toggle" id="themeToggle" aria-label="toggle theme">
+      <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+    </button>
+  </div>
+</header>
+
+<!-- hero -->
+<section class="hero">
+  <div class="wrap">
+    <span class="eyebrow">vLLM-Omni · stream-native</span>
+    <h1>Ray Stream-Native Engine<br><em>架构与调用流程</em></h1>
+    <p class="lede">
+      从零构建的 stream-native LLM inference engine，目标 workload 是 Qwen3-Omni、Qwen3-TTS
+      和 interactive / duplex session。<strong>Ray 只做 actor 启动和低频控制；数据热路径
+      stage-to-stage 直走 transport，不经过中心 runtime，也不走 Ray object store。</strong>
+    </p>
+    <div class="hero-meta">
+      <span class="chip"><span class="chip-dot"></span>research prototype</span>
+      <span class="chip sage"><span class="chip-dot"></span>Owner · Yangshen</span>
+      <span class="chip indigo"><span class="chip-dot"></span>2026-05-21</span>
+      <span class="chip gold"><span class="chip-dot"></span>Qwen3-Omni / Qwen3-TTS</span>
+    </div>
+
+    <div class="toc" style="margin-top: 36px; max-width: 760px;">
+      <div class="toc-title">本文导读</div>
+      <ol>
+        <li><a href="#overview">总体结构</a> · StreamRuntime / StageActor / 数据与控制路径</li>
+        <li><a href="#rpc-loop">RPC 入口与内部循环</a> · RPC handler / accept / Loop 三层分离</li>
+        <li><a href="#components">组件职责</a> · StreamRuntimeActor · StageActor · StageRuntime · StageWorker · StageExecutor</li>
+        <li><a href="#graph">Graph 与 Routing</a> · Qwen3-TTS / Qwen3-Omni duplex preset</li>
+        <li><a href="#messages">消息模型</a> · DataEvent / ControlEvent / CreditEvent</li>
+        <li><a href="#transport">PayloadRef 与 Transport</a> · 搬数据 vs 发通知</li>
+        <li><a href="#queues">Queue 与 RPC 接入</a> · recv_buffer / input_queue / output_queue</li>
+        <li><a href="#duplex">Duplex Session 语义</a> · barge-in / close / epoch</li>
+        <li><a href="#backpressure">Backpressure 与 Deadline</a></li>
+        <li><a href="#vs-vllm">与 vLLM / SGLang-Omni 的关系</a></li>
+        <li><a href="#roadmap">最小实现顺序与验收实验</a></li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 1. OVERVIEW ═══ -->
+<section id="overview">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Section 1</div>
+      <h2>总体<em>结构</em></h2>
+      <p class="section-sub">
+        系统由一个 <code>StreamRuntimeActor</code>（控制面真理）和若干 <code>StageActor</code>（每个物理 stage 一个 Ray actor）组成。
+        Data 沿 stage-to-stage 的边在 transport 上流动；中心 runtime 只下发控制和路由表，不搬 payload。
+      </p>
+    </div>
+
+    <!-- top pipeline (CSS) -->
+    <div class="pipeline-css">
+      <div class="pipe-row">
+        <div class="pipe-cell entry">
+          <div class="name">API server / client</div>
+          <div class="desc">
+            HTTP / WebSocket 入口。把音视频 chunk、text chunk 通过
+            <code>recv_input_chunk()</code> 投递。
+          </div>
+        </div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-cell" style="border-left:3px solid var(--accent-deep);background:var(--accent-wash)">
+          <div class="name">StreamRuntimeActor</div>
+          <div class="desc">
+            session truth + control 多播 + 路由表安装。<br>
+            <code>start_graph</code> · <code>open_session</code> · <code>BARGE_IN</code>。
+          </div>
+        </div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-cell mid">
+          <div class="name">entry StageActor</div>
+          <div class="desc">
+            <code>recv_data_event(DataEvent)</code> RPC ingress；只入 recv_buffer 立刻 Ack。
+          </div>
+        </div>
+      </div>
+
+      <div style="text-align:center; color:var(--ink-mute); font-size:12px; padding:14px 0;">
+        ⌄ &nbsp;data hot path 在 StageActor 之间 stage-to-stage 流动，不再回到 StreamRuntime &nbsp;⌄
+      </div>
+
+      <div class="pipe-row">
+        <div class="pipe-cell mid">
+          <div class="name">StageActor · 上游</div>
+          <div class="desc">
+            <code>StageRuntime.SendLoop</code> 选路 + 限流 + <code>transport.write_payload()</code>
+            后向下游 <code>recv_data_event()</code> 发通知。
+          </div>
+        </div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-cell mid">
+          <div class="name">StageActor · 下游</div>
+          <div class="desc">
+            <code>RecvLoop</code> 从 recv_buffer 取事件 → <code>transport.read_payload()</code> →
+            <code>input_queue</code> → <code>StageWorker.ComputeLoop</code>。
+          </div>
+        </div>
+        <div class="pipe-cell exit">
+          <div class="name">Sink Stage</div>
+          <div class="desc">
+            <code>TextSink</code> / <code>AudioSink</code>；通过 API server 推回客户端。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- mermaid: control vs data planes -->
+    <div class="mermaid-wrap">
+      <div class="m-title">图 1.1 · 两个平面：控制平面 vs 数据平面</div>
+      <div class="m-sub">
+        实线 = data hot path（transport + recv_data_event）；虚线 = control plane（StreamRuntime multicast）。
+        中心 runtime 不在 payload 路径上。
+      </div>
+      <div class="mermaid">
+flowchart LR
+  classDef api    fill:#DCE0E8,stroke:#4A5A78,color:#1F1E1C
+  classDef sr     fill:#F4E2D7,stroke:#A85940,color:#1F1E1C
+  classDef stage  fill:#FAF7F0,stroke:#CC785C,color:#1F1E1C
+  classDef sink   fill:#E0E8DC,stroke:#6E8B6A,color:#1F1E1C
+
+  API[API server / research client]:::api
+  SR[StreamRuntimeActor<br/><i>session truth · control</i>]:::sr
+
+  subgraph DATA_PLANE [data plane · stage-to-stage]
+    direction LR
+    S1[Ingress Stage]:::stage
+    S2[Encoder / Preprocess]:::stage
+    S3[Thinker]:::stage
+    S4[Talker]:::stage
+    S5[Code2Wav]:::stage
+    SKT[TextSink]:::sink
+    SKA[AudioSink]:::sink
+  end
+
+  API ==>|recv_input_chunk| SR
+  SR -. start_graph / set_routes .-> S1
+  SR -. start_graph / set_routes .-> S2
+  SR -. start_graph / set_routes .-> S3
+  SR -. start_graph / set_routes .-> S4
+  SR -. start_graph / set_routes .-> S5
+  SR ==>|entry DataEvent| S1
+  SR -. BARGE_IN / CLOSE .-> S3
+  SR -. BARGE_IN / CLOSE .-> S4
+  SR -. BARGE_IN / CLOSE .-> S5
+
+  S1 ==>|DataEvent + PayloadRef| S2
+  S2 ==>|DataEvent + PayloadRef| S3
+  S3 ==>|hidden_text| SKT
+  S3 ==>|hidden_audio| S4
+  S4 ==>|codec_tokens| S5
+  S5 ==>|audio chunk| SKA
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>核心原则。</strong>
+      ① Ray 只做 actor 启动、placement、生命周期和低频 control RPC；
+      ② data hot path 是 stage-to-stage，不经过中心 runtime，也不走 Ray object store；
+      ③ stage 预先安装下游 routing table，<em>像 SGLang-Omni 一样</em>直接通知下游可消费；
+      ④ <code>StreamRuntime</code> 管 session truth 和 control plane，<strong>不搬每个 payload</strong>。
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 2. RPC vs LOOP ═══ -->
+<section id="rpc-loop">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Section 2</div>
+      <h2>RPC 入口<em> vs </em>内部循环</h2>
+      <p class="section-sub">
+        本文最重要的一条约定：<code>recv_data_event()</code>、<code>accept_data_event()</code>、
+        <code>recv_loop()</code> 三者<strong>不是重复</strong>，分别对应远程入口、本地桥接、常驻消费者。
+      </p>
+    </div>
+
+    <div class="grid-3">
+      <div class="role-card indigo">
+        <div class="role-name"><span class="tag indigo">RPC INGRESS</span></div>
+        <h4>StageActor.recv_data_event()</h4>
+        <p class="role-sub">Ray RPC handler · 一次 RPC 一次</p>
+        <ul>
+          <li>由别的 actor / API server 通过 <code>.remote()</code> 调用</li>
+          <li>只做 metadata 校验、轻量状态更新</li>
+          <li>调用本地 <code>StageRuntime.accept_*()</code></li>
+          <li>立刻返回 <code>Ack</code></li>
+          <li><strong>不读 payload，不跑 batch，不直接 forward</strong></li>
+        </ul>
+      </div>
+
+      <div class="role-card">
+        <div class="role-name"><span class="tag">LOCAL BRIDGE</span></div>
+        <h4>StageRuntime.accept_data_event()</h4>
+        <p class="role-sub">普通 Python 方法 · 不出现在远程接口里</p>
+        <ul>
+          <li>把 RPC handler 收到的消息交给 runtime 管理</li>
+          <li>metadata-only：把 <code>DataEvent</code> handle 放入 <code>recv_buffer</code></li>
+          <li>不长期运行，不阻塞 RPC 返回</li>
+          <li>不读 payload body</li>
+        </ul>
+      </div>
+
+      <div class="role-card sage">
+        <div class="role-name"><span class="tag sage">INTERNAL LOOP</span></div>
+        <h4>StageRuntime.recv_loop()</h4>
+        <p class="role-sub">asyncio task / thread · 常驻运行</p>
+        <ul>
+          <li>actor 启动后开启，一直循环</li>
+          <li>从 <code>recv_buffer</code> 取事件</li>
+          <li>调 <code>transport.read_payload()</code> 真正搬数据</li>
+          <li>过滤 stale epoch、检查 credit</li>
+          <li>写入 <code>input_queue</code> 喂给 <code>ComputeLoop</code></li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- 三层循环职责 -->
+    <h3 style="margin-top:36px">三条 Loop 的分工</h3>
+    <div class="grid-3">
+      <div class="role-card indigo">
+        <div class="role-name"><span class="tag indigo">RecvLoop</span><span style="font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--ink-mute)">in StageRuntime</span></div>
+        <ul>
+          <li><code>recv_buffer.get()</code></li>
+          <li><code>transport.read_payload()</code></li>
+          <li>filter stale epoch / dedup</li>
+          <li>check credit</li>
+          <li><code>input_queue.put()</code></li>
+        </ul>
+      </div>
+      <div class="role-card accent">
+        <div class="role-name"><span class="tag">ComputeLoop</span><span style="font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--ink-mute)">in StageWorker</span></div>
+        <ul>
+          <li><code>input_queue.get()</code></li>
+          <li><code>BatchPolicy.choose()</code> 组 batch</li>
+          <li><code>StageExecutor.run_batch()</code></li>
+          <li>处理 cancel / flush / close</li>
+          <li><code>output_queue.put()</code></li>
+        </ul>
+      </div>
+      <div class="role-card sage">
+        <div class="role-name"><span class="tag sage">SendLoop</span><span style="font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--ink-mute)">in StageRuntime</span></div>
+        <ul>
+          <li><code>output_queue.get()</code></li>
+          <li><code>routes_for(output.port)</code> 选路</li>
+          <li>check edge credit / hold / merge / drop</li>
+          <li><code>transport.write_payload()</code> 搬数据</li>
+          <li><code>downstream.recv_data_event.remote()</code> 发通知</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- typical call chain -->
+    <h3>典型跨 stage 调用链</h3>
+    <div class="mermaid-wrap">
+      <div class="m-title">图 2.1 · 一条 chunk 从上游 SendLoop 到下游 ComputeLoop 的完整旅程</div>
+      <div class="m-sub">
+        水平方向是两条 actor 边界，垂直方向是时间。<strong>RPC handler 之间是同步 Ack；payload 本体不通过 RPC，
+        而是通过 transport 在 PayloadRef 背后搬运。</strong>
+      </div>
+      <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant USend as Upstream<br/>StageRuntime.SendLoop
+    participant UAct  as Upstream<br/>StageActor (RPC)
+    participant Tx    as TransportManager
+    participant DAct  as Downstream<br/>StageActor (RPC)
+    participant DRT   as Downstream<br/>StageRuntime
+    participant DRecv as Downstream<br/>RecvLoop
+    participant DComp as Downstream<br/>ComputeLoop
+
+    Note over USend: output_queue.get() → SchedulerOutput
+    USend->>Tx: write_payload(payload, dst=route.dst_stage)
+    Tx-->>USend: PayloadRef (handle to SHM / CUDA-IPC / inline)
+    USend->>DAct: recv_data_event.remote(DataEvent + PayloadRef)
+    DAct->>DRT: accept_data_event(event)
+    Note over DRT: recv_buffer.put_nowait(event)
+    DAct-->>USend: Ack.ok()
+    Note over USend: 立刻继续处理下一个 output
+
+    DRecv->>DRT: recv_buffer.get()
+    DRecv->>Tx: read_payload(ref)
+    Tx-->>DRecv: real payload (tensor / bytes)
+    Note over DRecv: filter stale epoch · check credit
+    DRecv->>DRecv: input_queue.put(ResolvedDataEvent)
+    DComp->>DComp: input_queue.get() → batch
+    DComp->>DComp: StageExecutor.run_batch()
+      </div>
+    </div>
+
+    <div class="callout sage">
+      <strong>读这一节的关键。</strong>
+      把 <code>recv_data_event</code> / <code>accept_data_event</code> / <code>recv_loop</code> 三个名字记牢：
+      "<em>RPC handler 只入队，loop 才搬数据</em>"。这是后续每个 stage 的统一接入模板。
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 3. COMPONENTS ═══ -->
+<section id="components">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Section 3</div>
+      <h2>组件<em>职责</em></h2>
+      <p class="section-sub">
+        五个层次自外向内：<code>StreamRuntimeActor</code> · <code>StageActor</code> · <code>StageRuntime</code> ·
+        <code>StageWorker</code> · <code>StageExecutor</code>。后面三个住在同一个 Ray actor 进程里。
+      </p>
+    </div>
+
+    <!-- StreamRuntimeActor -->
+    <h3>3.1 · StreamRuntimeActor — 系统级控制面</h3>
+    <div class="grid-2">
+      <div class="role-card accent">
+        <h4>负责</h4>
+        <ul>
+          <li>创建 Ray placement group 和 <code>StageActor</code></li>
+          <li>编译固定 Qwen graph preset</li>
+          <li>安装每个 stage 的 routing table</li>
+          <li>维护 <code>SessionState</code>：alive / epoch / turn / SLO / KV lease</li>
+          <li>接 API 输入，把 input chunk 转成 entry <code>DataEvent</code></li>
+          <li>处理 <code>BARGE_IN</code> · <code>CLOSE_SESSION</code> · <code>FLUSH</code> · <code>UPDATE_SLO</code></li>
+          <li>multicast control event 给相关 stage</li>
+        </ul>
+      </div>
+      <div class="role-card">
+        <h4>不负责</h4>
+        <ul>
+          <li><strong>不</strong>转发 Thinker → Talker → Code2Wav 的每个 chunk</li>
+          <li><strong>不</strong>持有大 tensor</li>
+          <li><strong>不</strong>替 stage 做 batch scheduling</li>
+        </ul>
+        <p style="color:var(--ink-mute);font-size:13px;margin-top:10px">
+          第一版可以中心化；它<strong>不在 payload 热路径上</strong>。未来如果成为瓶颈，可按 <code>session_id</code> shard。
+        </p>
+      </div>
+    </div>
+
+    <div class="code"><span class="kw">@ray.remote</span>
+<span class="kw">class</span> <span class="ty">StreamRuntimeActor</span>:
+    <span class="kw">async def</span> <span class="fn">start_graph</span>(self, graph: GraphSpec) -&gt; RuntimeInfo: ...
+    <span class="kw">async def</span> <span class="fn">open_session</span>(self, req: OpenSessionRequest) -&gt; SessionInfo: ...
+    <span class="kw">async def</span> <span class="fn">recv_input_chunk</span>(self, chunk: InputChunk) -&gt; Ack: ...
+    <span class="kw">async def</span> <span class="fn">recv_control_event</span>(self, event: ControlEvent) -&gt; Ack: ...
+    <span class="kw">async def</span> <span class="fn">close_session</span>(self, session_id: <span class="ty">str</span>, reason: <span class="ty">str</span>) -&gt; Ack: ...
+    <span class="kw">async def</span> <span class="fn">shutdown_runtime</span>(self) -&gt; <span class="kw">None</span>: ...</div>
+
+    <!-- StageActor -->
+    <h3>3.2 · StageActor — Ray RPC 边界</h3>
+    <p>一个物理 stage 一个 Ray actor。内部包含 <code>StageRuntime</code> 和 <code>StageWorker</code>。</p>
+    <div class="code"><span class="kw">@ray.remote</span>
+<span class="kw">class</span> <span class="ty">StageActor</span>:
+    <span class="kw">async def</span> <span class="fn">start_stage</span>(self, spec: StageSpec, runtime: RuntimeInfo) -&gt; StageInfo: ...
+    <span class="kw">async def</span> <span class="fn">set_routes</span>(self, routes: <span class="ty">tuple</span>[Route, ...]) -&gt; Ack: ...
+    <span class="kw">async def</span> <span class="fn">recv_data_event</span>(self, event: DataEvent) -&gt; Ack: ...
+    <span class="kw">async def</span> <span class="fn">recv_control_event</span>(self, event: ControlEvent) -&gt; Ack: ...
+    <span class="kw">async def</span> <span class="fn">recv_credit_event</span>(self, event: CreditEvent) -&gt; Ack: ...
+    <span class="kw">async def</span> <span class="fn">stop_stage</span>(self) -&gt; <span class="kw">None</span>: ...</div>
+    <div class="callout">
+      <code>recv_data_event()</code> 只能传 <code>DataEvent + PayloadRef</code> metadata，
+      <strong>不能</strong>把 tensor body 放进 Ray object store。
+      所有 <code>recv_*()</code> 都是 RPC handler，只调用本地 <code>StageRuntime.accept_*()</code> 然后返回 <code>Ack</code>。
+    </div>
+
+    <!-- StageRuntime -->
+    <h3>3.3 · StageRuntime — streaming runtime shell</h3>
+    <p>
+      每个 stage 的 streaming runtime shell。对应 SGLang-Omni 的 stage runtime，<strong>不是 model engine</strong>，
+      <strong>不是 Ray RPC actor</strong>。Ray RPC 边界在 <code>StageActor</code> 上。
+    </p>
+
+    <table class="table">
+      <thead><tr><th>能力</th><th>方法 / 循环</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><span class="pill indigo">accept</span></td>
+            <td><code>accept_data_event</code><br><code>accept_control_event</code><br><code>accept_credit_event</code></td>
+            <td>RPC handler 调用，只记录 metadata 或更新轻量状态，<strong>不读大 payload</strong>。</td></tr>
+        <tr><td><span class="pill">RecvLoop</span></td>
+            <td><code>recv_loop()</code></td>
+            <td>消费 accept 留下的事件；用 <code>TransportManager.read_payload()</code> 解析 payload，过滤 stale event，写入 <code>input_queue</code>。</td></tr>
+        <tr><td><span class="pill gold">transport</span></td>
+            <td><code>write_payload</code> · <code>read_payload</code> · <code>release_payload</code></td>
+            <td>搬数据；worker 输出后存 payload；用完释放。</td></tr>
+        <tr><td><span class="pill">routing table</span></td>
+            <td><code>routes_for(output.port)</code></td>
+            <td>根据 worker 输出的 port 选择下游 stage 和 edge。</td></tr>
+        <tr><td><span class="pill gold">credit / backpressure</span></td>
+            <td><code>check_credit</code> · <code>release_credit</code></td>
+            <td>检查 edge credit，决定 data 是否可进 <code>input_queue</code> 或发给下游；没 credit 时 hold / merge / drop。</td></tr>
+        <tr><td><span class="pill sage">SendLoop</span></td>
+            <td><code>send_loop()</code> / <code>send_output()</code></td>
+            <td>从 <code>output_queue</code> 取 worker 输出，按 routing + credit + transport 转成新的 <code>DataEvent</code>，通知下游。</td></tr>
+      </tbody>
+    </table>
+
+    <h4>StageRuntime 最小代码形态</h4>
+    <div class="code"><span class="kw">@ray.remote</span>
+<span class="kw">class</span> <span class="ty">StageActor</span>:
+    <span class="kw">async def</span> <span class="fn">recv_data_event</span>(self, event: DataEvent) -&gt; Ack:
+        <span class="cmt"># RPC handler: 只接收通知，不搬 payload，不跑模型。</span>
+        self.runtime.accept_data_event(event)
+        <span class="kw">return</span> Ack.ok()
+
+
+<span class="kw">class</span> <span class="ty">StageRuntime</span>:
+    <span class="kw">def</span> <span class="fn">accept_data_event</span>(self, event: DataEvent) -&gt; <span class="kw">None</span>:
+        <span class="cmt"># 本地方法: metadata-only，供 recv_loop 后续消费。</span>
+        self.recv_buffer.put_nowait(event)
+
+    <span class="kw">async def</span> <span class="fn">recv_loop</span>(self) -&gt; <span class="kw">None</span>:
+        <span class="kw">while True</span>:
+            event = <span class="kw">await</span> self.recv_buffer.get()
+            payload = <span class="kw">await</span> self.transport.read_payload(event.payload)
+            resolved = ResolvedDataEvent(event=event, payload=payload)
+            <span class="kw">await</span> self.input_queue.put(resolved)
+
+
+    <span class="kw">async def</span> <span class="fn">send_output</span>(self, output: SchedulerOutput) -&gt; <span class="kw">None</span>:
+        <span class="kw">for</span> route <span class="kw">in</span> self.routes_for(output.port):
+            <span class="cmt"># transport: 搬 payload 本体，返回 PayloadRef。</span>
+            ref = <span class="kw">await</span> self.transport.write_payload(output.payload, dst=route.dst_stage)
+            <span class="cmt"># forwarding: 只把 DataEvent + PayloadRef 通知给下游。</span>
+            event = DataEvent.from_output(output, route, payload=ref)
+            <span class="kw">await</span> self.downstream[route.dst_stage].recv_data_event.remote(event)</div>
+
+    <!-- StageWorker / StageExecutor -->
+    <h3>3.4 · StageWorker — ComputeLoop + 本地调度</h3>
+    <p>本 stage 的计算组件，内部只有一个 <code>ComputeLoop</code>。第一版<strong>不</strong>单独拆 <code>StageScheduler</code>。</p>
+
+    <div class="grid-2">
+      <div class="role-card sage">
+        <h4>StageWorker</h4>
+        <ul>
+          <li>从 <code>input_queue</code> 取 event</li>
+          <li>用 local batch policy 组 batch</li>
+          <li>调 <code>StageExecutor.run_batch()</code></li>
+          <li>把 <code>SchedulerOutput</code> 放入 <code>output_queue</code></li>
+          <li>处理本 stage 的 local cancel / flush / close</li>
+        </ul>
+      </div>
+      <div class="role-card gold">
+        <h4>StageExecutor</h4>
+        <ul>
+          <li>加载模型权重</li>
+          <li>管本 stage 的模型对象和 device</li>
+          <li>执行 prefill / decode / codec batch</li>
+          <li>产出 typed output</li>
+        </ul>
+        <p style="color:var(--ink-mute);font-size:13px;margin-top:8px">第一版可以先 fake executor，先验证 runtime · transport · control · credit。</p>
+      </div>
+    </div>
+
+    <div class="code"><span class="kw">class</span> <span class="ty">StageWorker</span>:
+    <span class="kw">async def</span> <span class="fn">compute_loop</span>(self) -&gt; <span class="kw">None</span>: ...
+    <span class="kw">async def</span> <span class="fn">accept_control_event</span>(self, event: ControlEvent) -&gt; <span class="kw">None</span>: ...
+    <span class="kw">async def</span> <span class="fn">build_batch</span>(self) -&gt; ModelBatch: ...
+
+<span class="kw">class</span> <span class="ty">BatchPolicy</span>:
+    <span class="kw">def</span> <span class="fn">choose</span>(
+        self,
+        pending: <span class="ty">list</span>[ResolvedDataEvent],
+        capacity: StageCapacity,
+        now_ns: <span class="ty">int</span>,
+    ) -&gt; <span class="ty">list</span>[ResolvedDataEvent]: ...
+
+<span class="kw">class</span> <span class="ty">StageExecutor</span>(<span class="ty">Protocol</span>):
+    <span class="kw">async def</span> <span class="fn">load_model</span>(self, spec: StageSpec) -&gt; <span class="kw">None</span>: ...
+    <span class="kw">async def</span> <span class="fn">run_batch</span>(self, batch: ModelBatch) -&gt; <span class="ty">list</span>[SchedulerOutput]: ...
+    <span class="kw">async def</span> <span class="fn">accept_control_event</span>(self, event: ControlEvent) -&gt; <span class="kw">None</span>: ...
+    <span class="kw">async def</span> <span class="fn">unload_model</span>(self) -&gt; <span class="kw">None</span>: ...</div>
+
+    <!-- inside one actor -->
+    <h3>3.5 · 一个 StageActor 内部的全貌</h3>
+    <div class="mermaid-wrap">
+      <div class="m-title">图 3.1 · StageActor 内部组件 + 数据通路</div>
+      <div class="m-sub">
+        actor 边界是 RPC；内部是 asyncio task 间的 queue 拉动。<strong>每条 RPC 都不直接读 payload，
+        也不直接 forward 给下游</strong>。
+      </div>
+      <div class="mermaid">
+flowchart TB
+  classDef rpc    fill:#DCE0E8,stroke:#4A5A78,color:#1F1E1C
+  classDef buf    fill:#F4E2D7,stroke:#A85940,color:#1F1E1C
+  classDef loop   fill:#FAF7F0,stroke:#CC785C,color:#1F1E1C
+  classDef store  fill:#E0E8DC,stroke:#6E8B6A,color:#1F1E1C
+  classDef tx     fill:#F0E4C9,stroke:#B8862E,color:#1F1E1C
+
+  subgraph BOUNDARY [StageActor &nbsp;ray.remote]
+    direction TB
+
+    subgraph RPCS [RPC ingress · 由别的 actor 调用]
+      direction LR
+      RD["recv_data_event(DataEvent)"]:::rpc
+      RC["recv_control_event(ControlEvent)"]:::rpc
+      RCR["recv_credit_event(CreditEvent)"]:::rpc
+    end
+
+    subgraph RUNTIME [StageRuntime · 本进程内]
+      direction TB
+      AD["accept_data_event()"]:::buf
+      AC["accept_control_event()"]:::buf
+      ACR["accept_credit_event()"]:::buf
+      RB[(recv_buffer<br/>metadata only)]:::store
+      RL[RecvLoop · asyncio task]:::loop
+      IQ[(input_queue)]:::store
+      OQ[(output_queue)]:::store
+      SL[SendLoop · asyncio task]:::loop
+      TX[TransportManager<br/>read · write · release]:::tx
+      RT[routing table · credit]:::tx
+    end
+
+    subgraph WORKER [StageWorker]
+      direction TB
+      CL[ComputeLoop · asyncio task]:::loop
+      BP[BatchPolicy]:::loop
+      EX[StageExecutor.run_batch]:::loop
+    end
+
+    RD --&gt; AD --&gt; RB
+    RC --&gt; AC
+    RCR --&gt; ACR
+    RB --&gt; RL
+    RL -- "transport.read_payload(ref)" --&gt; TX
+    RL --&gt; IQ
+    IQ --&gt; CL
+    CL --&gt; BP --&gt; EX --&gt; OQ
+    AC -. update epoch / flush .-&gt; CL
+    ACR -. add credit .-&gt; SL
+    OQ --&gt; SL
+    SL -- "transport.write_payload(payload)" --&gt; TX
+    SL -- "downstream.recv_data_event.remote()" --&gt; DOWN[(downstream StageActor)]:::rpc
+  end
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 4. GRAPH & ROUTING ═══ -->
+<section id="graph">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Section 4</div>
+      <h2>Graph 与 <em>Routing</em></h2>
+      <p class="section-sub">
+        第一版只支持<strong>固定 preset</strong>，不做通用 graph compiler。executor 只 emit
+        <code>output.port</code>，<code>StageRuntime</code> 根据本地 routing table 选下游。
+      </p>
+    </div>
+
+    <h3>4.1 · Qwen3-TTS preset</h3>
+    <div class="mermaid-wrap">
+      <div class="m-title">图 4.1 · TTS 单向链</div>
+      <div class="mermaid">
+flowchart LR
+  classDef stage fill:#FAF7F0,stroke:#CC785C,color:#1F1E1C
+  classDef sink  fill:#E0E8DC,stroke:#6E8B6A,color:#1F1E1C
+  TI[TextIngress]:::stage --&gt;|tokens| TLK[Talker]:::stage
+  TLK --&gt;|codec_tokens| CP[CodecPacker]:::stage
+  CP --&gt;|codec_frame| C2W[Code2Wav]:::stage
+  C2W --&gt;|audio chunk| AS[AudioSink]:::sink
+      </div>
+    </div>
+
+    <h3>4.2 · Qwen3-Omni duplex preset</h3>
+    <div class="mermaid-wrap">
+      <div class="m-title">图 4.2 · 三模态 ingress + Thinker + Talker 双输出</div>
+      <div class="mermaid">
+flowchart LR
+  classDef ingress fill:#DCE0E8,stroke:#4A5A78,color:#1F1E1C
+  classDef stage   fill:#FAF7F0,stroke:#CC785C,color:#1F1E1C
+  classDef sink    fill:#E0E8DC,stroke:#6E8B6A,color:#1F1E1C
+
+  AI[AudioIngress]:::ingress --&gt; AP[AudioPreprocess]:::stage
+  TI[TextIngress]:::ingress --&gt; TP[TextPreprocess]:::stage
+  VI[VideoIngress]:::ingress --&gt; VE[VisionEncoder]:::stage
+  AP --&gt; THK[Thinker]:::stage
+  TP --&gt; THK
+  VE --&gt; THK
+  THK --&gt;|hidden_text| TS[TextSink]:::sink
+  THK --&gt;|hidden_audio| TLK[Talker]:::stage
+  TLK --&gt;|codec_tokens| C2W[Code2Wav]:::stage
+  C2W --&gt;|audio chunk| AS[AudioSink]:::sink
+      </div>
+    </div>
+
+    <h3>4.3 · 数据结构</h3>
+    <div class="code"><span class="kw">@dataclass</span>(frozen=<span class="kw">True</span>)
+<span class="kw">class</span> <span class="ty">GraphSpec</span>:
+    graph_id: <span class="ty">str</span>
+    stages: <span class="ty">dict</span>[<span class="ty">str</span>, StageSpec]
+    edges: <span class="ty">dict</span>[<span class="ty">str</span>, EdgeSpec]
+    ingress: <span class="ty">dict</span>[<span class="ty">str</span>, <span class="ty">str</span>]       <span class="cmt"># modality -&gt; entry stage</span>
+
+
+<span class="kw">@dataclass</span>(frozen=<span class="kw">True</span>)
+<span class="kw">class</span> <span class="ty">Route</span>:
+    edge_id: <span class="ty">str</span>
+    src_stage: <span class="ty">str</span>
+    src_port: <span class="ty">str</span>
+    dst_stage: <span class="ty">str</span>
+    dst_port: <span class="ty">str</span></div>
+
+    <div class="callout indigo">
+      <strong>解耦点。</strong> stage executor 只 emit <code>output.port = "codec_tokens"</code>，
+      下游是谁、走哪条 transport 都由 routing table 决定。这让同一个 Talker 在 TTS 和 duplex 两个 graph
+      里复用，不需要改 executor。
+    </div>
+
+    <h3>4.4 · routing 示例</h3>
+    <table class="table">
+      <thead><tr><th>output.port</th><th>src_stage</th><th>dst_stage.dst_port</th></tr></thead>
+      <tbody>
+        <tr><td><code>codec_tokens</code></td><td>Talker</td><td><code>Code2Wav.input</code></td></tr>
+        <tr><td><code>hidden_text</code></td><td>Thinker</td><td><code>TextSink.input</code></td></tr>
+        <tr><td><code>hidden_audio</code></td><td>Thinker</td><td><code>Talker.input</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══ 5. MESSAGES ═══ -->
+<section id="messages">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Section 5</div>
+      <h2>消息<em>模型</em></h2>
+      <p class="section-sub">
+        三类事件：data notification、control multicast、receiver-driven credit。
+        每一类都<strong>不携带 payload body</strong>，body 由 transport 管。
+      </p>
+    </div>
+
+    <div class="grid-3">
+      <div class="role-card">
+        <div class="role-name"><span class="tag">DATA</span></div>
+        <h4>DataEvent</h4>
+        <p class="role-sub">stage-to-stage data notification · 只携带 payload handle</p>
+      </div>
+      <div class="role-card indigo">
+        <div class="role-name"><span class="tag indigo">CONTROL</span></div>
+        <h4>ControlEvent</h4>
+        <p class="role-sub">session / control plane 消息 · 可 multicast</p>
+      </div>
+      <div class="role-card gold">
+        <div class="role-name"><span class="tag gold">CREDIT</span></div>
+        <h4>CreditEvent</h4>
+        <p class="role-sub">receiver-driven backpressure · 按 edge 返还</p>
+      </div>
+    </div>
+
+    <h3>5.1 · DataEvent</h3>
+    <div class="code"><span class="kw">@dataclass</span>
+<span class="kw">class</span> <span class="ty">DataEvent</span>:
+    event_id: <span class="ty">str</span>
+    session_id: <span class="ty">str</span>
+    stream_id: <span class="ty">str</span>
+    epoch: <span class="ty">int</span>
+    turn_id: <span class="ty">int</span>
+    seq_no: <span class="ty">int</span>
+    graph_id: <span class="ty">str</span>
+    edge_id: <span class="ty">str</span>
+    src_stage: <span class="ty">str</span>
+    dst_stage: <span class="ty">str</span>
+    dst_port: <span class="ty">str</span>
+    payload: PayloadRef                <span class="cmt"># 只是 handle，不是 body</span>
+    deadline_ns: <span class="ty">int</span> | <span class="kw">None</span>
+    slo_class: <span class="ty">str</span>
+    flags: <span class="ty">set</span>[<span class="ty">str</span>]</div>
+
+    <h3>5.2 · ControlEvent</h3>
+    <div class="code"><span class="kw">class</span> <span class="ty">ControlType</span>(<span class="ty">str</span>, <span class="ty">Enum</span>):
+    OPEN_SESSION = <span class="str">"open_session"</span>
+    CLOSE_SESSION = <span class="str">"close_session"</span>
+    BARGE_IN = <span class="str">"barge_in"</span>
+    CANCEL_EPOCH = <span class="str">"cancel_epoch"</span>
+    UPDATE_SLO = <span class="str">"update_slo"</span>
+    FLUSH = <span class="str">"flush"</span>
+    SHUTDOWN = <span class="str">"shutdown"</span>
+
+
+<span class="kw">@dataclass</span>
+<span class="kw">class</span> <span class="ty">ControlEvent</span>:
+    control_id: <span class="ty">str</span>
+    session_id: <span class="ty">str</span>
+    type: ControlType
+    epoch: <span class="ty">int</span> | <span class="kw">None</span>
+    target_stages: <span class="ty">tuple</span>[<span class="ty">str</span>, ...]
+    payload: <span class="ty">dict</span>[<span class="ty">str</span>, <span class="ty">Any</span>]</div>
+
+    <h3>5.3 · CreditEvent</h3>
+    <div class="code"><span class="kw">@dataclass</span>
+<span class="kw">class</span> <span class="ty">CreditEvent</span>:
+    edge_id: <span class="ty">str</span>
+    session_id: <span class="ty">str</span> | <span class="kw">None</span>
+    credits: <span class="ty">int</span>
+    bytes_available: <span class="ty">int</span>
+    reason: <span class="ty">str</span></div>
+  </div>
+</section>
+
+<!-- ═══ 6. TRANSPORT ═══ -->
+<section id="transport">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Section 6</div>
+      <h2>PayloadRef 与 <em>Transport</em></h2>
+      <p class="section-sub">
+        业务层只看到统一 <code>PayloadRef</code>。<strong>transport 只搬 payload 本体</strong>；
+        真正的 stage-to-stage send = transport 搬数据 + downstream 发通知，两步。
+      </p>
+    </div>
+
+    <!-- two-step send -->
+    <div class="mermaid-wrap">
+      <div class="m-title">图 6.1 · 两步 send：搬数据 vs 发通知</div>
+      <div class="mermaid">
+flowchart LR
+  classDef step  fill:#FAF7F0,stroke:#CC785C,color:#1F1E1C
+  classDef tx    fill:#F0E4C9,stroke:#B8862E,color:#1F1E1C
+  classDef rpc   fill:#DCE0E8,stroke:#4A5A78,color:#1F1E1C
+  PL["payload<br/>(tensor / bytes)"]:::step
+  PL -- "1. transport.write_payload()" --&gt; TX[TransportManager<br/>SHM · CUDA-IPC · inline · NIXL]:::tx
+  TX -- "PayloadRef" --&gt; DE[DataEvent + PayloadRef]:::step
+  DE -- "2. downstream.recv_data_event.remote()" --&gt; DOWN[Downstream StageActor]:::rpc
+      </div>
+    </div>
+
+    <h3>6.1 · PayloadRef</h3>
+    <div class="code"><span class="kw">@dataclass</span>(frozen=<span class="kw">True</span>)
+<span class="kw">class</span> <span class="ty">PayloadRef</span>:
+    payload_id: <span class="ty">str</span>
+    kind: <span class="ty">str</span>                <span class="cmt"># tokens / hidden / codec / audio / video / kv</span>
+    device: <span class="ty">str</span>              <span class="cmt"># cpu / cuda</span>
+    dtype: <span class="ty">str</span> | <span class="kw">None</span>
+    shape: <span class="ty">tuple</span>[<span class="ty">int</span>, ...] | <span class="kw">None</span>
+    nbytes: <span class="ty">int</span>
+    transport: <span class="ty">str</span>           <span class="cmt"># inline / shm / local_tensor / cuda_ipc / kv_lease / nixl</span>
+    handle: <span class="ty">Any</span>
+    owner_stage: <span class="ty">str</span>
+    lifetime: <span class="ty">str</span>            <span class="cmt"># event / turn / session</span>
+
+
+<span class="kw">class</span> <span class="ty">TransportManager</span>:
+    <span class="kw">async def</span> <span class="fn">write_payload</span>(self, payload: <span class="ty">Any</span>, dst: StageInfo) -&gt; PayloadRef: ...
+    <span class="kw">async def</span> <span class="fn">read_payload</span>(self, ref: PayloadRef) -&gt; <span class="ty">Any</span>: ...
+    <span class="kw">async def</span> <span class="fn">release_payload</span>(self, ref: PayloadRef) -&gt; <span class="kw">None</span>: ...</div>
+
+    <h3>6.2 · transport 类型矩阵</h3>
+    <table class="table">
+      <thead><tr><th>transport</th><th>版本</th><th>载荷类型</th><th>用途</th></tr></thead>
+      <tbody>
+        <tr><td><code>inline</code></td><td><span class="pill sage">v1</span></td><td>小 CPU 对象</td><td>直接放 DataEvent handle，无复制</td></tr>
+        <tr><td><code>shm</code></td><td><span class="pill sage">v1</span></td><td>audio bytes / video frame / numpy / CPU tensor</td><td>CPU 大对象走 shared memory，避免 RPC 序列化</td></tr>
+        <tr><td><code>local_tensor</code></td><td><span class="pill sage">v1</span></td><td>GPU tensor (单进程)</td><td>prototype 直接传 Python object ref；只验证 GPU hidden flow</td></tr>
+        <tr><td><code>cuda_ipc</code></td><td><span class="pill">v2</span></td><td>GPU tensor</td><td>same-node Ray actor 间共享 GPU 显存</td></tr>
+        <tr><td><code>kv_lease</code></td><td><span class="pill">v2</span></td><td>KV cache</td><td>传 lease id / block id / seq_len，不复制 KV</td></tr>
+        <tr><td><code>nixl</code></td><td><span class="pill">v2</span></td><td>cross-node payload</td><td>跨节点 GPU / CPU 高速通路</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      <strong>不可越界。</strong>
+      ① data body <strong>不</strong>放进 Ray object store；
+      ② stage-to-stage notification 和 <code>recv_buffer</code> 里只放 <code>DataEvent + PayloadRef</code>；
+      ③ KV 不作为普通 tensor payload 复制；
+      ④ transport 只管位置、复制、释放，<strong>不</strong>管选路、限流和 session policy；
+      ⑤ forwarding 只发 <code>DataEvent</code> 通知，<strong>不</strong>搬 payload body。
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 7. QUEUES ═══ -->
+<section id="queues">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Section 7</div>
+      <h2>Queue 与 <em>RPC 接入</em></h2>
+      <p class="section-sub">
+        每个 <code>StageActor</code> 内只保留两条主数据队列：<code>input_queue</code> 和 <code>output_queue</code>。
+        RPC handler 和 RecvLoop 之间还有一个轻量 <code>recv_buffer</code>，<strong>只存 metadata</strong>。
+      </p>
+    </div>
+
+    <div class="mermaid-wrap">
+      <div class="m-title">图 7.1 · 三个 queue + 三个 loop 的关系</div>
+      <div class="mermaid">
+flowchart LR
+  classDef rpc   fill:#DCE0E8,stroke:#4A5A78,color:#1F1E1C
+  classDef buf   fill:#F4E2D7,stroke:#A85940,color:#1F1E1C
+  classDef store fill:#E0E8DC,stroke:#6E8B6A,color:#1F1E1C
+  classDef loop  fill:#FAF7F0,stroke:#CC785C,color:#1F1E1C
+
+  RD[recv_data_event RPC]:::rpc --&gt; ADE["accept_data_event()"]:::buf --&gt; RB[(recv_buffer<br/>metadata only)]:::store
+  RB --&gt; RL[RecvLoop]:::loop -- "read_payload · filter epoch · check credit" --&gt; IQ[(input_queue)]:::store
+  IQ --&gt; CL[ComputeLoop]:::loop -- "build_batch · run_batch" --&gt; OQ[(output_queue)]:::store
+  OQ --&gt; SL[SendLoop]:::loop -- "routes · credit · write_payload" --&gt; OUT[downstream recv_data_event RPC]:::rpc
+      </div>
+    </div>
+
+    <table class="table">
+      <thead><tr><th>名字</th><th>谁写</th><th>谁读</th><th>含 payload body？</th><th>承载语义</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>recv_buffer</code></td>
+          <td><code>accept_data_event()</code></td>
+          <td><code>RecvLoop</code></td>
+          <td><strong>否</strong> · metadata only</td>
+          <td>让 RPC handler 快速返回；不是主背压源</td>
+        </tr>
+        <tr>
+          <td><code>input_queue</code></td>
+          <td><code>RecvLoop</code></td>
+          <td><code>ComputeLoop</code></td>
+          <td>是 · ResolvedDataEvent (event + 真实 payload)</td>
+          <td><code>build_batch</code> 的输入；EDF / 截断点</td>
+        </tr>
+        <tr>
+          <td><code>output_queue</code></td>
+          <td><code>ComputeLoop</code></td>
+          <td><code>SendLoop</code></td>
+          <td>是 · SchedulerOutput</td>
+          <td>跨 stage forwarding 的待发队列</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout sage">
+      <strong>RPC 通道选择。</strong>
+      control 可以走 Ray RPC，因为 payload 小、频率低。data notification 可以先走 Ray RPC，但只传 metadata。
+      后续如果 <code>recv_data_event()</code> RPC 成为瓶颈，再把 same-node edge 换成 Unix socket 或
+      shared-memory ring doorbell。
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 8. DUPLEX SESSION ═══ -->
+<section id="duplex">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Section 8</div>
+      <h2>Duplex Session <em>语义</em></h2>
+      <p class="section-sub">
+        <code>SessionState</code> 是 <code>StreamRuntime</code> 的核心。barge-in / close 通过
+        control multicast 实现，stage 本地按 epoch 过滤。
+      </p>
+    </div>
+
+    <div class="code"><span class="kw">@dataclass</span>
+<span class="kw">class</span> <span class="ty">SessionState</span>:
+    session_id: <span class="ty">str</span>
+    graph_id: <span class="ty">str</span>
+    status: <span class="ty">str</span>              <span class="cmt"># open · draining · closed</span>
+    active_epoch: <span class="ty">int</span>
+    active_turn_id: <span class="ty">int</span>
+    slo_class: <span class="ty">str</span>
+    kv_leases: <span class="ty">dict</span>[<span class="ty">str</span>, PayloadRef]
+    stages_holding_state: <span class="ty">set</span>[<span class="ty">str</span>]</div>
+
+    <h3>8.1 · 正常输入</h3>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="num">1</div>
+        <div class="body">
+          <h4>API server → StreamRuntime</h4>
+          <p>客户端发来 <code>AudioChunk / TextChunk / VideoFrame</code>。</p>
+          <div class="payload">await <code>StreamRuntimeActor.recv_input_chunk(chunk)</code></div>
+        </div>
+      </div>
+      <div class="flow-step">
+        <div class="num">2</div>
+        <div class="body">
+          <h4>StreamRuntime 生成 entry DataEvent</h4>
+          <p>更新 session state，挂上当前 <code>active_epoch</code> / <code>active_turn_id</code>。</p>
+          <div class="payload"><code>DataEvent(session, epoch, ..., payload=PayloadRef)</code></div>
+        </div>
+      </div>
+      <div class="flow-step">
+        <div class="num">3</div>
+        <div class="body">
+          <h4>entry StageActor.recv_data_event()</h4>
+          <p>RPC handler 接通知，<code>accept_data_event()</code> 入 <code>recv_buffer</code>，立即返回 Ack。</p>
+        </div>
+      </div>
+      <div class="flow-step">
+        <div class="num">4</div>
+        <div class="body">
+          <h4>后续 stage 间 transport + forwarding</h4>
+          <p>每条 edge 都是 <strong>transport 搬 payload + forwarding 发 DataEvent</strong>；不再回到 StreamRuntime。</p>
+        </div>
+      </div>
+    </div>
+
+    <h3>8.2 · Barge-in</h3>
+    <div class="mermaid-wrap">
+      <div class="m-title">图 8.1 · BARGE_IN multicast 取消旧 epoch</div>
+      <div class="m-sub">
+        旧 epoch 的 audio / codec 立即丢弃。Thinker 的 KV <strong>默认保留</strong>，新输入用 new_epoch。
+      </div>
+      <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant API
+    participant SR as StreamRuntimeActor
+    participant THK as Thinker StageActor
+    participant TLK as Talker StageActor
+    participant C2W as Code2Wav StageActor
+    participant AS  as AudioSink
+
+    API->>SR: control: BARGE_IN
+    Note over SR: active_epoch += 1<br/>session.status = "open"
+    par multicast CANCEL_EPOCH(old_epoch)
+        SR->>TLK: recv_control_event(CANCEL_EPOCH)
+        SR->>C2W: recv_control_event(CANCEL_EPOCH)
+        SR->>AS: recv_control_event(CANCEL_EPOCH)
+    end
+    Note over TLK,C2W: RecvLoop / ComputeLoop / SendLoop<br/>过滤 stale epoch 数据，release payload
+    Note over THK: KV 默认保留（可选）
+    API->>SR: recv_input_chunk(new chunk, epoch=new)
+    SR->>THK: entry DataEvent(epoch=new)
+      </div>
+    </div>
+
+    <h3>8.3 · Close</h3>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="num">1</div>
+        <div class="body">
+          <h4>API CLOSE_SESSION</h4>
+          <div class="payload">await <code>StreamRuntime.close_session(session_id, reason)</code></div>
+        </div>
+      </div>
+      <div class="flow-step">
+        <div class="num">2</div>
+        <div class="body">
+          <h4>multicast CLOSE_SESSION</h4>
+          <p>下发给 <code>stages_holding_state</code> 中的每个 stage。</p>
+        </div>
+      </div>
+      <div class="flow-step">
+        <div class="num">3</div>
+        <div class="body">
+          <h4>各 stage release</h4>
+          <p>release KV lease · release pending payload · close edge queues。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 9. BACKPRESSURE ═══ -->
+<section id="backpressure">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Section 9</div>
+      <h2>Backpressure 与 <em>Deadline</em></h2>
+      <p class="section-sub">
+        每条 edge 有 bounded credit。downstream 接收并释放后才把 credit 返还给上游 <code>SendLoop</code>。
+      </p>
+    </div>
+
+    <div class="mermaid-wrap">
+      <div class="m-title">图 9.1 · credit 在 edge 上的循环</div>
+      <div class="mermaid">
+sequenceDiagram
+    participant USL as Upstream SendLoop
+    participant DRT as Downstream StageRuntime
+    participant DCL as Downstream ComputeLoop
+    Note over USL: credit &gt; 0 才允许 forward
+    USL->>DRT: recv_data_event(DataEvent + PayloadRef)
+    DRT-->>USL: Ack + return event credit
+    DCL->>DCL: run_batch · release_payload
+    DCL-->>USL: recv_credit_event(byte credit)
+    Note over USL: SendLoop wake up<br/>继续 forward
+      </div>
+    </div>
+
+    <h3>9.1 · 规则</h3>
+    <ul style="color:var(--ink-soft);font-size:14px;line-height:1.8">
+      <li>downstream accepted event 后返回 <strong>event credit</strong>。</li>
+      <li>payload release 后返回 <strong>byte credit</strong>。</li>
+      <li>producer 没 credit 时不能继续 forwarding data notification。</li>
+      <li>control event 可以越过 credit，但必须小。</li>
+      <li>stale epoch data 直接 drop 并 release payload。</li>
+      <li>deadline policy 在 <code>RecvLoop</code> 写 <code>input_queue</code> 前和 <code>StageWorker.build_batch()</code> 中都可以使用。</li>
+    </ul>
+
+    <h3>9.2 · 第一版 policy</h3>
+    <div class="grid-2">
+      <div class="role-card">
+        <h4>调度策略</h4>
+        <ul>
+          <li><code>FIFO</code></li>
+          <li><code>EDF</code></li>
+          <li><code>EDF + credit</code></li>
+        </ul>
+      </div>
+      <div class="role-card sage">
+        <h4>容错策略</h4>
+        <ul>
+          <li><code>stale epoch drop</code></li>
+          <li><code>audio low-watermark flush</code></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 10. VS VLLM ═══ -->
+<section id="vs-vllm">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Section 10</div>
+      <h2>与 vLLM / SGLang-Omni 的<em>关系</em></h2>
+      <p class="section-sub">
+        复用工具链和模型权重；<strong>不</strong>复用 request lifecycle 和中心 orchestrator。
+      </p>
+    </div>
+
+    <div class="grid-2">
+      <div class="role-card sage">
+        <h4>复用</h4>
+        <ul>
+          <li>tokenizer / processor helper</li>
+          <li>Qwen 模型代码和权重加载 helper</li>
+          <li>attention / kernel / CUDA graph 经验</li>
+          <li>SGLang-Omni stage runtime 形态：control/data 分离、transport 搬 payload、control/notification 通知下游可消费</li>
+        </ul>
+      </div>
+      <div class="role-card">
+        <h4>不复用（不作为主路径）</h4>
+        <ul>
+          <li>vLLM <code>Request</code></li>
+          <li>vLLM <code>EngineCore</code></li>
+          <li>vLLM scheduler request lifecycle</li>
+          <li>vLLM-Omni <code>Orchestrator</code></li>
+          <li><code>WAITING_FOR_CHUNK</code></li>
+          <li>full-payload / async-chunk 双路径兼容</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 11. ROADMAP ═══ -->
+<section id="roadmap">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="section-eyebrow">Section 11</div>
+      <h2>最小实现<em>顺序</em>与验收实验</h2>
+      <p class="section-sub">
+        11 步从数据结构到生产模型；最后用 4 个实验验证 stage-to-stage、duplex、backpressure、transport。
+      </p>
+    </div>
+
+    <h3>11.1 · 实现顺序</h3>
+    <div class="flow">
+      <div class="flow-step"><div class="num">1</div><div class="body"><h4>数据结构</h4>
+        <p>定义 <code>GraphSpec</code> · <code>Route</code> · <code>DataEvent</code> · <code>ControlEvent</code> · <code>CreditEvent</code> · <code>PayloadRef</code>。</p></div></div>
+      <div class="flow-step"><div class="num">2</div><div class="body"><h4>transport v1</h4>
+        <p>实现 <code>InlineTransport</code> · <code>SharedMemoryTransport</code> · <code>LocalTensorTransport</code>。</p></div></div>
+      <div class="flow-step"><div class="num">3</div><div class="body"><h4>StreamRuntime 启动链</h4>
+        <p><code>StreamRuntimeActor.start_graph()</code> 启动 stage actor 并 <code>set_routes()</code>。</p></div></div>
+      <div class="flow-step"><div class="num">4</div><div class="body"><h4>三件套</h4>
+        <p>实现 <code>StageActor</code> + <code>StageRuntime</code> + <code>StageWorker</code>。</p></div></div>
+      <div class="flow-step"><div class="num">5</div><div class="body"><h4>fake executor 跑通</h4>
+        <p>用 fake executor 跑通 3-stage graph。</p></div></div>
+      <div class="flow-step"><div class="num">6</div><div class="body"><h4>BARGE_IN</h4>
+        <p>加 <code>BARGE_IN / CANCEL_EPOCH</code>，验证 stale output drop。</p></div></div>
+      <div class="flow-step"><div class="num">7</div><div class="body"><h4>credit</h4>
+        <p>加 edge credit，验证 bounded queue。</p></div></div>
+      <div class="flow-step"><div class="num">8</div><div class="body"><h4>EDF batch policy</h4>
+        <p>加 EDF / deadline batch policy。</p></div></div>
+      <div class="flow-step"><div class="num">9</div><div class="body"><h4>Qwen3-TTS</h4>
+        <p>接 Talker → Code2Wav。</p></div></div>
+      <div class="flow-step"><div class="num">10</div><div class="body"><h4>Qwen3-Omni</h4>
+        <p>接 Thinker hidden → Talker。</p></div></div>
+      <div class="flow-step"><div class="num">11</div><div class="body"><h4>CUDA IPC</h4>
+        <p>需要多进程 GPU tensor 时实现 <code>CudaIpcTransport</code>。</p></div></div>
+    </div>
+
+    <h3 style="margin-top:36px">11.2 · 第一版验收实验</h3>
+    <table class="table">
+      <thead><tr><th>实验</th><th>验证点</th></tr></thead>
+      <tbody>
+        <tr><td><span class="pill">fake graph</span></td>
+            <td>stage-to-stage forwarding 不经过中心 runtime；中心 runtime 不搬 payload。</td></tr>
+        <tr><td><span class="pill indigo">duplex</span></td>
+            <td>barge-in 后旧 epoch audio / codec 被丢弃，新 epoch 正常输出。</td></tr>
+        <tr><td><span class="pill gold">backpressure</span></td>
+            <td>下游慢时上游 bounded，<strong>不</strong>出现无界 queue。</td></tr>
+        <tr><td><span class="pill sage">deadline</span></td>
+            <td>EDF 相比 FIFO 降低 audio underrun。</td></tr>
+        <tr><td><span class="pill">transport</span></td>
+            <td>Inline / SHM / LocalTensor 三种 payload 都能 trace 和 release。</td></tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin-top:36px">11.3 · 最终架构约束（一句话）</h3>
+    <div class="callout">
+      <code>StreamRuntime</code> owns session truth.<br>
+      <code>StageRuntime</code> owns RecvLoop / SendLoop · transport · routing · credit.<br>
+      <code>StageWorker</code> owns ComputeLoop · local batch · executor.<br>
+      <code>PayloadRef</code> owns data location.<br>
+      <code>Ray</code> owns lifecycle / control · <strong>not data body</strong>.
+    </div>
+  </div>
+</section>
+
+<!-- footer -->
+<div class="footer wrap">
+  Ray Stream-Native Engine · research prototype architecture · 2026-05-21<br>
+  本页源文档：<code>streaming/design/ray_stream_native_engine_architecture_zh.md</code>
+</div>
+
+<script>
+  // theme toggle
+  const tt = document.getElementById('themeToggle');
+  const root = document.documentElement;
+  tt && tt.addEventListener('click', () => {
+    const cur = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    if (cur === 'dark') root.setAttribute('data-theme', 'dark');
+    else root.removeAttribute('data-theme');
+    try { localStorage.setItem('rsne-theme', cur); } catch (e) {}
+    initMermaid();
+  });
+
+  // mermaid init with theme
+  function initMermaid() {
+    const isDark = root.getAttribute('data-theme') === 'dark';
+    const themeVars = isDark ? {
+      background: '#2A2520',
+      primaryColor: '#3A2820',
+      primaryTextColor: '#ECE3D1',
+      primaryBorderColor: '#E59377',
+      lineColor: '#BFB5A2',
+      secondaryColor: '#243029',
+      tertiaryColor: '#232C3B',
+      noteBkgColor: '#2A2520',
+      noteTextColor: '#ECE3D1',
+      noteBorderColor: '#3A332B',
+      actorBkg: '#221D19',
+      actorBorder: '#E59377',
+      actorTextColor: '#ECE3D1',
+      labelBoxBkgColor: '#2A2520',
+      labelTextColor: '#ECE3D1',
+      sequenceNumberColor: '#1A1613'
+    } : {
+      background: '#FAF7F0',
+      primaryColor: '#F4E2D7',
+      primaryTextColor: '#1F1E1C',
+      primaryBorderColor: '#A85940',
+      lineColor: '#4A4642',
+      secondaryColor: '#E0E8DC',
+      tertiaryColor: '#DCE0E8',
+      noteBkgColor: '#EFE9DC',
+      noteTextColor: '#1F1E1C',
+      noteBorderColor: '#DCD3BE',
+      actorBkg: '#FAF7F0',
+      actorBorder: '#CC785C',
+      actorTextColor: '#1F1E1C',
+      labelBoxBkgColor: '#F4E2D7',
+      labelTextColor: '#1F1E1C',
+      sequenceNumberColor: '#FAF7F0'
+    };
+    document.querySelectorAll('.mermaid').forEach(el => {
+      if (!el.dataset.src) el.dataset.src = el.textContent;
+      el.textContent = el.dataset.src;
+      el.removeAttribute('data-processed');
+    });
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'base',
+      themeVariables: themeVars,
+      flowchart: { curve: 'basis', padding: 12 },
+      sequence: { actorMargin: 50, messageMargin: 40, mirrorActors: false }
+    });
+    mermaid.run({ querySelector: '.mermaid' });
+  }
+  initMermaid();
+</script>
+
+</body>
+</html>
