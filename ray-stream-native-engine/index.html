@@ -454,7 +454,7 @@ p code, li code {
     <p class="lede">
       Research prototype，目标是先把 Qwen3-Omni 类多 stage 模型 serve 跑起来。
       <strong>Ray 只负责启动和生命周期；ZMQ control plane 负责小消息；Relay data plane 负责真实 payload；
-      StageExecutor 负责模型计算。</strong>
+      Worker 负责模型计算。</strong>
       第一阶段不兼容 vLLM engine 接口，不引入 control / credit / backpressure 协议。
     </p>
     <div class="hero-meta">
@@ -468,15 +468,15 @@ p code, li code {
       <div class="toc-title">本文导读</div>
       <ol>
         <li><a href="#overview">总览</a> · 一张图看清 Ray / ZMQ / Relay 三个 plane</li>
-        <li><a href="#callstack">六层 Call Stack</a> · API → StreamActor → StreamRuntime → StageActor → StageRuntime → StageWorker → StageExecutor</li>
+        <li><a href="#callstack">五层 Call Stack</a> · API → StreamActor → StreamRuntime → StageActor → StageRuntime → Worker</li>
         <li><a href="#boundary">Remote / ZMQ / Local 边界</a> · 谁是 Ray RPC，谁是 ZMQ，谁是本地</li>
         <li><a href="#components">组件细节</a> · 每层做什么 + 真实接口</li>
-        <li><a href="#events">事件结构</a> · ControlPlaneDataEvent · RelayMetadata · StageExecutorInput/Output</li>
+        <li><a href="#events">事件结构</a> · ControlPlaneDataEvent · RelayMetadata · WorkerInput/Output</li>
         <li><a href="#control">Control Plane</a> · StageControlSpec · TCP listen/connect · PullSocket/PushSocket</li>
         <li><a href="#relay">Relay 数据面</a> · Relay ABC · LocalRelay · LocalRelayMetadata</li>
         <li><a href="#graph">Graph 与 Routing</a> · <code>make_linear_graph</code></li>
-        <li><a href="#flow">端到端调用流程</a> · 6 层逐层下沉 + 真实方法名</li>
-        <li><a href="#queues">Queues 与三条 Loop</a></li>
+        <li><a href="#flow">端到端调用流程</a> · 5 层逐层下沉 + 真实方法名</li>
+        <li><a href="#queues">Queues 与两条 Loop + Worker.run</a></li>
         <li><a href="#status">现在不做的事</a></li>
         <li><a href="#roadmap">下一步</a></li>
       </ol>
@@ -593,15 +593,15 @@ flowchart LR
   <div class="wrap">
     <div class="section-head">
       <div class="section-eyebrow">Section 2</div>
-      <h2>六层<em>调用栈</em></h2>
+      <h2>五层<em>调用栈</em></h2>
       <p class="section-sub">
-        从 API client 到 GPU kernel，OmniStream 一共 6 层。前两层和第 3 层都是 Ray actor + 本地 runtime
+        从 API client 到 GPU kernel，OmniStream 一共 5 层。前两层和第 3 层都是 Ray actor + 本地 runtime
         的 <strong>两两组合</strong>：actor 只是 RPC 边界，runtime 才是真正干活的对象。
       </p>
     </div>
 
     <div class="mermaid-wrap">
-      <div class="m-title">图 2.1 · 6-layer call stack</div>
+      <div class="m-title">图 2.1 · 5-layer call stack</div>
       <div class="m-sub">
         实线 = 直接调用；虚线 = Ray RPC（actor.method.remote）；粗箭头 = ZMQ event。
       </div>
@@ -617,16 +617,14 @@ flowchart TB
   L3[StreamRuntime &nbsp;<i>local</i>]:::local
   L4["StageActor &nbsp;<i>@ray.remote</i> &nbsp;(N 个)"]:::ray
   L5[StageRuntime &nbsp;<i>local</i>]:::local
-  L6[StageWorker.compute_loop &nbsp;<i>local</i>]:::local
-  L7[StageExecutor &nbsp;<i>local · fake → Qwen</i>]:::leaf
+  L6[Worker.run &nbsp;<i>local · engine loop · fake → vLLM</i>]:::leaf
 
   L1 ==&gt;|.remote| L2
   L2 --&gt;|self.runtime| L3
   L3 -.start_stage.-&gt; L4
   L3 ==&gt;|ZMQ PUSH<br/>entry event| L5
   L4 --&gt;|self.runtime| L5
-  L5 --&gt;|input_queue| L6
-  L6 --&gt;|run_batch| L7
+  L5 --&gt;|input_queue / output_queue| L6
       </div>
     </div>
 
@@ -637,9 +635,8 @@ flowchart TB
         <tr><td>L2</td><td><span class="pill indigo">Ray actor</span></td><td><code>StreamActor</code></td><td>RPC 边界；持有一个 <code>StreamRuntime</code>，全部 <code>@rpc_method</code> 直接 delegate</td></tr>
         <tr><td>L3</td><td><span class="pill sage">local</span></td><td><code>StreamRuntime</code></td><td>graph / session / API ingress 的 <strong>真理源</strong>；<code>RuntimeControlPlane</code> + <code>LocalRelay</code></td></tr>
         <tr><td>L4</td><td><span class="pill indigo">Ray actor</span></td><td><code>StageActor</code></td><td>每 stage 一个；只 <code>start_stage / stop_stage / get_sink_outputs</code></td></tr>
-        <tr><td>L5</td><td><span class="pill sage">local</span></td><td><code>StageRuntime</code></td><td>本 stage 的 control plane + relay + routing + 三条 loop</td></tr>
-        <tr><td>L6</td><td><span class="pill sage">local</span></td><td><code>StageWorker</code></td><td><code>compute_loop</code>：拉 input_queue，跑 executor，写 output_queue</td></tr>
-        <tr><td>L7</td><td><span class="pill gold">model</span></td><td><code>StageExecutor</code></td><td>真正的模型 / kernel；v1 是 <code>FakeStageExecutor</code></td></tr>
+        <tr><td>L5</td><td><span class="pill sage">local</span></td><td><code>StageRuntime</code></td><td>本 stage 的 control plane + relay + routing；持有 <code>_recv_loop</code> / <code>_send_loop</code> 两条 runtime loop，并把 <code>Worker.run</code> 挂到两个 queue 之间</td></tr>
+        <tr><td>L6</td><td><span class="pill gold">model</span></td><td><code>Worker</code></td><td>自己拥有 engine loop（<code>Worker.run(input_queue, output_queue)</code>），决定 batching / scheduling / 流式输出；v1 是 <code>FakeWorker</code>，下一步 <code>VllmWorker</code></td></tr>
       </tbody>
     </table>
 
@@ -697,15 +694,15 @@ flowchart TB
         <ul>
           <li><code>StreamRuntime.*</code>（StreamActor 的真实实现）</li>
           <li><code>StageRuntime._recv_loop</code> · <code>_send_loop</code> · <code>_handle_event</code> · <code>_send_output</code></li>
-          <li><code>StageWorker.compute_loop</code></li>
+          <li><code>Worker.run</code></li>
           <li><code>Relay.put_async</code> · <code>get_async</code> · <code>cleanup</code> · <code>close</code></li>
           <li><code>RelayOperation.wait_for_completion</code></li>
-          <li><code>StageExecutor.load_model</code> · <code>run_batch</code> · <code>unload_model</code></li>
+          <li><code>Worker.load_model</code> · <code>run</code> · <code>unload_model</code></li>
         </ul>
       </div>
     </div>
 
-    <h3 style="margin-top:36px">三条 Loop 的分工</h3>
+    <h3 style="margin-top:36px">两条 Loop + Worker.run 的分工</h3>
     <div class="grid-3">
       <div class="role-card indigo">
         <div class="role-name"><span class="tag indigo">_recv_loop</span><span style="font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--ink-mute)">in StageRuntime</span></div>
@@ -714,16 +711,16 @@ flowchart TB
           <li><code>op = await relay.get_async(event.relay_metadata, request_id=event.session_id)</code></li>
           <li><code>await op.wait_for_completion()</code></li>
           <li><code>relay.cleanup(event.session_id)</code></li>
-          <li><code>input_queue.put(StageExecutorInput)</code></li>
+          <li><code>input_queue.put(WorkerInput)</code></li>
         </ul>
       </div>
       <div class="role-card accent">
-        <div class="role-name"><span class="tag">compute_loop</span><span style="font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--ink-mute)">in StageWorker</span></div>
+        <div class="role-name"><span class="tag">Worker.run</span><span style="font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--ink-mute)">in Worker</span></div>
         <ul>
           <li><code>input_queue.get()</code></li>
-          <li><code>executor.run_batch([item])</code></li>
-          <li><code>output_queue.put(StageExecutorOutput)</code></li>
-          <li>（暂无 batch policy / EDF / credit 检查）</li>
+          <li>engine loop（batching / scheduling / 流式输出，由 Worker 自治）</li>
+          <li><code>output_queue.put(WorkerOutput)</code></li>
+          <li>v1 <code>FakeWorker</code> 每次一个 item 直传；下一步 <code>VllmWorker</code> 包 <code>AsyncLLMEngine</code></li>
         </ul>
       </div>
       <div class="role-card sage">
@@ -778,7 +775,7 @@ flowchart TB
 
     <span class="cmt"># API entrypoints (delegate to runtime)</span>
     <span class="kw">@rpc_method</span>
-    <span class="kw">async def</span> <span class="fn">open_session</span>(self, req: StreamRuntimeOpenSessionRequest) -&gt; StreamRuntimeSessionInfo: ...
+    <span class="kw">async def</span> <span class="fn">open_session</span>(self, session_id: <span class="ty">str</span>) -&gt; RpcAck: ...
     <span class="kw">@rpc_method</span>
     <span class="kw">async def</span> <span class="fn">recv_input_chunk</span>(self, chunk: StreamRuntimeInputChunk) -&gt; RpcAck: ...
     <span class="kw">@rpc_method</span>
@@ -794,13 +791,13 @@ flowchart TB
     <span class="kw">def</span> <span class="fn">__init__</span>(self):
         self.graph: GraphSpec | <span class="kw">None</span> = <span class="kw">None</span>
         self.stage_actors: <span class="ty">dict</span>[<span class="ty">str</span>, <span class="ty">Any</span>] = {}
-        self.sessions: <span class="ty">dict</span>[<span class="ty">str</span>, StreamRuntimeSessionState] = {}
+        self.sessions: <span class="ty">set</span>[<span class="ty">str</span>] = <span class="ty">set</span>()
         self.control = RuntimeControlPlane()
         self.relay = LocalRelay(owner_stage=<span class="str">"stream_runtime"</span>)
 
     <span class="kw">async def</span> <span class="fn">start_graph</span>(self, graph: GraphSpec) -&gt; RpcAck: ...
     <span class="kw">async def</span> <span class="fn">shutdown</span>(self) -&gt; <span class="kw">None</span>: ...
-    <span class="kw">async def</span> <span class="fn">open_session</span>(self, req) -&gt; StreamRuntimeSessionInfo: ...
+    <span class="kw">async def</span> <span class="fn">open_session</span>(self, session_id: <span class="ty">str</span>) -&gt; RpcAck: ...
     <span class="kw">async def</span> <span class="fn">recv_input_chunk</span>(self, chunk: StreamRuntimeInputChunk) -&gt; RpcAck: ...
     <span class="kw">async def</span> <span class="fn">close_session</span>(self, session_id, reason=<span class="str">""</span>) -&gt; RpcAck: ...
     <span class="kw">async def</span> <span class="fn">get_stage_outputs</span>(self, stage_id: <span class="ty">str</span>) -&gt; <span class="ty">list</span>: ...</div>
@@ -837,7 +834,7 @@ flowchart TB
         stage_specs: <span class="ty">dict</span>[<span class="ty">str</span>, StageSpec],
     ) -&gt; RpcAck: ...
     <span class="kw">@rpc_method</span>
-    <span class="kw">async def</span> <span class="fn">get_sink_outputs</span>(self) -&gt; <span class="ty">list</span>[StageExecutorOutput]: ...
+    <span class="kw">async def</span> <span class="fn">get_sink_outputs</span>(self) -&gt; <span class="ty">list</span>[WorkerOutput]: ...
     <span class="kw">@rpc_method</span>
     <span class="kw">async def</span> <span class="fn">stop_stage</span>(self) -&gt; <span class="kw">None</span>: ...</div>
     <div class="callout indigo">
@@ -850,7 +847,7 @@ flowchart TB
     <h3>4.4 · StageRuntime — 本 stage 真理源</h3>
     <p>
       持有 <code>StageControlPlane</code>（PULL bind + 下游 PUSH cache）、<code>LocalRelay</code>、
-      两个 queue、<code>routes_by_port</code> 路由表、对全量 <code>stage_specs</code> 的视图（为了查下游 endpoint）和三条 asyncio loop。
+      两个 queue、<code>routes_by_port</code> 路由表、对全量 <code>stage_specs</code> 的视图（为了查下游 endpoint）和两条 asyncio loop + Worker.run task。
     </p>
 
     <table class="table">
@@ -873,7 +870,7 @@ flowchart TB
             <td>从 <code>output_queue</code> 取，<code>relay.put_async</code> 后用 <code>control.send_to_stage</code> 发给下游。</td></tr>
         <tr><td><span class="pill">debug</span></td>
             <td><code>sink_outputs: list</code></td>
-            <td>无 route 时把 <code>StageExecutorOutput</code> 追加进来，供 <code>get_sink_outputs</code> 读出。</td></tr>
+            <td>无 route 时把 <code>WorkerOutput</code> 追加进来，供 <code>get_sink_outputs</code> 读出。</td></tr>
       </tbody>
     </table>
 
@@ -890,7 +887,7 @@ flowchart TB
         payload = op.payload
         self.relay.cleanup(event.session_id)
         <span class="kw">await</span> self.input_queue.put(
-            StageExecutorInput(
+            WorkerInput(
                 session_id=event.session_id,
                 payload=payload,
                 chunk_metadata=<span class="ty">dict</span>(event.chunk_metadata),
@@ -902,7 +899,7 @@ flowchart TB
             output = <span class="kw">await</span> self.output_queue.get()
             <span class="kw">await</span> self._send_output(output)
 
-    <span class="kw">async def</span> <span class="fn">_send_output</span>(self, output: StageExecutorOutput) -&gt; <span class="kw">None</span>:
+    <span class="kw">async def</span> <span class="fn">_send_output</span>(self, output: WorkerOutput) -&gt; <span class="kw">None</span>:
         routes = self.routes_by_port.get(output.port, [])
         <span class="kw">if not</span> routes:
             self.sink_outputs.append(output)
@@ -918,30 +915,36 @@ flowchart TB
             <span class="kw">await</span> self.control.send_to_stage(route.dst_stage, endpoint, event)
             <span class="kw">await</span> op.wait_for_completion()</div>
 
-    <h3>4.5 · StageWorker — compute_loop</h3>
-    <p>本 stage 的计算组件，内部只有一个 <code>compute_loop</code>。第一版每次只跑一个 item，没有 batch policy。</p>
-    <div class="code"><span class="kw">class</span> <span class="ty">StageWorker</span>:
-    <span class="kw">async def</span> <span class="fn">compute_loop</span>(self) -&gt; <span class="kw">None</span>:
-        <span class="kw">while not</span> self._stopping.is_set():
-            item = <span class="kw">await</span> self.input_queue.get()
-            outputs = <span class="kw">await</span> self.executor.run_batch([item])
-            <span class="kw">for</span> output <span class="kw">in</span> outputs:
-                <span class="kw">await</span> self.output_queue.put(output)</div>
-
-    <h3>4.6 · StageExecutor — 模型边界</h3>
-    <div class="code"><span class="kw">class</span> <span class="ty">StageExecutor</span>(<span class="ty">ABC</span>):
+    <h3>4.5 · Worker — engine loop owner</h3>
+    <p>
+      本 stage 的计算抽象。Worker <strong>自己拥有 engine loop</strong>：StageRuntime 在 <code>start()</code> 阶段把
+      <code>Worker.run</code> 作为一个 asyncio task 挂到 input/output queue 之间，<code>stop()</code> 时由 <code>task.cancel()</code> 终止。
+      worker 内部决定 batching / scheduling / 流式输出等策略，runtime 完全不关心。
+    </p>
+    <div class="code"><span class="kw">class</span> <span class="ty">Worker</span>(<span class="ty">ABC</span>):
     <span class="kw">async def</span> <span class="fn">load_model</span>(self, spec: StageSpec) -&gt; <span class="kw">None</span>: ...
-    <span class="kw">async def</span> <span class="fn">run_batch</span>(self, batch: <span class="ty">list</span>[StageExecutorInput]) -&gt; <span class="ty">list</span>[StageExecutorOutput]: ...
+    <span class="kw">async def</span> <span class="fn">run</span>(
+        self,
+        input_queue: asyncio.Queue[WorkerInput],
+        output_queue: asyncio.Queue[WorkerOutput],
+    ) -&gt; <span class="kw">None</span>: ...
     <span class="kw">async def</span> <span class="fn">unload_model</span>(self) -&gt; <span class="kw">None</span>: ...
 
 
-<span class="kw">class</span> <span class="ty">FakeStageExecutor</span>(<span class="ty">StageExecutor</span>):
+<span class="kw">class</span> <span class="ty">FakeWorker</span>(<span class="ty">Worker</span>):
     <span class="cmt"># validates runtime wiring before real model_runner integration</span>
-    <span class="kw">async def</span> <span class="fn">run_batch</span>(self, batch):
-        <span class="cmt"># for dict payloads: append stage_id to payload["path"]</span>
-        ...</div>
+    <span class="kw">async def</span> <span class="fn">run</span>(self, input_queue, output_queue):
+        <span class="kw">while True</span>:
+            item = <span class="kw">await</span> input_queue.get()
+            <span class="kw">await</span> output_queue.put(self._transform(item))</div>
+    <div class="callout indigo">
+      <strong>为什么 executor owns the loop？</strong>
+      vLLM 的 <code>EngineCoreProc</code>、SGLang 的 scheduler 都是「executor 自己拥有 loop」。
+      之前如果把 loop 留在 StageRuntime 里、用 <code>run_batch(batch) -&gt; list</code> 接口反向调 worker，
+      接 vLLM 就要不停地和它内部的 continuous batching 打架。queue-driven 的 <code>Worker.run</code> 让 vLLM、SGLang、自写 batcher 都能直接落到这一层。
+    </div>
 
-    <h3>4.7 · 一个 StageActor 内部全貌</h3>
+    <h3>4.6 · 一个 StageActor 内部全貌</h3>
     <div class="mermaid-wrap">
       <div class="m-title">图 4.1 · StageActor 进程内部组件 + 数据通路</div>
       <div class="m-sub">
@@ -980,10 +983,9 @@ flowchart TB
       SINK[(sink_outputs · debug)]:::store
     end
 
-    subgraph WORKER [StageWorker]
+    subgraph WORKER [Worker]
       direction TB
-      CL[compute_loop · asyncio task]:::loop
-      EX[StageExecutor.run_batch]:::loop
+      CL[Worker.run · asyncio task<br/>engine loop · owns batching]:::loop
     end
 
     START --&gt; RUNTIME
@@ -993,7 +995,7 @@ flowchart TB
     CP --&gt; RL --&gt; HE
     HE --&gt; RM
     HE --&gt; IQ
-    IQ --&gt; CL --&gt; EX --&gt; OQ
+    IQ --&gt; CL --&gt; OQ
     OQ --&gt; SL --&gt; SO
     SO --&gt; RM
     SO --&gt; CP
@@ -1043,8 +1045,8 @@ flowchart TB
         </ul>
       </div>
       <div class="role-card">
-        <h4>StageExecutorInput</h4>
-        <p class="role-sub">_recv_loop → compute_loop</p>
+        <h4>WorkerInput</h4>
+        <p class="role-sub">_recv_loop → Worker.run</p>
         <ul>
           <li><code>session_id</code></li>
           <li><code>payload</code>（已 relay.get_async 出来）</li>
@@ -1052,8 +1054,8 @@ flowchart TB
         </ul>
       </div>
       <div class="role-card sage">
-        <h4>StageExecutorOutput</h4>
-        <p class="role-sub">compute_loop → _send_loop</p>
+        <h4>WorkerOutput</h4>
+        <p class="role-sub">Worker.run → _send_loop</p>
         <ul>
           <li><code>session_id</code></li>
           <li><code>port</code>（routing key）</li>
@@ -1064,20 +1066,11 @@ flowchart TB
     </div>
 
     <h3>5.3 · Session 与 RPC Ack</h3>
+    <p>
+      v4 起 session 状态退化成 <code>StreamRuntime.sessions: set[str]</code>。<code>open_session(session_id)</code> /
+      <code>close_session(session_id)</code> 只是往集合里加 / 移除一个 id，没有专门的 dataclass 包装；都返回 <code>RpcAck</code>。
+    </p>
     <div class="code"><span class="kw">@dataclass</span>(frozen=<span class="kw">True</span>)
-<span class="kw">class</span> <span class="ty">StreamRuntimeOpenSessionRequest</span>:
-    session_id: <span class="ty">str</span>
-
-<span class="kw">@dataclass</span>(frozen=<span class="kw">True</span>)
-<span class="kw">class</span> <span class="ty">StreamRuntimeSessionInfo</span>:
-    session_id: <span class="ty">str</span>
-
-<span class="kw">@dataclass</span>
-<span class="kw">class</span> <span class="ty">StreamRuntimeSessionState</span>:
-    session_id: <span class="ty">str</span>
-    status: <span class="ty">str</span> = <span class="str">"open"</span>      <span class="cmt"># open · closed</span>
-
-<span class="kw">@dataclass</span>(frozen=<span class="kw">True</span>)
 <span class="kw">class</span> <span class="ty">RpcAck</span>:
     ok: <span class="ty">bool</span> = <span class="kw">True</span>
     message: <span class="ty">str</span> = <span class="str">""</span>
@@ -1328,7 +1321,7 @@ flowchart TB
           <li><code>op = await relay.get_async(event.relay_metadata, request_id=event.session_id)</code></li>
           <li><code>await op.wait_for_completion()</code></li>
           <li><code>relay.cleanup(event.session_id)</code></li>
-          <li><code>await input_queue.put(StageExecutorInput(...))</code></li>
+          <li><code>await input_queue.put(WorkerInput(...))</code></li>
         </ol>
       </div>
     </div>
@@ -1424,7 +1417,7 @@ flowchart LR
       <div class="section-eyebrow">Section 9</div>
       <h2>端到端<em>调用流程</em></h2>
       <p class="section-sub">
-        一条 chunk 从 API client 到 sink，<strong>把 6 层全部展开</strong>，每条边都标了真实方法名 / wire 类型。
+        一条 chunk 从 API client 到 sink，<strong>把 5 层全部展开</strong>，每条边都标了真实方法名 / wire 类型。
       </p>
     </div>
 
@@ -1459,8 +1452,8 @@ sequenceDiagram
     SA->>SR: self.runtime.recv_input_chunk(chunk)
     Note right of SR: relay.put_async(payload, request_id=session_id)<br/>build ControlPlaneDataEvent(relay_metadata=op.metadata)<br/>endpoint = entry_spec.control.connect_endpoint
     SR-)ING: RuntimeControlPlane.send_to_stage<br/>TCP PUSH ControlPlaneDataEvent
-    Note right of ING: _recv_loop:<br/>control.recv()<br/>relay.get_async + wait_for_completion<br/>relay.cleanup(session_id)<br/>input_queue.put(StageExecutorInput)
-    Note right of ING: compute_loop:<br/>executor.run_batch([item])<br/>output_queue.put(StageExecutorOutput)
+    Note right of ING: _recv_loop:<br/>control.recv()<br/>relay.get_async + wait_for_completion<br/>relay.cleanup(session_id)<br/>input_queue.put(WorkerInput)
+    Note right of ING: Worker.run:<br/>executor.run([item])<br/>output_queue.put(WorkerOutput)
     Note right of ING: _send_loop / _send_output:<br/>relay.put_async<br/>endpoint = stage_specs[dst].control.connect_endpoint<br/>control.send_to_stage<br/>wait_for_completion
     ING-)THK: StageControlPlane.send_to_stage<br/>TCP PUSH ControlPlaneDataEvent
     Note right of THK: recv / compute / send 同上
@@ -1470,9 +1463,9 @@ sequenceDiagram
     API->>SA: get_stage_outputs("sink")
     SA->>SR: self.runtime.get_stage_outputs("sink")
     SR->>SNK: get_sink_outputs.remote()
-    SNK-->>SR: list[StageExecutorOutput]
-    SR-->>SA: list[StageExecutorOutput]
-    SA-->>API: list[StageExecutorOutput]
+    SNK-->>SR: list[WorkerOutput]
+    SR-->>SA: list[WorkerOutput]
+    SA-->>API: list[WorkerOutput]
       </div>
     </div>
 
@@ -1513,14 +1506,14 @@ sequenceDiagram
         <div class="num">5</div>
         <div class="body">
           <h4>ingress StageRuntime: _recv_loop / _handle_event</h4>
-          <p><code>control.recv()</code> 拉 event；<code>relay.get_async</code> + <code>wait_for_completion</code> + <code>relay.cleanup(session_id)</code>；<code>input_queue.put(StageExecutorInput)</code>。</p>
+          <p><code>control.recv()</code> 拉 event；<code>relay.get_async</code> + <code>wait_for_completion</code> + <code>relay.cleanup(session_id)</code>；<code>input_queue.put(WorkerInput)</code>。</p>
         </div>
       </div>
       <div class="flow-step">
         <div class="num">6</div>
         <div class="body">
-          <h4>ingress StageWorker: compute_loop</h4>
-          <p><code>await executor.run_batch([item])</code> → <code>output_queue.put(StageExecutorOutput)</code>。</p>
+          <h4>ingress Worker: Worker.run</h4>
+          <p><code>await executor.run([item])</code> → <code>output_queue.put(WorkerOutput)</code>。</p>
         </div>
       </div>
       <div class="flow-step">
@@ -1544,7 +1537,7 @@ sequenceDiagram
         <div class="num">9</div>
         <div class="body">
           <h4>sink stage 没有 route</h4>
-          <p><code>_send_output</code> 看到 <code>routes_by_port[port]</code> 是空的，<strong>fallback</strong> 把 <code>StageExecutorOutput</code> append 到 <code>sink_outputs</code>。</p>
+          <p><code>_send_output</code> 看到 <code>routes_by_port[port]</code> 是空的，<strong>fallback</strong> 把 <code>WorkerOutput</code> append 到 <code>sink_outputs</code>。</p>
         </div>
       </div>
       <div class="flow-step">
@@ -1563,7 +1556,7 @@ sequenceDiagram
   <div class="wrap">
     <div class="section-head">
       <div class="section-eyebrow">Section 10</div>
-      <h2>Queues 与三条 <em>Loop</em></h2>
+      <h2>Queues 与两条 <em>Loop</em> + Worker.run</h2>
       <p class="section-sub">
         每个 <code>StageRuntime</code> 里只有两条主队列。ZMQ socket 本身充当上游 buffer，
         所以<strong>没有</strong> <code>recv_buffer</code>。
@@ -1571,7 +1564,7 @@ sequenceDiagram
     </div>
 
     <div class="mermaid-wrap">
-      <div class="m-title">图 10.1 · 两个 queue + 三条 loop</div>
+      <div class="m-title">图 10.1 · 两个 queue + 两条 loop + Worker.run</div>
       <div class="mermaid">
 flowchart LR
   classDef zmq   fill:#F4E2D7,stroke:#A85940,color:#1F1E1C
@@ -1580,8 +1573,8 @@ flowchart LR
 
   ZRX[StageControlPlane<br/>TCP PULL socket]:::zmq --&gt; RL[_recv_loop]:::loop
   RL -- "relay.get_async + cleanup" --&gt; IQ[(input_queue)]:::store
-  IQ --&gt; CL[compute_loop]:::loop
-  CL -- "executor.run_batch" --&gt; OQ[(output_queue)]:::store
+  IQ --&gt; CL[Worker.run]:::loop
+  CL -- "executor.run" --&gt; OQ[(output_queue)]:::store
   OQ --&gt; SL[_send_loop]:::loop
   SL -- "relay.put_async · control.send_to_stage" --&gt; ZTX[StageControlPlane<br/>TCP PUSH socket]:::zmq
       </div>
@@ -1593,15 +1586,15 @@ flowchart LR
         <tr>
           <td><code>input_queue</code></td>
           <td><code>_recv_loop / _handle_event</code></td>
-          <td><code>compute_loop</code></td>
-          <td>是 · <code>StageExecutorInput.payload</code> 已 relay.get_async 出来</td>
+          <td><code>Worker.run</code></td>
+          <td>是 · <code>WorkerInput.payload</code> 已 relay.get_async 出来</td>
           <td>executor 的输入</td>
         </tr>
         <tr>
           <td><code>output_queue</code></td>
-          <td><code>compute_loop</code></td>
+          <td><code>Worker.run</code></td>
           <td><code>_send_loop</code></td>
-          <td>是 · <code>StageExecutorOutput</code></td>
+          <td>是 · <code>WorkerOutput</code></td>
           <td>跨 stage forwarding 的待发队列</td>
         </tr>
         <tr>
@@ -1643,7 +1636,7 @@ flowchart LR
           <li>edge bounded credit / inflight bytes（<code>max_inflight_bytes</code> 只 declared）</li>
           <li>epoch / turn_id / barge-in</li>
           <li>EDF / deadline / SLO class</li>
-          <li>batch policy（每次 <code>run_batch([item])</code> 单条）</li>
+          <li>batch policy（每次 <code>run([item])</code> 单条）</li>
           <li>fan-in / join 等齐多上游</li>
           <li>per-edge payload projection</li>
           <li>terminal output streaming channel（暂用 <code>get_sink_outputs</code> 轮询）</li>
@@ -1662,8 +1655,8 @@ flowchart LR
           <li>SGLang-style <code>Relay</code> ABC + <code>LocalRelay</code>（inline / shm）</li>
           <li><code>RelayMetadata</code> ABC + <code>LocalRelayMetadata</code></li>
           <li>linear graph <code>ingress → thinker → sink</code></li>
-          <li>FakeStageExecutor end-to-end smoke test</li>
-          <li>三条 loop（_recv / compute / _send）</li>
+          <li>FakeWorker end-to-end smoke test</li>
+          <li>两条 loop（_recv / _send）+ Worker.run</li>
           <li><code>@rpc_method</code> 标注 + <code>list_rpc_methods</code> introspection</li>
         </ul>
       </div>
@@ -1691,10 +1684,10 @@ flowchart LR
 
     <div class="flow">
       <div class="flow-step"><div class="num">1</div><div class="body"><h4>Qwen3-Omni executors</h4>
-        <p>preprocess · audio / image encoder · thinker · talker · codec executor，逐个接到 <code>StageExecutor</code> 接口上。
+        <p>preprocess · audio / image encoder · thinker · talker · codec executor，逐个接到 <code>Worker</code> 接口上。
         对照 <code>third_party/vllm-omni</code> 和 <code>third_party/sglang-omni</code> 的 model runner 边界。</p></div></div>
       <div class="flow-step"><div class="num">2</div><div class="body"><h4>Fan-in / join stage</h4>
-        <p>支持 encoder 输出汇聚到 thinker 等多输入 stage，等齐上游再 <code>run_batch</code>。</p></div></div>
+        <p>支持 encoder 输出汇聚到 thinker 等多输入 stage，等齐上游再 <code>run</code>。</p></div></div>
       <div class="flow-step"><div class="num">3</div><div class="body"><h4>Terminal output channel</h4>
         <p>替换当前 debug <code>get_sink_outputs()</code>，接真正的 streaming 输出通道。</p></div></div>
       <div class="flow-step"><div class="num">4</div><div class="body"><h4>跨节点 payload relay</h4>
@@ -1724,7 +1717,7 @@ uv run ruff check .</div>
       <li>每个 StageActor 启动各自的 StageRuntime</li>
       <li>StageControlPlane TCP PUSH / PULL</li>
       <li>LocalRelay <code>put_async</code> / <code>get_async</code> / <code>cleanup</code></li>
-      <li>三条 loop（_recv / compute / _send）</li>
+      <li>两条 loop（_recv / _send）+ Worker.run</li>
       <li>routing table</li>
     </ul>
 
@@ -1733,8 +1726,8 @@ uv run ruff check .</div>
       <code>Ray</code> 管启动 / lifecycle，<strong>不</strong>搬数据。<br>
       <code>StageControlPlane</code> / <code>RuntimeControlPlane</code>（封装 TCP ZMQ）发 <code>ControlPlaneDataEvent</code> 通知。<br>
       <code>Relay</code> / <code>LocalRelay</code>（SGLang 风格）搬 payload 本体。<br>
-      <code>StageRuntime</code> 管路由和三条 loop。<br>
-      <code>StageExecutor</code> 跑模型。
+      <code>StageRuntime</code> 管路由和两条 loop + Worker.run。<br>
+      <code>Worker</code> 跑模型。
     </div>
   </div>
 </section>
