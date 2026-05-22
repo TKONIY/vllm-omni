@@ -452,8 +452,8 @@ p code, li code {
     <h1>OmniStream<br><em>Ray · ZMQ · Relay 架构</em></h1>
     <p class="lede">
       Stream-native LLM 推理 prototype，目标 workload 是 Qwen3-Omni 多 stage 模型。
-      <strong>Ray 管启动和 lifecycle；ZMQ 负责 stage 间 DataEvent event plane；
-      RelayManager 负责 payload data plane。</strong>
+      <strong>Ray 管启动和 lifecycle；control plane（封装 ZMQ）负责 stage 间 DataEvent 通知；
+      SGLang-style Relay 负责 payload data plane。</strong>
       第一阶段先删掉 control / credit / backpressure 抽象，只保留把 Qwen3-Omni 类多 stage 模型 serve 起来的最小 runtime。
     </p>
     <div class="hero-meta">
@@ -497,9 +497,9 @@ p code, li code {
 
     <div class="grid-3">
       <div class="role-card indigo">
-        <div class="role-name"><span class="tag indigo">CONTROL</span></div>
+        <div class="role-name"><span class="tag indigo">LIFECYCLE</span></div>
         <h4>Ray RPC</h4>
-        <p class="role-sub">低频 · graph / session / lifecycle</p>
+        <p class="role-sub">低频 · graph / session / actor lifecycle</p>
         <ul>
           <li><code>start_graph</code> · <code>open_session</code></li>
           <li><code>recv_input_chunk</code>（API ingress）</li>
@@ -509,25 +509,25 @@ p code, li code {
       </div>
 
       <div class="role-card">
-        <div class="role-name"><span class="tag">EVENT</span></div>
-        <h4>ZMQ PUSH / PULL</h4>
-        <p class="role-sub">高频 · stage-to-stage notification</p>
+        <div class="role-name"><span class="tag">CONTROL PLANE</span></div>
+        <h4>StageControlPlane / RuntimeControlPlane</h4>
+        <p class="role-sub">封装 ZMQ PUSH/PULL · 高频 · stage-to-stage notification</p>
         <ul>
-          <li>每个 stage bind <code>ipc://.../stage_&lt;id&gt;.sock</code></li>
-          <li>上游 PUSH，下游 PULL</li>
+          <li>底层 <code>PullSocket</code>（bind）/ <code>PushSocket</code>（connect）</li>
+          <li>每个 stage 一个 <code>ipc://.../stage_&lt;id&gt;.sock</code></li>
           <li>wire 上只放 <code>DataEvent</code>（pickle）</li>
           <li><strong>不</strong>携带 payload body</li>
         </ul>
       </div>
 
       <div class="role-card sage">
-        <div class="role-name"><span class="tag sage">DATA</span></div>
-        <h4>RelayManager</h4>
-        <p class="role-sub">payload body 真实存储 / 读取 / 释放</p>
+        <div class="role-name"><span class="tag sage">DATA PLANE</span></div>
+        <h4>Relay · LocalRelay</h4>
+        <p class="role-sub">SGLang-style · payload 存取与生命周期</p>
         <ul>
-          <li><code>put(payload) -&gt; PayloadRef</code></li>
-          <li><code>get(ref) -&gt; payload</code></li>
-          <li><code>release(ref)</code></li>
+          <li><code>put_async(payload, request_id) -&gt; RelayOperation</code></li>
+          <li><code>get_async(metadata, request_id) -&gt; RelayOperation</code></li>
+          <li><code>cleanup(request_id)</code></li>
           <li>v1 后端：<code>inline</code> · <code>shm</code></li>
         </ul>
       </div>
@@ -555,18 +555,18 @@ flowchart LR
     S3[sink<br/>StageActor]:::stage
   end
 
-  RM1[(Relay · inline / shm)]:::relay
-  RM2[(Relay · inline / shm)]:::relay
-  RM3[(Relay · inline / shm)]:::relay
+  RM1[(LocalRelay · inline / shm)]:::relay
+  RM2[(LocalRelay · inline / shm)]:::relay
+  RM3[(LocalRelay · inline / shm)]:::relay
 
   API ==>|Ray RPC: recv_input_chunk| SR
   SR -. Ray RPC: start_stage · set_routes .-> S1
   SR -. Ray RPC: start_stage · set_routes .-> S2
   SR -. Ray RPC: start_stage · set_routes .-> S3
 
-  SR ==>|ZMQ PUSH: DataEvent| S1
-  S1 ==>|ZMQ PUSH: DataEvent| S2
-  S2 ==>|ZMQ PUSH: DataEvent| S3
+  SR ==>|RuntimeControlPlane → ZMQ PUSH<br/>DataEvent| S1
+  S1 ==>|StageControlPlane → ZMQ PUSH<br/>DataEvent| S2
+  S2 ==>|StageControlPlane → ZMQ PUSH<br/>DataEvent| S3
 
   S1 --- RM1
   S2 --- RM2
@@ -577,10 +577,10 @@ flowchart LR
     <div class="callout">
       <strong>核心原则。</strong>
       ① Ray 负责 actor 启动、placement、生命周期，以及低频 control RPC；
-      ② stage-to-stage 的 DataEvent 走 ZMQ，<strong>不</strong>走 Ray object store；
-      ③ payload 本体不嵌在 event 里，只放 <code>PayloadRef</code>；
-      ④ <code>StreamRuntime</code> 在 entry 时刻为 API chunk 做一次 <code>relay.put</code> 并 PUSH 给 ingress stage，
-      之后所有 stage-to-stage 都直接走 ZMQ + relay，<strong>不再回到中心 runtime</strong>。
+      ② stage-to-stage 的 <code>DataEvent</code> 走 ZMQ（通过 <code>StageControlPlane</code>），<strong>不</strong>走 Ray object store；
+      ③ payload 本体不嵌在 event 里，event 只带 <code>relay_metadata</code>（<code>RelayOperation.metadata</code>，当前实现是 <code>PayloadRef</code>）；
+      ④ <code>StreamRuntime</code> 在 entry 时刻为 API chunk 做一次 <code>relay.put_async</code> 并通过
+      <code>RuntimeControlPlane</code> PUSH 给 ingress stage，之后所有 stage-to-stage 都直接走 ZMQ + relay，<strong>不再回到中心 runtime</strong>。
     </div>
   </div>
 </section>
@@ -617,7 +617,8 @@ flowchart LR
           <li>wire 上只有 <code>DataEvent</code> 一种结构（pickle）</li>
           <li>不带 route 字段：目的 stage 由 ZMQ endpoint 决定</li>
           <li>不带 src 字段：源 stage 是当前发送方 runtime</li>
-          <li><code>metadata</code> 只塞 <code>modality</code> / <code>seq_no</code> / <code>edge_id</code> 这类附加信息</li>
+          <li><code>chunk_metadata</code> 只塞 <code>modality</code> / <code>seq_no</code> / <code>edge_id</code> 这类附加信息</li>
+          <li><code>relay_metadata</code> 是 relay 后端返回的 handle</li>
           <li>不塞 scheduling / control 协议</li>
         </ul>
       </div>
@@ -629,7 +630,8 @@ flowchart LR
         <ul>
           <li><code>StageRuntime.recv_loop</code> · <code>send_loop</code> · <code>handle_event</code></li>
           <li><code>StageWorker.compute_loop</code></li>
-          <li><code>RelayManager.put</code> · <code>get</code> · <code>release</code></li>
+          <li><code>Relay.put_async</code> · <code>get_async</code> · <code>cleanup</code> · <code>close</code></li>
+          <li><code>RelayOperation.wait_for_completion</code></li>
           <li><code>StageExecutor.load_model</code> · <code>run_batch</code> · <code>unload_model</code></li>
         </ul>
       </div>
@@ -640,9 +642,10 @@ flowchart LR
       <div class="role-card indigo">
         <div class="role-name"><span class="tag indigo">RecvLoop</span><span style="font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--ink-mute)">in StageRuntime</span></div>
         <ul>
-          <li><code>event_receiver.recv_event()</code>（ZMQ PULL）</li>
-          <li><code>relay.get(event.payload)</code></li>
-          <li><code>relay.release(event.payload)</code></li>
+          <li><code>control_plane.recv()</code>（ZMQ PULL）</li>
+          <li><code>op = await relay.get_async(event.relay_metadata, request_id=event.session_id)</code></li>
+          <li><code>await op.wait_for_completion()</code></li>
+          <li><code>relay.cleanup(event.session_id)</code></li>
           <li><code>input_queue.put(StageInput)</code></li>
         </ul>
       </div>
@@ -660,8 +663,9 @@ flowchart LR
         <ul>
           <li><code>output_queue.get()</code></li>
           <li><code>routes_by_port[output.port]</code> 选路</li>
-          <li><code>relay.put(output.payload)</code></li>
-          <li><code>event_sender.send_event(endpoint, event)</code></li>
+          <li><code>op = await relay.put_async(output.payload, request_id=output.session_id)</code></li>
+          <li><code>control_plane.send_to_stage(stage_id, endpoint, event)</code></li>
+          <li><code>await op.wait_for_completion()</code></li>
           <li>无 route 时 fallback 写 <code>sink_outputs</code>（debug 用）</li>
         </ul>
       </div>
@@ -691,8 +695,8 @@ flowchart LR
     <h3>3.1 · StreamRuntimeActor — 全局入口</h3>
     <p>
       Ray actor，graph 级别的入口。它负责分配 IPC 路径、创建 StageActor、下发 routes，
-      并且为每条 API ingress chunk 跑一次 <code>relay.put + zmq send</code>，把第一条 <code>DataEvent</code>
-      推给 ingress stage。
+      并且为每条 API ingress chunk 跑一次 <code>relay.put_async + control_plane.send_to_stage</code>，
+      把第一条 <code>DataEvent</code> 推给 ingress stage。
     </p>
     <div class="code"><span class="kw">@ray.remote</span>(max_concurrency=<span class="num">128</span>)
 <span class="kw">class</span> <span class="ty">StreamRuntimeActor</span>:
@@ -702,8 +706,8 @@ flowchart LR
         self.stage_endpoints: <span class="ty">dict</span>[<span class="ty">str</span>, <span class="ty">str</span>] = {}
         self.ipc_runtime_dir: <span class="ty">str</span> | <span class="kw">None</span> = <span class="kw">None</span>
         self.sessions: <span class="ty">dict</span>[<span class="ty">str</span>, SessionState] = {}
-        self.event_sender = ZmqEventSender()
-        self.relay = RelayManager(owner_stage=<span class="str">"stream_runtime"</span>)
+        self.control_plane = RuntimeControlPlane()
+        self.relay = LocalRelay(owner_stage=<span class="str">"stream_runtime"</span>)
 
     <span class="kw">@rpc_method</span>
     <span class="kw">async def</span> <span class="fn">start_graph</span>(self, graph: GraphSpec) -&gt; RuntimeInfo: ...
@@ -729,9 +733,10 @@ flowchart LR
     <h4>recv_input_chunk 做的事</h4>
     <ul style="color:var(--ink-soft);font-size:14px;line-height:1.8">
       <li>按 <code>chunk.modality</code> 从 <code>graph.ingress</code> 查 entry stage。</li>
-      <li><code>ref = await self.relay.put(chunk.payload)</code>。</li>
-      <li>构造 <code>DataEvent(session_id, payload=ref, metadata={…, "modality": modality})</code>。</li>
-      <li><code>await self.event_sender.send_event(endpoint, event)</code> 用 ZMQ PUSH 把 event 推给 ingress stage。</li>
+      <li><code>op = await self.relay.put_async(chunk.payload, request_id=chunk.session_id)</code>。</li>
+      <li>构造 <code>DataEvent(session_id, relay_metadata=op.metadata, chunk_metadata={…, "modality": modality})</code>。</li>
+      <li><code>await self.control_plane.send_to_stage(entry_stage, endpoint, event)</code> 用 ZMQ PUSH 把 event 推给 ingress stage。</li>
+      <li><code>await op.wait_for_completion()</code> 等 relay 落盘（v1 prototype 里是 no-op，但保留接口）。</li>
     </ul>
 
     <h3>3.2 · StageActor — Ray RPC lifecycle wrapper</h3>
@@ -770,7 +775,8 @@ flowchart LR
     <h3>3.3 · StageRuntime — 本地运行时</h3>
     <p>
       <code>StageActor</code> 内部的本地运行时，<strong>不是 Ray actor</strong>。
-      持有 ZMQ receiver / sender、relay、两个 queue、routing table 和三条 asyncio loop。
+      持有一个 <code>StageControlPlane</code>（自带 PULL bind + 下游 PUSH 缓存）、一个 <code>LocalRelay</code>、
+      两个 queue、routing table 和三条 asyncio loop。
     </p>
 
     <table class="table">
@@ -778,10 +784,10 @@ flowchart LR
       <tbody>
         <tr><td><span class="pill indigo">recv</span></td>
             <td><code>recv_loop()</code> · <code>handle_event()</code></td>
-            <td>从 <code>ZmqEventReceiver</code> 拉 <code>DataEvent</code>，调 <code>relay.get</code>、<code>relay.release</code>，写 <code>input_queue</code>。</td></tr>
+            <td>从 <code>control_plane.recv()</code> 拉 <code>DataEvent</code>；调 <code>relay.get_async</code> + <code>op.wait_for_completion</code> + <code>relay.cleanup(session_id)</code>，写 <code>input_queue</code>。</td></tr>
         <tr><td><span class="pill sage">relay</span></td>
-            <td><code>relay: RelayManager</code></td>
-            <td>本 stage 的数据面后端（inline + shm）。</td></tr>
+            <td><code>relay: LocalRelay</code></td>
+            <td>本 stage 的数据面后端（inline + shm）；按 <code>request_id</code> 跟踪 ref 生命周期。</td></tr>
         <tr><td><span class="pill">queues</span></td>
             <td><code>input_queue</code> · <code>output_queue</code></td>
             <td>本 stage 的两条主队列；都是 unbounded <code>asyncio.Queue</code>（v1 不做 credit）。</td></tr>
@@ -790,7 +796,7 @@ flowchart LR
             <td><code>set_routes()</code> 一次写入；按 <code>StageOutput.port</code> 选下游 stage 和 ZMQ endpoint。</td></tr>
         <tr><td><span class="pill sage">send</span></td>
             <td><code>send_loop()</code> · <code>send_output()</code></td>
-            <td>从 <code>output_queue</code> 取，<code>relay.put</code> 后用 <code>ZmqEventSender</code> 发给下游。</td></tr>
+            <td>从 <code>output_queue</code> 取，<code>relay.put_async</code> 后用 <code>control_plane.send_to_stage</code> 发给下游。</td></tr>
         <tr><td><span class="pill">debug</span></td>
             <td><code>sink_outputs: list</code></td>
             <td>对没有 route 的 stage（terminal），把 <code>StageOutput</code> 追加进来，供 <code>get_sink_outputs</code> 读出。</td></tr>
@@ -801,14 +807,20 @@ flowchart LR
     <div class="code"><span class="kw">class</span> <span class="ty">StageRuntime</span>:
     <span class="kw">async def</span> <span class="fn">recv_loop</span>(self) -&gt; <span class="kw">None</span>:
         <span class="kw">while not</span> self._stopping.is_set():
-            event = <span class="kw">await</span> self.event_receiver.recv_event()
+            event = <span class="kw">await</span> self.control_plane.recv()
             <span class="kw">await</span> self.handle_event(event)
 
     <span class="kw">async def</span> <span class="fn">handle_event</span>(self, event: DataEvent) -&gt; <span class="kw">None</span>:
-        payload = <span class="kw">await</span> self.relay.get(event.payload)
-        <span class="kw">await</span> self.relay.release(event.payload)
+        op = <span class="kw">await</span> self.relay.get_async(event.relay_metadata, request_id=event.session_id)
+        <span class="kw">await</span> op.wait_for_completion()
+        payload = op.payload
+        self.relay.cleanup(event.session_id)
         <span class="kw">await</span> self.input_queue.put(
-            StageInput(session_id=event.session_id, payload=payload, metadata=<span class="ty">dict</span>(event.metadata))
+            StageInput(
+                session_id=event.session_id,
+                payload=payload,
+                chunk_metadata=<span class="ty">dict</span>(event.chunk_metadata),
+            )
         )
 
     <span class="kw">async def</span> <span class="fn">send_loop</span>(self) -&gt; <span class="kw">None</span>:
@@ -822,14 +834,15 @@ flowchart LR
             self.sink_outputs.append(output)
             <span class="kw">return</span>
         <span class="kw">for</span> route <span class="kw">in</span> routes:
-            ref = <span class="kw">await</span> self.relay.put(output.payload)
+            op = <span class="kw">await</span> self.relay.put_async(output.payload, request_id=output.session_id)
             event = DataEvent(
                 session_id=output.session_id,
-                payload=ref,
-                metadata={**output.metadata, <span class="str">"edge_id"</span>: route.edge_id},
+                relay_metadata=op.metadata,
+                chunk_metadata={**output.chunk_metadata, <span class="str">"edge_id"</span>: route.edge_id},
             )
             endpoint = self.downstream_endpoints[route.dst_stage]
-            <span class="kw">await</span> self.event_sender.send_event(endpoint, event)</div>
+            <span class="kw">await</span> self.control_plane.send_to_stage(route.dst_stage, endpoint, event)
+            <span class="kw">await</span> op.wait_for_completion()</div>
 
     <h3>3.4 · StageWorker — ComputeLoop</h3>
     <p>本 stage 的计算组件，内部只有一个 <code>compute_loop</code>。第一版每次只跑一个 item，没有 batch policy。</p>
@@ -894,15 +907,14 @@ flowchart TB
 
     subgraph RUNTIME [StageRuntime · 本进程内]
       direction TB
-      ZR[ZmqEventReceiver<br/>PULL bind ipc://...]:::zmq
+      CP[StageControlPlane<br/>PullSocket bind ipc://...<br/>+ PushSocket cache]:::zmq
       RL[recv_loop · asyncio task]:::loop
-      HE["handle_event()<br/>relay.get + release"]:::loop
+      HE["handle_event()<br/>relay.get_async<br/>+ wait_for_completion<br/>+ cleanup(session_id)"]:::loop
       IQ[(input_queue)]:::store
       OQ[(output_queue)]:::store
       SL[send_loop · asyncio task]:::loop
-      SO["send_output()<br/>relay.put + zmq send"]:::loop
-      ZS[ZmqEventSender<br/>PUSH connect downstream]:::zmq
-      RM[RelayManager<br/>inline · shm]:::relay
+      SO["send_output()<br/>relay.put_async<br/>+ control_plane.send_to_stage<br/>+ wait_for_completion"]:::loop
+      RM[LocalRelay<br/>inline · shm<br/>tracked by request_id]:::relay
       RT[routes_by_port<br/>downstream_endpoints]:::loop
       SINK[(sink_outputs · debug)]:::store
     end
@@ -918,15 +930,15 @@ flowchart TB
     STOP --&gt; RUNTIME
     INFO --&gt; SINK
 
-    ZR --&gt; RL --&gt; HE
+    CP --&gt; RL --&gt; HE
     HE --&gt; RM
     HE --&gt; IQ
     IQ --&gt; CL --&gt; EX --&gt; OQ
     OQ --&gt; SL --&gt; SO
     SO --&gt; RM
-    SO --&gt; ZS
+    SO --&gt; CP
     SO -.no route.- SINK
-    ZS --&gt; DOWN[(downstream StageActor<br/>ZMQ PULL)]:::zmq
+    CP --&gt; DOWN[(downstream StageActor<br/>ZMQ PULL)]:::zmq
   end
       </div>
     </div>
@@ -950,11 +962,13 @@ flowchart TB
     <div class="code"><span class="kw">@dataclass</span>(frozen=<span class="kw">True</span>)
 <span class="kw">class</span> <span class="ty">DataEvent</span>:
     session_id: <span class="ty">str</span>
-    payload: PayloadRef                <span class="cmt"># 只是 handle，不是 body</span>
-    metadata: <span class="ty">dict</span>[<span class="ty">str</span>, <span class="ty">Any</span>] = field(default_factory=<span class="ty">dict</span>)</div>
+    relay_metadata: <span class="ty">Any</span>             <span class="cmt"># RelayOperation.metadata; LocalRelay 下是 PayloadRef</span>
+    chunk_metadata: <span class="ty">dict</span>[<span class="ty">str</span>, <span class="ty">Any</span>] = field(default_factory=<span class="ty">dict</span>)</div>
     <p>
       <strong>没有 route 字段</strong>：目的 stage 已经由 ZMQ endpoint 决定，源 stage 由当前发送方 runtime 知道。
-      <strong><code>metadata</code></strong> 只临时放 <code>modality</code> / <code>seq_no</code> / <code>edge_id</code>，
+      <strong><code>relay_metadata</code></strong> 是 <code>Relay</code> 后端返回的 handle（opaque），
+      下游用它再去 <code>relay.get_async</code> 拿真实 payload。
+      <strong><code>chunk_metadata</code></strong> 只临时放 <code>modality</code> / <code>seq_no</code> / <code>edge_id</code>，
       不塞 scheduling / control 协议。
     </p>
 
@@ -981,7 +995,7 @@ flowchart TB
           <li><code>session_id</code></li>
           <li><code>modality</code>（决定 entry stage）</li>
           <li><code>payload</code></li>
-          <li><code>metadata</code></li>
+          <li><code>chunk_metadata</code></li>
         </ul>
       </div>
       <div class="role-card">
@@ -989,8 +1003,8 @@ flowchart TB
         <p class="role-sub">RecvLoop → ComputeLoop</p>
         <ul>
           <li><code>session_id</code></li>
-          <li><code>payload</code>（已 relay.get 出来）</li>
-          <li><code>metadata</code></li>
+          <li><code>payload</code>（已 relay.get_async 出来）</li>
+          <li><code>chunk_metadata</code></li>
         </ul>
       </div>
       <div class="role-card sage">
@@ -1000,7 +1014,7 @@ flowchart TB
           <li><code>session_id</code></li>
           <li><code>port</code>（routing key）</li>
           <li><code>payload</code></li>
-          <li><code>metadata</code></li>
+          <li><code>chunk_metadata</code></li>
         </ul>
       </div>
     </div>
@@ -1026,15 +1040,17 @@ flowchart TB
   </div>
 </section>
 
-<!-- ═══ 5. ZMQ ═══ -->
+<!-- ═══ 5. CONTROL PLANE (ZMQ) ═══ -->
 <section id="zmq">
   <div class="wrap">
     <div class="section-head">
       <div class="section-eyebrow">Section 5</div>
-      <h2>ZMQ <em>事件面</em></h2>
+      <h2>Control Plane · <em>ZMQ 封装</em></h2>
       <p class="section-sub">
-        每个 stage 一个 PULL endpoint；上游用 PUSH 连过去发 <code>DataEvent</code>。
-        endpoint 由 StreamRuntime 在 <code>start_graph</code> 时统一分配，stage 不自己挑。
+        <code>control_plane.py</code> 提供两层：底层 <code>PullSocket</code> / <code>PushSocket</code>，
+        上层 <code>StageControlPlane</code>（stage 自带 PULL bind 和 PUSH 缓存）与
+        <code>RuntimeControlPlane</code>（runtime 只 PUSH，不 PULL）。
+        所有 stage 之间的 <code>DataEvent</code> 都经过它们；payload body 不在这里走。
       </p>
     </div>
 
@@ -1047,44 +1063,68 @@ stage endpoint    = ipc://&lt;runtime_dir&gt;/stage_&lt;safe_stage_id&gt;.sock</
       <code>cleanup_ipc_runtime_dir(...)</code> 在 <code>shutdown_runtime</code> 时擦掉整个目录。
     </p>
 
-    <h3>5.2 · ZmqEventReceiver / ZmqEventSender</h3>
+    <h3>5.2 · PullSocket / PushSocket（低层）</h3>
     <div class="grid-2">
       <div class="role-card indigo">
-        <h4>ZmqEventReceiver</h4>
-        <p class="role-sub">stage-local · PULL · bind</p>
+        <h4>PullSocket</h4>
+        <p class="role-sub">stage-local · PULL · 默认 bind（也可 connect）</p>
         <ul>
-          <li><code>start()</code>：mkdir 父目录、unlink 旧 socket、<code>socket.bind(endpoint)</code></li>
-          <li><code>recv_event()</code>：<code>await socket.recv()</code> → <code>pickle.loads</code></li>
+          <li><code>start()</code>：bind 时 mkdir + unlink 旧 socket，<code>socket.bind(endpoint)</code></li>
+          <li><code>recv()</code>：<code>await socket.recv()</code> → <code>pickle.loads</code> → <code>DataEvent</code></li>
           <li><code>close()</code>：<code>socket.close(linger=0)</code></li>
           <li>共享同一个 <code>zmq.asyncio.Context.instance()</code></li>
         </ul>
       </div>
       <div class="role-card sage">
-        <h4>ZmqEventSender</h4>
-        <p class="role-sub">lazy keyed by destination endpoint · PUSH · connect</p>
+        <h4>PushSocket</h4>
+        <p class="role-sub">PUSH · connect 单一 endpoint</p>
         <ul>
-          <li><code>send_event(endpoint, event)</code>：缺 socket 就新建 + connect</li>
-          <li><code>pickle.dumps(event, HIGHEST_PROTOCOL)</code></li>
-          <li><code>close()</code>：所有 socket 一起 close</li>
-          <li>StreamRuntimeActor 和每个 StageRuntime 各持有一份</li>
+          <li><code>connect()</code>：<code>socket.connect(endpoint)</code></li>
+          <li><code>send(event)</code>：<code>pickle.dumps(event, HIGHEST_PROTOCOL)</code> + <code>socket.send</code></li>
+          <li><code>close()</code></li>
         </ul>
       </div>
     </div>
 
-    <h3>5.3 · wire 上有什么</h3>
+    <h3>5.3 · StageControlPlane / RuntimeControlPlane（上层）</h3>
+    <div class="grid-2">
+      <div class="role-card">
+        <h4>StageControlPlane</h4>
+        <p class="role-sub">每个 stage 各一份 · PULL bind + PUSH cache</p>
+        <ul>
+          <li><code>__init__(stage_id, recv_endpoint)</code> 创建本 stage 的 <code>PullSocket(recv_endpoint, bind=True)</code></li>
+          <li><code>start()</code> → <code>recv()</code> 拉 <code>DataEvent</code></li>
+          <li><code>send_to_stage(stage_id, endpoint, event)</code>：缺 <code>PushSocket</code> 就新建并 connect，缓存在 <code>_stage_sockets[stage_id]</code></li>
+          <li><code>close()</code> 关 PULL + 全部下游 PUSH socket</li>
+        </ul>
+      </div>
+      <div class="role-card indigo">
+        <h4>RuntimeControlPlane</h4>
+        <p class="role-sub">StreamRuntimeActor 一份 · 只 PUSH，没有 PULL</p>
+        <ul>
+          <li>没有 recv 路径：API ingress 走 Ray RPC，不走 ZMQ</li>
+          <li><code>send_to_stage(stage_id, endpoint, event)</code>：用法和 StageControlPlane 完全一致</li>
+          <li><code>close()</code></li>
+          <li>只在 <code>recv_input_chunk</code> 里 PUSH 一次 entry event</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>5.4 · wire 上有什么</h3>
     <table class="table">
       <thead><tr><th>消息</th><th>序列化</th><th>方向</th><th>说明</th></tr></thead>
       <tbody>
-        <tr><td><code>DataEvent</code></td><td>pickle</td><td>上游 PUSH → 下游 PULL</td><td>唯一的 ZMQ payload；带 <code>PayloadRef</code></td></tr>
+        <tr><td><code>DataEvent</code></td><td>pickle (HIGHEST_PROTOCOL)</td><td>上游 PUSH → 下游 PULL</td><td>唯一的 ZMQ payload；带 <code>relay_metadata</code></td></tr>
         <tr><td>—</td><td>—</td><td>—</td><td>v1 没有别的 wire message：ControlType / CreditEvent / heartbeat 都不在面上</td></tr>
       </tbody>
     </table>
 
     <div class="callout">
-      <strong>为什么 ZMQ 而不是 Ray RPC 搬 DataEvent？</strong>
+      <strong>为什么不直接用 Ray RPC 搬 DataEvent？</strong>
       Ray actor 之间的 <code>.remote()</code> 会经过 Ray RPC 栈、序列化以及 actor task queue；
-      高频小消息会被淹没。改用 ZMQ PUSH/PULL 之后 wire 直接落 IPC socket，
-      <strong>没有 Ray object store 命中</strong>，调度延迟也不被 Ray actor 的 max_concurrency 卡。
+      高频小消息会被淹没，并且 payload 会进 object store。把 stage 间通信封到 control_plane 之后，
+      wire 直接落 IPC socket，<strong>没有 Ray object store 命中</strong>，
+      调度延迟也不被 Ray actor 的 <code>max_concurrency</code> 卡。
     </div>
   </div>
 </section>
@@ -1096,28 +1136,51 @@ stage endpoint    = ipc://&lt;runtime_dir&gt;/stage_&lt;safe_stage_id&gt;.sock</
       <div class="section-eyebrow">Section 6</div>
       <h2>Relay · <em>数据面</em></h2>
       <p class="section-sub">
-        ZMQ 不搬 body，<code>RelayManager</code> 搬。v1 只支持 <strong>inline</strong> 和 <strong>shm</strong>；
+        ZMQ 不搬 body，<code>Relay</code> 搬。接口形状<strong>沿用 SGLang-Omni 的 Relay</strong>：
+        put / get 返回 <code>RelayOperation</code>，并通过 <code>request_id</code> 管理 ref 生命周期。
+        v1 唯一实现是 <code>LocalRelay</code>，支持 <strong>inline</strong> 和 <strong>shm</strong>；
         cuda_ipc / kv_lease / nixl 留给 v2。
       </p>
     </div>
 
     <h3>6.1 · 接口</h3>
-    <div class="code"><span class="kw">class</span> <span class="ty">RelayManager</span>:
-    <span class="kw">def</span> <span class="fn">__init__</span>(self, owner_stage: <span class="ty">str</span>, inline_threshold_bytes: <span class="ty">int</span> = <span class="num">64</span> * <span class="num">1024</span>): ...
+    <div class="code"><span class="kw">class</span> <span class="ty">Relay</span>(<span class="ty">ABC</span>):
+    <span class="kw">async def</span> <span class="fn">put_async</span>(
+        self,
+        payload: <span class="ty">Any</span>,
+        request_id: <span class="ty">str</span> | <span class="kw">None</span> = <span class="kw">None</span>,
+        dst_rank: <span class="ty">int</span> | <span class="kw">None</span> = <span class="kw">None</span>,
+        *,
+        kind: <span class="ty">str</span> = <span class="str">"data"</span>,
+    ) -&gt; RelayOperation: ...
 
-    <span class="kw">async def</span> <span class="fn">put</span>(self, payload: <span class="ty">Any</span>, *, kind: <span class="ty">str</span> = <span class="str">"data"</span>) -&gt; PayloadRef: ...
-    <span class="kw">async def</span> <span class="fn">get</span>(self, ref: PayloadRef) -&gt; <span class="ty">Any</span>: ...
-    <span class="kw">async def</span> <span class="fn">release</span>(self, ref: PayloadRef) -&gt; <span class="kw">None</span>: ...</div>
+    <span class="kw">async def</span> <span class="fn">get_async</span>(
+        self,
+        metadata: <span class="ty">Any</span>,
+        dest_tensor: <span class="ty">Any</span> | <span class="kw">None</span> = <span class="kw">None</span>,
+        request_id: <span class="ty">str</span> | <span class="kw">None</span> = <span class="kw">None</span>,
+    ) -&gt; RelayOperation: ...
 
-    <h3>6.2 · 选 backend 的规则</h3>
+    <span class="kw">def</span> <span class="fn">cleanup</span>(self, request_id: <span class="ty">str</span>) -&gt; <span class="kw">None</span>: ...
+    <span class="kw">def</span> <span class="fn">close</span>(self) -&gt; <span class="kw">None</span>: ...
+
+
+<span class="kw">class</span> <span class="ty">RelayOperation</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, metadata: <span class="ty">Any</span>, payload: <span class="ty">Any</span> = <span class="kw">None</span>): ...
+    metadata: <span class="ty">Any</span>          <span class="cmt"># 上 wire 的 handle（DataEvent.relay_metadata）</span>
+    payload: <span class="ty">Any</span>           <span class="cmt"># get_async 返回的真实 body</span>
+    <span class="kw">async def</span> <span class="fn">wait_for_completion</span>(self, timeout: <span class="ty">float</span> = <span class="num">30.0</span>) -&gt; <span class="kw">None</span>: ...</div>
+
+    <h3>6.2 · LocalRelay v1 backend 规则</h3>
     <div class="grid-2">
       <div class="role-card sage">
         <h4>inline</h4>
         <p class="role-sub">小 CPU 对象 · 默认</p>
         <ul>
           <li>payload 不是 bytes/bytearray/memoryview，<strong>或</strong>大小 ≤ 64 KiB</li>
-          <li><code>handle = payload</code> 本身</li>
-          <li><code>get()</code> 返回 handle，<code>release()</code> noop</li>
+          <li><code>PayloadRef.handle = payload</code> 本身</li>
+          <li><code>get_async()</code> 直接返回 <code>RelayOperation(metadata=ref, payload=ref.handle)</code></li>
+          <li><code>cleanup()</code> 对 inline 是 no-op</li>
         </ul>
       </div>
       <div class="role-card gold">
@@ -1125,14 +1188,28 @@ stage endpoint    = ipc://&lt;runtime_dir&gt;/stage_&lt;safe_stage_id&gt;.sock</
         <p class="role-sub">大 CPU bytes · multiprocessing.shared_memory</p>
         <ul>
           <li>payload 是 bytes/bytearray/memoryview 且大小 &gt; 64 KiB</li>
-          <li><code>handle = {"name": shm.name, "size": nbytes}</code></li>
-          <li><code>get()</code> 重 attach 读出 bytes 并 close</li>
-          <li><code>release()</code> 调 <code>shm.unlink() + close()</code>，幂等</li>
+          <li><code>PayloadRef.handle = {"name": shm.name, "size": nbytes}</code></li>
+          <li><code>get_async()</code> 重 attach 读出 bytes 并 close</li>
+          <li><code>cleanup()</code> 调 <code>shm.unlink() + close()</code>，幂等</li>
         </ul>
       </div>
     </div>
 
-    <h3>6.3 · 后端矩阵</h3>
+    <h3>6.3 · ref 生命周期与 request_id</h3>
+    <p>
+      <code>LocalRelay</code> 内部用 <code>_refs_by_key: dict[str, list[PayloadRef]]</code> 跟踪每个
+      ref：put / get 都把 ref 同时挂到 <code>payload_id</code> 和 <code>request_id</code> 两个 key 上。
+      <code>cleanup(request_id)</code> 把那个 key 下所有 ref 都释放（shm unlink），并把它们从 <code>payload_id</code> 索引里也摘掉。
+    </p>
+    <div class="callout indigo">
+      <strong>当前 prototype 把 request_id 用作 session_id。</strong>
+      <code>handle_event</code> 一拿到 payload 就 <code>cleanup(event.session_id)</code>，
+      <code>send_output</code> 用 <code>output.session_id</code> 作 put 的 request_id。
+      这种 1-event = 1-cleanup 的语义适合 v1 单消费 / 无 fan-out 场景；
+      <strong>fan-out 或多消费场景需要重新设计</strong>（例如改用 turn_id / chunk_id 作 request_id，或加 refcount）。
+    </div>
+
+    <h3>6.4 · 后端矩阵</h3>
     <table class="table">
       <thead><tr><th>relay</th><th>版本</th><th>载荷类型</th><th>用途</th></tr></thead>
       <tbody>
@@ -1144,32 +1221,27 @@ stage endpoint    = ipc://&lt;runtime_dir&gt;/stage_&lt;safe_stage_id&gt;.sock</
       </tbody>
     </table>
 
-    <h3>6.4 · 写入 / 读取路径</h3>
+    <h3>6.5 · 写入 / 读取路径</h3>
     <div class="grid-2">
       <div class="role-card">
         <h4>写入（上游 SendLoop）</h4>
         <ol style="color:var(--ink-soft);font-size:14px;line-height:1.7;padding-left:20px;margin:8px 0 0">
-          <li><code>ref = await relay.put(payload)</code></li>
-          <li><code>event = DataEvent(session_id, payload=ref, metadata)</code></li>
-          <li><code>await event_sender.send_event(endpoint, event)</code></li>
+          <li><code>op = await relay.put_async(payload, request_id=session_id)</code></li>
+          <li><code>event = DataEvent(session_id, relay_metadata=op.metadata, chunk_metadata)</code></li>
+          <li><code>await control_plane.send_to_stage(dst_stage, endpoint, event)</code></li>
+          <li><code>await op.wait_for_completion()</code></li>
         </ol>
       </div>
       <div class="role-card sage">
         <h4>读取（下游 RecvLoop）</h4>
         <ol style="color:var(--ink-soft);font-size:14px;line-height:1.7;padding-left:20px;margin:8px 0 0">
-          <li><code>event = await event_receiver.recv_event()</code></li>
-          <li><code>payload = await relay.get(event.payload)</code></li>
-          <li><code>await relay.release(event.payload)</code></li>
+          <li><code>event = await control_plane.recv()</code></li>
+          <li><code>op = await relay.get_async(event.relay_metadata, request_id=event.session_id)</code></li>
+          <li><code>await op.wait_for_completion()</code></li>
+          <li><code>relay.cleanup(event.session_id)</code></li>
           <li><code>await input_queue.put(StageInput(...))</code></li>
         </ol>
       </div>
-    </div>
-
-    <div class="callout indigo">
-      <strong>注意 v1 的 release 语义。</strong>
-      <code>handle_event</code> 拿到 payload 后就立刻 <code>release</code>；shm 后端会 <code>unlink</code> 共享内存。
-      也就是说每个 payload 只被消费一次。当后续支持 fan-out 时，需要把 release 改成
-      引用计数 / lifetime 管理，<strong>不能</strong>再这样立刻 unlink。
     </div>
   </div>
 </section>
@@ -1270,7 +1342,7 @@ flowchart LR
       <div class="m-title">图 8.1 · 一条 InputChunk 完整生命周期</div>
       <div class="m-sub">
         水平方向是 4 个 actor / 进程边界，垂直方向是时间。
-        <strong>实线 = Ray RPC；粗箭头 = ZMQ PUSH；relay 调用是同进程方法。</strong>
+        <strong>实线 = Ray RPC；粗箭头 = control_plane PUSH（ZMQ）；relay 调用是同进程方法。</strong>
       </div>
       <div class="mermaid">
 sequenceDiagram
@@ -1292,14 +1364,14 @@ sequenceDiagram
 
     Note over API,SNK: One InputChunk
     API->>SR: recv_input_chunk(InputChunk)
-    Note right of SR: relay.put(chunk.payload)<br/>build DataEvent
-    SR-)ING: ZMQ PUSH: DataEvent (entry)
-    Note right of ING: recv_loop:<br/>relay.get + release<br/>input_queue.put
+    Note right of SR: relay.put_async(payload, request_id=session_id)<br/>build DataEvent(relay_metadata=op.metadata)
+    SR-)ING: RuntimeControlPlane.send_to_stage<br/>ZMQ PUSH DataEvent
+    Note right of ING: recv_loop:<br/>relay.get_async + wait_for_completion<br/>relay.cleanup(session_id)<br/>input_queue.put
     Note right of ING: compute_loop:<br/>executor.run_batch<br/>output_queue.put
-    Note right of ING: send_loop:<br/>relay.put<br/>event_sender.send
-    ING-)THK: ZMQ PUSH: DataEvent
+    Note right of ING: send_loop:<br/>relay.put_async<br/>control_plane.send_to_stage<br/>wait_for_completion
+    ING-)THK: StageControlPlane.send_to_stage<br/>ZMQ PUSH DataEvent
     Note right of THK: recv/compute/send 同上
-    THK-)SNK: ZMQ PUSH: DataEvent
+    THK-)SNK: StageControlPlane.send_to_stage<br/>ZMQ PUSH DataEvent
     Note right of SNK: recv/compute,<br/>no route -&gt; sink_outputs.append
 
     API->>SR: get_stage_outputs("sink")
@@ -1316,30 +1388,32 @@ sequenceDiagram
         <div class="body">
           <h4>API client → StreamRuntimeActor</h4>
           <p>客户端通过 Ray RPC 把 chunk 推进来。</p>
-          <div class="payload">await <code>runtime.recv_input_chunk.remote(InputChunk(session_id, modality, payload, metadata))</code></div>
+          <div class="payload">await <code>runtime.recv_input_chunk.remote(InputChunk(session_id, modality, payload, chunk_metadata))</code></div>
         </div>
       </div>
       <div class="flow-step">
         <div class="num">2</div>
         <div class="body">
-          <h4>StreamRuntime relay.put + build DataEvent</h4>
+          <h4>StreamRuntime relay.put_async + build DataEvent</h4>
           <p>查 session（不存在则自动 open），按 modality 取 ingress stage 的 ZMQ endpoint。</p>
-          <div class="payload"><code>ref = await self.relay.put(chunk.payload)</code> · <code>DataEvent(session_id, payload=ref, metadata={..., "modality": modality})</code></div>
+          <div class="payload"><code>op = await self.relay.put_async(chunk.payload, request_id=chunk.session_id)</code> · <code>DataEvent(session_id, relay_metadata=op.metadata, chunk_metadata={..., "modality": modality})</code></div>
         </div>
       </div>
       <div class="flow-step">
         <div class="num">3</div>
         <div class="body">
-          <h4>StreamRuntime ZMQ PUSH</h4>
-          <p>用自己的 <code>event_sender</code> PUSH 到 ingress 的 endpoint；这是中心 runtime 最后一次出现在数据路径上。</p>
-          <div class="payload">await <code>self.event_sender.send_event(endpoint, event)</code></div>
+          <h4>RuntimeControlPlane PUSH</h4>
+          <p>用自己的 <code>control_plane</code> PUSH 到 ingress 的 endpoint，然后 <code>await op.wait_for_completion()</code>；这是中心 runtime 最后一次出现在数据路径上。</p>
+          <div class="payload">await <code>self.control_plane.send_to_stage(entry_stage, endpoint, event)</code></div>
         </div>
       </div>
       <div class="flow-step">
         <div class="num">4</div>
         <div class="body">
           <h4>ingress StageRuntime.recv_loop / handle_event</h4>
-          <p>从 PULL socket 拿 <code>DataEvent</code>；<code>relay.get + release</code>；<code>input_queue.put(StageInput)</code>。</p>
+          <p>从 <code>control_plane.recv()</code> 拿 <code>DataEvent</code>；
+          <code>op = await relay.get_async(relay_metadata, request_id=session_id)</code> →
+          <code>wait_for_completion</code> → <code>relay.cleanup(session_id)</code>；最后 <code>input_queue.put(StageInput)</code>。</p>
         </div>
       </div>
       <div class="flow-step">
@@ -1353,7 +1427,10 @@ sequenceDiagram
         <div class="num">6</div>
         <div class="body">
           <h4>ingress StageRuntime.send_loop / send_output</h4>
-          <p>按 <code>routes_by_port[output.port]</code> 选下游；<code>relay.put</code> 后用 <code>event_sender</code> PUSH。</p>
+          <p>按 <code>routes_by_port[output.port]</code> 选下游；
+          <code>op = await relay.put_async(output.payload, request_id=session_id)</code> →
+          <code>control_plane.send_to_stage(dst_stage, endpoint, event)</code> →
+          <code>op.wait_for_completion()</code>。</p>
         </div>
       </div>
       <div class="flow-step">
@@ -1403,12 +1480,12 @@ flowchart LR
   classDef store fill:#E0E8DC,stroke:#6E8B6A,color:#1F1E1C
   classDef loop  fill:#FAF7F0,stroke:#CC785C,color:#1F1E1C
 
-  ZRX[ZMQ PULL socket]:::zmq --&gt; RL[recv_loop]:::loop
-  RL -- "relay.get + release" --&gt; IQ[(input_queue)]:::store
+  ZRX[StageControlPlane<br/>PULL socket]:::zmq --&gt; RL[recv_loop]:::loop
+  RL -- "relay.get_async + cleanup" --&gt; IQ[(input_queue)]:::store
   IQ --&gt; CL[compute_loop]:::loop
   CL -- "executor.run_batch" --&gt; OQ[(output_queue)]:::store
   OQ --&gt; SL[send_loop]:::loop
-  SL -- "relay.put · zmq send" --&gt; ZTX[ZMQ PUSH socket]:::zmq
+  SL -- "relay.put_async · control_plane.send_to_stage" --&gt; ZTX[StageControlPlane<br/>PUSH socket]:::zmq
       </div>
     </div>
 
@@ -1419,7 +1496,7 @@ flowchart LR
           <td><code>input_queue</code></td>
           <td><code>recv_loop / handle_event</code></td>
           <td><code>compute_loop</code></td>
-          <td>是 · <code>StageInput.payload</code> 已 relay.get 出来</td>
+          <td>是 · <code>StageInput.payload</code> 已 relay.get_async 出来</td>
           <td>executor 的输入</td>
         </tr>
         <tr>
@@ -1480,9 +1557,9 @@ flowchart LR
         <h4>v1 已有</h4>
         <ul>
           <li>Ray actor 启动 / 生命周期</li>
-          <li>IPC ZMQ endpoint 分配</li>
+          <li>IPC ZMQ endpoint 分配 · <code>StageControlPlane</code> / <code>RuntimeControlPlane</code></li>
           <li>PUSH/PULL <code>DataEvent</code></li>
-          <li>RelayManager · inline / shm</li>
+          <li>SGLang-style <code>Relay</code> ABC + <code>LocalRelay</code>（inline / shm）+ <code>RelayOperation</code></li>
           <li>linear graph <code>ingress → thinker → sink</code></li>
           <li>FakeStageExecutor end-to-end smoke test</li>
           <li>三条 loop（recv / compute / send）</li>
@@ -1533,8 +1610,8 @@ uv run ruff check .</div>
     <h3 style="margin-top:28px">最终架构约束（一句话）</h3>
     <div class="callout">
       <code>Ray</code> 管启动 / lifecycle，<strong>不</strong>搬数据。<br>
-      <code>ZMQ</code> 发 <code>DataEvent</code> 通知。<br>
-      <code>RelayManager</code> 搬 payload 本体。<br>
+      <code>StageControlPlane</code> / <code>RuntimeControlPlane</code>（封装 ZMQ）发 <code>DataEvent</code> 通知。<br>
+      <code>Relay</code> / <code>LocalRelay</code>（SGLang 风格）搬 payload 本体。<br>
       <code>StageRuntime</code> 管路由和三条 loop。<br>
       <code>StageExecutor</code> 跑模型。
     </div>
@@ -1543,7 +1620,7 @@ uv run ruff check .</div>
 
 <!-- footer -->
 <div class="footer wrap">
-  OmniStream · Ray + ZMQ + Relay prototype · 2026-05-22<br>
+  OmniStream · Ray + ZMQ + Relay prototype · 2026-05-22 (v3, SGLang-style Relay)<br>
   本页根据 <code>omnistream/</code> 目录最新源码生成 · branch <code>omnistream-zmq-runtime</code>
 </div>
 
