@@ -451,10 +451,10 @@ p code, li code {
     <span class="eyebrow">vllm-omni-stream · omnistream/ prototype</span>
     <h1>OmniStream<br><em>Ray · ZMQ · Relay 架构</em></h1>
     <p class="lede">
-      Stream-native LLM 推理 prototype，目标 workload 是 Qwen3-Omni 多 stage 模型。
-      <strong>Ray 管启动和 lifecycle；control plane（封装 ZMQ）负责 stage 间 DataEvent 通知；
-      SGLang-style Relay 负责 payload data plane。</strong>
-      第一阶段先删掉 control / credit / backpressure 抽象，只保留把 Qwen3-Omni 类多 stage 模型 serve 起来的最小 runtime。
+      Research prototype，目标是先把 Qwen3-Omni 类多 stage 模型 serve 跑起来。
+      <strong>Ray 只负责启动和生命周期；ZMQ control plane 负责小消息；Relay data plane 负责真实 payload；
+      StageExecutor 负责模型计算。</strong>
+      第一阶段不兼容 vLLM engine 接口，不引入 control / credit / backpressure 协议。
     </p>
     <div class="hero-meta">
       <span class="chip"><span class="chip-dot"></span>research prototype</span>
@@ -1583,29 +1583,45 @@ flowchart LR
       <div class="section-eyebrow">Section 11</div>
       <h2>下一步<em>实现顺序</em></h2>
       <p class="section-sub">
-        从把 Qwen3-Omni 真模型接进来开始，逐步补回 fan-in、payload projection 和 terminal channel，
-        最后再决定 control / credit。
+        从 Qwen3-Omni 真模型接入开始，逐步补 fan-in/join、terminal channel、GPU relay，
+        最后跑 Qwen3-Omni / TTS / interactive workload 的 latency / RTF / goodput 实验。
       </p>
     </div>
 
     <div class="flow">
-      <div class="flow-step"><div class="num">1</div><div class="body"><h4>Qwen3-Omni StageExecutor 骨架</h4>
-        <p>按 SGLang-Omni 的 stage 切分实现 <code>QwenPreprocessExecutor</code>·<code>QwenImageEncoderExecutor</code>·<code>QwenAudioEncoderExecutor</code>·<code>QwenThinkerExecutor</code>·<code>QwenTalkerExecutor</code>·<code>QwenCodecExecutor</code>。</p></div></div>
-      <div class="flow-step"><div class="num">2</div><div class="body"><h4>Fan-in / join</h4>
-        <p>aggregate / thinker 等多输入 stage 要能等齐上游再 run_batch。</p></div></div>
-      <div class="flow-step"><div class="num">3</div><div class="body"><h4>project_payload</h4>
-        <p>每条 edge 可以投影 payload，避免每个下游拿完整大 state。</p></div></div>
-      <div class="flow-step"><div class="num">4</div><div class="body"><h4>Terminal output channel</h4>
-        <p>不再用 <code>get_sink_outputs()</code> 轮询 debug list；接真正的 streaming 输出通道。</p></div></div>
-      <div class="flow-step"><div class="num">5</div><div class="body"><h4>Qwen3-Omni text/audio smoke serve</h4>
-        <p>跑最小 text/audio smoke serve，根据 traces 决定是否补 control / credit / BARGE_IN。</p></div></div>
+      <div class="flow-step"><div class="num">1</div><div class="body"><h4>Qwen3-Omni executors</h4>
+        <p>实现 preprocess · audio encoder · image encoder · thinker · talker · codec executor，逐个接到 <code>StageExecutor</code> 接口上。</p></div></div>
+      <div class="flow-step"><div class="num">2</div><div class="body"><h4>Fan-in / join stage</h4>
+        <p>支持 encoder 输出汇聚到 thinker 等多输入 stage，等齐上游再 <code>run_batch</code>。</p></div></div>
+      <div class="flow-step"><div class="num">3</div><div class="body"><h4>Terminal output channel</h4>
+        <p>替换当前 debug <code>get_sink_outputs()</code>，接真正的 streaming 输出通道。</p></div></div>
+      <div class="flow-step"><div class="num">4</div><div class="body"><h4>GPU payload relay</h4>
+        <p>先 <code>cuda_ipc</code>（same-node GPU hidden / codec），再 <code>nixl</code>（cross-node）。</p></div></div>
+      <div class="flow-step"><div class="num">5</div><div class="body"><h4>Qwen3-Omni / TTS / interactive 实验</h4>
+        <p>在真实 workload 上做 latency / RTF / goodput 实验，根据 traces 再决定是否回头补 control / credit / BARGE_IN。</p></div></div>
     </div>
 
-    <h3 style="margin-top:36px">运行 demo</h3>
+    <h3 style="margin-top:36px">Smoke test 期望输出</h3>
+    <p>Fake graph 默认是 <code>ingress → thinker → sink</code>。</p>
     <div class="code">cd omnistream
 uv sync
 uv run omnistream-fake-graph --num-chunks <span class="num">3</span>
 uv run ruff check .</div>
+    <p>成功时输出的每个 payload 都应该带完整路径：</p>
+    <div class="code">{
+  <span class="str">"path"</span>: [<span class="str">"ingress"</span>, <span class="str">"thinker"</span>, <span class="str">"sink"</span>],
+  <span class="str">"last_stage"</span>: <span class="str">"sink"</span>
+}</div>
+    <p>这条 path 同时说明数据走完了：</p>
+    <ul style="color:var(--ink-soft);font-size:14px;line-height:1.8">
+      <li>Ray startup</li>
+      <li>RuntimeControlPlane</li>
+      <li>ZMQ PUSH/PULL</li>
+      <li>StageControlPlane</li>
+      <li>LocalRelay <code>put</code> / <code>get</code> / <code>cleanup</code></li>
+      <li>StageRuntime <code>recv</code> / <code>compute</code> / <code>send</code> loops</li>
+      <li>routing table</li>
+    </ul>
 
     <h3 style="margin-top:28px">最终架构约束（一句话）</h3>
     <div class="callout">
@@ -1620,8 +1636,8 @@ uv run ruff check .</div>
 
 <!-- footer -->
 <div class="footer wrap">
-  OmniStream · Ray + ZMQ + Relay prototype · 2026-05-22 (v3, SGLang-style Relay)<br>
-  本页根据 <code>omnistream/</code> 目录最新源码生成 · branch <code>omnistream-zmq-runtime</code>
+  OmniStream · Ray + ZMQ + Relay prototype · 2026-05-22 (v3.1 · synced with README)<br>
+  本页根据 <code>omnistream/</code> 目录最新源码和 README 生成 · branch <code>omnistream-zmq-runtime</code>
 </div>
 
 <script>
