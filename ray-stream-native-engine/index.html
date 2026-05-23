@@ -449,7 +449,7 @@ p code, li code {
 <!-- hero -->
 <section class="hero">
   <div class="wrap">
-    <span class="eyebrow">omnistream · v4 · ~/code/omnistream</span>
+    <span class="eyebrow">omnistream · v6 · ~/code/omnistream</span>
     <h1>OmniStream<br><em>Ray · ZMQ · Relay 架构</em></h1>
     <p class="lede">
       Research prototype，目标是先把 Qwen3-Omni 类多 stage 模型 serve 跑起来。
@@ -468,7 +468,7 @@ p code, li code {
       <div class="toc-title">本文导读</div>
       <ol>
         <li><a href="#overview">总览</a> · 一张图看清 Ray / ZMQ / Relay 三个 plane</li>
-        <li><a href="#callstack">五层 Call Stack</a> · API → StreamActor → StreamRuntime → StageActor → StageRuntime → Worker</li>
+        <li><a href="#callstack">Call Stack</a> · API → GatewayActor → StreamActor → StageActor(StageActorImpl) → StageRuntime → Worker</li>
         <li><a href="#boundary">Remote / ZMQ / Local 边界</a> · 谁是 Ray RPC，谁是 ZMQ，谁是本地</li>
         <li><a href="#components">组件细节</a> · 每层做什么 + 真实接口</li>
         <li><a href="#events">事件结构</a> · ControlPlaneDataEvent · RelayMetadata · WorkerInput/Output</li>
@@ -503,17 +503,19 @@ p code, li code {
         <h4>Ray RPC</h4>
         <p class="role-sub">低频 · graph / session / actor lifecycle</p>
         <ul>
-          <li><code>StreamActor</code>: <code>start_graph</code> · <code>recv_input_chunk</code> · <code>open_session</code> · ...</li>
-          <li><code>StageActor</code>: <code>start_stage</code> · <code>stop_stage</code> · <code>get_sink_outputs</code></li>
+          <li><code>StreamActor</code>: <code>start</code> · <code>shutdown</code> · <code>get_stage</code>（3 个）</li>
+          <li><code>StageActor</code>: <code>start_stage</code> · <code>stop_stage</code></li>
+          <li><code>GatewayActor</code>（stage 的一种，kind=<code>"gateway"</code>）: <code>start_stage</code> · <code>open_session</code> · <code>send</code> · <code>recv</code> · <code>close_session</code> · <code>stop_stage</code></li>
           <li><strong>不</strong>承担 stage-to-stage data</li>
         </ul>
       </div>
 
       <div class="role-card">
         <div class="role-name"><span class="tag">CONTROL PLANE</span></div>
-        <h4>StageControlPlane / RuntimeControlPlane</h4>
+        <h4>StageControlPlane</h4>
         <p class="role-sub">封装 ZMQ TCP PUSH/PULL · 高频 stage 通知</p>
         <ul>
+          <li>每个 stage（含 gateway）各持一份</li>
           <li>底层 <code>PullSocket</code>（TCP bind）/ <code>PushSocket</code>（TCP connect）</li>
           <li>每个 stage 的 endpoint 在 <code>StageControlSpec</code> 里 declare</li>
           <li>wire 上只放 <code>ControlPlaneDataEvent</code>（pickle）</li>
@@ -547,33 +549,36 @@ flowchart LR
   classDef relay  fill:#E0E8DC,stroke:#6E8B6A,color:#1F1E1C
 
   API[API server / client]:::api
-  SR[StreamActor → StreamRuntime<br/><i>Ray actor + local runtime</i>]:::sr
+  SR[StreamActor<br/><i>start / shutdown / get_stage</i>]:::sr
 
   subgraph G [stage graph · ZMQ TCP event plane]
     direction LR
+    GW[gateway<br/>GatewayActor]:::stage
     S1[ingress<br/>StageActor]:::stage
     S2[thinker<br/>StageActor]:::stage
     S3[sink<br/>StageActor]:::stage
   end
 
-  RM0[(LocalRelay · inline / shm)]:::relay
   RM1[(LocalRelay · inline / shm)]:::relay
   RM2[(LocalRelay · inline / shm)]:::relay
   RM3[(LocalRelay · inline / shm)]:::relay
+  RM4[(LocalRelay · inline / shm)]:::relay
 
-  API ==>|Ray RPC: recv_input_chunk| SR
+  API ==>|Ray RPC: gateway.send / recv| GW
+  SR -. Ray RPC: start_stage .-> GW
   SR -. Ray RPC: start_stage .-> S1
   SR -. Ray RPC: start_stage .-> S2
   SR -. Ray RPC: start_stage .-> S3
 
-  SR ==>|RuntimeControlPlane<br/>TCP PUSH ControlPlaneDataEvent| S1
+  GW ==>|StageControlPlane<br/>TCP PUSH ControlPlaneDataEvent| S1
   S1 ==>|StageControlPlane<br/>TCP PUSH ControlPlaneDataEvent| S2
   S2 ==>|StageControlPlane<br/>TCP PUSH ControlPlaneDataEvent| S3
+  S3 ==>|sink→gateway · normal Route| GW
 
-  SR --- RM0
-  S1 --- RM1
-  S2 --- RM2
-  S3 --- RM3
+  GW --- RM1
+  S1 --- RM2
+  S2 --- RM3
+  S3 --- RM4
       </div>
     </div>
 
@@ -582,8 +587,8 @@ flowchart LR
       ① Ray 负责 actor 启动、placement、生命周期，以及低频 control RPC；
       ② stage-to-stage 的 <code>ControlPlaneDataEvent</code> 走 ZMQ TCP，<strong>不</strong>走 Ray object store；
       ③ payload 本体不嵌在 event 里，event 只带 <code>relay_metadata: RelayMetadata</code>；
-      ④ <code>StreamRuntime</code> 只在 entry 时为 API chunk 做一次 <code>relay.put_async + control.send_to_stage</code>，
-      之后所有 stage-to-stage 都<strong>直接走 ZMQ + relay</strong>，不再回到中心 runtime。
+      ④ API ingress / egress 都通过 <strong>gateway stage</strong>（kind=<code>"gateway"</code>）：客户端 <code>gateway.send</code> 把 chunk 推给 entry stage，sink 通过普通 Route 把结果回送到 gateway，由 gateway 按 <code>session_id</code> demux 给 <code>gateway.recv</code>。
+      <strong>StreamRuntime 完全不出现在数据路径上</strong>。
     </div>
   </div>
 </section>
@@ -593,17 +598,21 @@ flowchart LR
   <div class="wrap">
     <div class="section-head">
       <div class="section-eyebrow">Section 2</div>
-      <h2>五层<em>调用栈</em></h2>
+      <h2>调用<em>栈</em></h2>
       <p class="section-sub">
-        从 API client 到 GPU kernel，OmniStream 一共 5 层。前两层和第 3 层都是 Ray actor + 本地 runtime
-        的 <strong>两两组合</strong>：actor 只是 RPC 边界，runtime 才是真正干活的对象。
+        从 API client 到 GPU kernel，OmniStream 由 <strong>StreamActor</strong>（graph 生命周期）+ N 个
+        <strong>stage actor</strong>（其中 <code>kind="gateway"</code> 的那个负责 API protocol + session demux）
+        组成。每个 actor 都是 <code>Impl</code> + <code>ray.remote(...)</code> 的两层：<code>StageActorImpl</code> 是普通类，
+        <code>StageActor = ray.remote(...)(StageActorImpl)</code>，<code>GatewayActorImpl(StageActorImpl)</code> 通过类继承拿到
+        <code>stop_stage</code> 等公共 RPC。
       </p>
     </div>
 
     <div class="mermaid-wrap">
-      <div class="m-title">图 2.1 · 5-layer call stack</div>
+      <div class="m-title">图 2.1 · call stack</div>
       <div class="m-sub">
         实线 = 直接调用；虚线 = Ray RPC（actor.method.remote）；粗箭头 = ZMQ event。
+        L4 同一层有两种 stage actor：普通 <code>StageActor</code>（持 <code>StageRuntime</code>）和 <code>GatewayActor</code>（持 <code>GatewayRuntime</code>）。
       </div>
       <div class="mermaid">
 flowchart TB
@@ -613,17 +622,23 @@ flowchart TB
   classDef leaf   fill:#E0E8DC,stroke:#6E8B6A,color:#1F1E1C
 
   L1[API / client]:::api
-  L2[StreamActor &nbsp;<i>@ray.remote</i>]:::ray
-  L3[StreamRuntime &nbsp;<i>local</i>]:::local
-  L4["StageActor &nbsp;<i>@ray.remote</i> &nbsp;(N 个)"]:::ray
-  L5[StageRuntime &nbsp;<i>local</i>]:::local
+  L2[StreamActor &nbsp;<i>ray.remote(StreamActorImpl)</i><br/>start / shutdown / get_stage]:::ray
+  L3[StreamRuntime &nbsp;<i>local</i><br/>graph + stage_actors only]:::local
+  L4G["GatewayActor &nbsp;<i>ray.remote(GatewayActorImpl(StageActorImpl))</i><br/>session demux + protocol"]:::ray
+  L4["StageActor &nbsp;<i>ray.remote(StageActorImpl)</i> &nbsp;(N 个)"]:::ray
+  L5G[GatewayRuntime &nbsp;<i>local</i><br/>StageControlPlane + session_outputs]:::local
+  L5[StageRuntime &nbsp;<i>local</i><br/>StageControlPlane + 2 loops + Worker]:::local
   L6[Worker.run &nbsp;<i>local · engine loop · fake → vLLM</i>]:::leaf
 
-  L1 ==&gt;|.remote| L2
+  L1 ==&gt;|.remote start/get_stage| L2
+  L1 ==&gt;|gateway.send / recv| L4G
   L2 --&gt;|self.runtime| L3
+  L3 -.start_stage.-&gt; L4G
   L3 -.start_stage.-&gt; L4
-  L3 ==&gt;|ZMQ PUSH<br/>entry event| L5
+  L4G --&gt;|self.runtime| L5G
   L4 --&gt;|self.runtime| L5
+  L5G ==&gt;|ZMQ PUSH<br/>send to entry stage| L5
+  L5 ==&gt;|ZMQ PUSH<br/>sink → gateway Route| L5G
   L5 --&gt;|input_queue / output_queue| L6
       </div>
     </div>
@@ -631,21 +646,22 @@ flowchart TB
     <table class="table">
       <thead><tr><th>层</th><th>类型</th><th>对象</th><th>主要职责</th></tr></thead>
       <tbody>
-        <tr><td>L1</td><td>外部</td><td>API / client</td><td>发 <code>StreamRuntimeInputChunk</code>，拉结果</td></tr>
-        <tr><td>L2</td><td><span class="pill indigo">Ray actor</span></td><td><code>StreamActor</code></td><td>RPC 边界；持有一个 <code>StreamRuntime</code>，全部 <code>@rpc_method</code> 直接 delegate</td></tr>
-        <tr><td>L3</td><td><span class="pill sage">local</span></td><td><code>StreamRuntime</code></td><td>graph / session / API ingress 的 <strong>真理源</strong>；<code>RuntimeControlPlane</code> + <code>LocalRelay</code></td></tr>
-        <tr><td>L4</td><td><span class="pill indigo">Ray actor</span></td><td><code>StageActor</code></td><td>每 stage 一个；只 <code>start_stage / stop_stage / get_sink_outputs</code></td></tr>
-        <tr><td>L5</td><td><span class="pill sage">local</span></td><td><code>StageRuntime</code></td><td>本 stage 的 control plane + relay + routing；持有 <code>_recv_loop</code> / <code>_send_loop</code> 两条 runtime loop，并把 <code>Worker.run</code> 挂到两个 queue 之间</td></tr>
-        <tr><td>L6</td><td><span class="pill gold">model</span></td><td><code>Worker</code></td><td>自己拥有 engine loop（<code>Worker.run(input_queue, output_queue)</code>），决定 batching / scheduling / 流式输出；v1 是 <code>FakeWorker</code>，下一步 <code>VllmWorker</code></td></tr>
+        <tr><td>L1</td><td>外部</td><td>API / client</td><td>调 <code>stream.start</code>，然后 <code>get_stage("gateway")</code> 拿到 <code>GatewayActor</code> handle，做 <code>open_session / send / recv / close_session</code></td></tr>
+        <tr><td>L2</td><td><span class="pill indigo">Ray actor</span></td><td><code>StreamActor</code> = <code>ray.remote(...)(StreamActorImpl)</code></td><td>RPC 边界；3 个 <code>@rpc_method</code>：<code>start</code> / <code>shutdown</code> / <code>get_stage</code>。直接 delegate 到 <code>StreamRuntime</code></td></tr>
+        <tr><td>L3</td><td><span class="pill sage">local</span></td><td><code>StreamRuntime</code></td><td>瘦身版：只持 <code>graph</code> + <code>stage_actors</code> 字典。<code>start_graph</code> 按 <code>spec.kind</code> 选 <code>GatewayActor</code> / <code>StageActor</code>，并并行 <code>start_stage</code>；<code>shutdown</code> 调 <code>stop_stage</code></td></tr>
+        <tr><td>L4</td><td><span class="pill indigo">Ray actor</span></td><td><code>StageActor</code> / <code>GatewayActor</code></td><td>每 stage 一个。普通 stage 只 <code>start_stage</code> / <code>stop_stage</code>；gateway 额外 <code>open_session</code> / <code>send</code> / <code>recv</code> / <code>close_session</code>。<code>GatewayActorImpl</code> 通过 <code>class GatewayActorImpl(StageActorImpl)</code> 继承</td></tr>
+        <tr><td>L5</td><td><span class="pill sage">local</span></td><td><code>StageRuntime</code> / <code>GatewayRuntime</code></td><td>本 stage 的 control plane + relay。<code>StageRuntime</code> 持 2 条 loop + Worker；<code>GatewayRuntime</code> 持 1 条 recv loop + <code>session_outputs: dict[sid, Queue]</code></td></tr>
+        <tr><td>L6</td><td><span class="pill gold">model</span></td><td><code>Worker</code></td><td>普通 stage 的 leaf：自己拥有 engine loop（<code>Worker.run(input_queue, output_queue)</code>）。Gateway 没有这一层，session demux 取代了 Worker</td></tr>
       </tbody>
     </table>
 
     <div class="callout sage">
-      <strong>为什么有两套 actor+runtime split？</strong>
-      <code>StreamActor</code> 和 <code>StageActor</code> 都是 <code>@ray.remote</code>；
-      它们只是 Ray RPC 的<strong>边界</strong>，里面持有真正的本地 <code>StreamRuntime</code> / <code>StageRuntime</code>。
-      这样可以：① 把 RPC handler 写得很薄（一行 <code>return await self.runtime.foo(...)</code>），
-      ② 让 runtime 单独跑单元测试不需要 Ray，③ 以后把 RPC 接口换成 HTTP / gRPC 也不影响 runtime。
+      <strong>Impl + ray.remote 的拆法。</strong>
+      v6 起每个 actor 都写成两层：<code>StageActorImpl</code>、<code>StreamActorImpl</code>、<code>GatewayActorImpl</code> 都是普通 Python 类，
+      末尾再 <code>StageActor = ray.remote(max_concurrency=128)(StageActorImpl)</code> 包成 Ray 远程类。
+      这样 <code>GatewayActorImpl(StageActorImpl)</code> 通过<strong>类继承</strong>直接复用 <code>stop_stage</code>、
+      <code>self.runtime</code> 等公共结构，不用复制 RPC handler。
+      也保留了原本的好处：① RPC handler 一行 delegate，② runtime 单测不依赖 Ray，③ 以后换 HTTP / gRPC 不影响 runtime。
     </div>
   </div>
 </section>
@@ -668,9 +684,10 @@ flowchart TB
         <h4>@rpc_method</h4>
         <p class="role-sub">跨进程 / 跨 actor · 低频</p>
         <ul>
-          <li><strong>StreamActor</strong>: <code>start_graph</code> · <code>shutdown_runtime</code> · <code>open_session</code> · <code>recv_input_chunk</code> · <code>close_session</code> · <code>get_stage_outputs</code></li>
-          <li><strong>StageActor</strong>: <code>start_stage</code> · <code>get_sink_outputs</code> · <code>stop_stage</code></li>
-          <li>StageActor <strong>不</strong>提供 data / control / credit receive RPC</li>
+          <li><strong>StreamActor</strong>: <code>start</code> · <code>shutdown</code> · <code>get_stage</code>（仅 3 个）</li>
+          <li><strong>StageActor</strong>: <code>start_stage</code> · <code>stop_stage</code></li>
+          <li><strong>GatewayActor</strong>: <code>start_stage</code> · <code>stop_stage</code> · <code>open_session</code> · <code>send</code> · <code>recv</code> · <code>close_session</code></li>
+          <li>StageActor / GatewayActor <strong>不</strong>提供 data / control / credit receive RPC</li>
         </ul>
       </div>
 
@@ -692,8 +709,9 @@ flowchart TB
         <h4>普通 Python 方法</h4>
         <p class="role-sub">同 actor 进程内 · 不暴露到 Ray</p>
         <ul>
-          <li><code>StreamRuntime.*</code>（StreamActor 的真实实现）</li>
+          <li><code>StreamRuntime.*</code>（StreamActorImpl 的真实实现）</li>
           <li><code>StageRuntime._recv_loop</code> · <code>_send_loop</code> · <code>_handle_event</code> · <code>_send_output</code></li>
+          <li><code>GatewayRuntime._recv_loop</code> · <code>_handle_event</code> · <code>send</code> · <code>recv</code></li>
           <li><code>Worker.run</code></li>
           <li><code>Relay.put_async</code> · <code>get_async</code> · <code>cleanup</code> · <code>close</code></li>
           <li><code>RelayOperation.wait_for_completion</code></li>
@@ -731,7 +749,7 @@ flowchart TB
           <li><code>op = await relay.put_async(output.payload, request_id=output.session_id)</code></li>
           <li><code>control.send_to_stage(dst, stage_specs[dst].control.connect_endpoint, event)</code></li>
           <li><code>await op.wait_for_completion()</code></li>
-          <li>无 route 时 fallback 写 <code>sink_outputs</code>（debug）</li>
+          <li>无 route 时丢弃（sink → gateway 现在是正常 Route，不再需要 fallback）</li>
         </ul>
       </div>
     </div>
@@ -756,73 +774,77 @@ flowchart TB
       </p>
     </div>
 
-    <h3>4.1 · StreamActor — Ray RPC 边界</h3>
+    <h3>4.1 · StreamActor — graph lifecycle 边界</h3>
     <p>
-      thin Ray actor，<code>max_concurrency=1</code>，所有 <code>@rpc_method</code> 一行 delegate 到内部 <code>StreamRuntime</code>。
+      thin Ray actor，所有 <code>@rpc_method</code> 一行 delegate 到内部 <code>StreamRuntime</code>。
+      RPC surface 收窄到 <strong>3 个</strong>：<code>start</code> / <code>shutdown</code> / <code>get_stage</code>。
+      所有 session / data 相关的 RPC（<code>open_session</code> / <code>send</code> / <code>recv</code> / <code>close_session</code>）
+      都搬到了 gateway stage 上。
     </p>
-    <div class="code"><span class="kw">@ray.remote</span>(max_concurrency=<span class="num">1</span>)
-<span class="kw">class</span> <span class="ty">StreamActor</span>:
+    <div class="code"><span class="kw">class</span> <span class="ty">StreamActorImpl</span>:
     <span class="kw">def</span> <span class="fn">__init__</span>(self):
         self.runtime = StreamRuntime()
 
     <span class="kw">@rpc_method</span>
-    <span class="kw">async def</span> <span class="fn">start_graph</span>(self, graph: GraphSpec) -&gt; RpcAck:
+    <span class="kw">async def</span> <span class="fn">start</span>(self, graph: GraphSpec) -&gt; RpcAck:
         <span class="kw">return await</span> self.runtime.start_graph(graph)
 
     <span class="kw">@rpc_method</span>
-    <span class="kw">async def</span> <span class="fn">shutdown_runtime</span>(self) -&gt; <span class="kw">None</span>:
+    <span class="kw">async def</span> <span class="fn">shutdown</span>(self) -&gt; <span class="kw">None</span>:
         <span class="kw">await</span> self.runtime.shutdown()
 
-    <span class="cmt"># API entrypoints (delegate to runtime)</span>
     <span class="kw">@rpc_method</span>
-    <span class="kw">async def</span> <span class="fn">open_session</span>(self, session_id: <span class="ty">str</span>) -&gt; RpcAck: ...
-    <span class="kw">@rpc_method</span>
-    <span class="kw">async def</span> <span class="fn">recv_input_chunk</span>(self, chunk: StreamRuntimeInputChunk) -&gt; RpcAck: ...
-    <span class="kw">@rpc_method</span>
-    <span class="kw">async def</span> <span class="fn">close_session</span>(self, session_id: <span class="ty">str</span>, reason: <span class="ty">str</span> = <span class="str">""</span>) -&gt; RpcAck: ...
-    <span class="kw">@rpc_method</span>
-    <span class="kw">async def</span> <span class="fn">get_stage_outputs</span>(self, stage_id: <span class="ty">str</span>) -&gt; <span class="ty">list</span>: ...</div>
+    <span class="kw">async def</span> <span class="fn">get_stage</span>(self, stage_id: <span class="ty">str</span>) -&gt; <span class="ty">Any</span>:
+        <span class="kw">return</span> self.runtime.stage_actors[stage_id]
 
-    <h3>4.2 · StreamRuntime — graph / session / API ingress 真理</h3>
+
+StreamActor = ray.remote(max_concurrency=<span class="num">128</span>)(StreamActorImpl)</div>
+
+    <h3>4.2 · StreamRuntime — graph lifecycle only</h3>
     <p>
-      不是 Ray actor；普通 class。持有所有 <code>StageActor</code> 的 ray handle、自己的 <code>RuntimeControlPlane</code>、自己的 <code>LocalRelay</code>，以及 session table。
+      不是 Ray actor；普通 class。<strong>瘦身版</strong>：只持 <code>graph</code> 和 <code>stage_actors</code> 字典。
+      没有 <code>RuntimeControlPlane</code>、没有 <code>LocalRelay</code>、没有 session table、没有 ingress
+      relay.put。所有这些都搬到 gateway stage 里去了。
     </p>
     <div class="code"><span class="kw">class</span> <span class="ty">StreamRuntime</span>:
+    <span class="cmt">"""Owns graph topology and stage actor lifecycle. Nothing else."""</span>
+
     <span class="kw">def</span> <span class="fn">__init__</span>(self):
         self.graph: GraphSpec | <span class="kw">None</span> = <span class="kw">None</span>
         self.stage_actors: <span class="ty">dict</span>[<span class="ty">str</span>, <span class="ty">Any</span>] = {}
-        self.sessions: <span class="ty">set</span>[<span class="ty">str</span>] = <span class="ty">set</span>()
-        self.control = RuntimeControlPlane()
-        self.relay = LocalRelay(owner_stage=<span class="str">"stream_runtime"</span>)
 
     <span class="kw">async def</span> <span class="fn">start_graph</span>(self, graph: GraphSpec) -&gt; RpcAck: ...
-    <span class="kw">async def</span> <span class="fn">shutdown</span>(self) -&gt; <span class="kw">None</span>: ...
-    <span class="kw">async def</span> <span class="fn">open_session</span>(self, session_id: <span class="ty">str</span>) -&gt; RpcAck: ...
-    <span class="kw">async def</span> <span class="fn">recv_input_chunk</span>(self, chunk: StreamRuntimeInputChunk) -&gt; RpcAck: ...
-    <span class="kw">async def</span> <span class="fn">close_session</span>(self, session_id, reason=<span class="str">""</span>) -&gt; RpcAck: ...
-    <span class="kw">async def</span> <span class="fn">get_stage_outputs</span>(self, stage_id: <span class="ty">str</span>) -&gt; <span class="ty">list</span>: ...</div>
+    <span class="kw">async def</span> <span class="fn">shutdown</span>(self) -&gt; <span class="kw">None</span>: ...</div>
 
     <h4>start_graph 做的事</h4>
     <ul style="color:var(--ink-soft);font-size:14px;line-height:1.8">
       <li>从 <code>graph.routes</code> 编译每个 src stage 的 routes tuple。</li>
-      <li>对每个 stage <code>StageActor.options(num_cpus=0).remote()</code> 创建一个 Ray actor。</li>
-      <li>用 <code>asyncio.gather(*[actor.start_stage.remote(spec, routes, stage_specs) for ...])</code> <strong>并行</strong>启动所有 stage。<br>
-          注意：<code>stage_specs</code>（<strong>全量</strong> stage 字典）一并传给每个 stage，方便 stage 自己查下游 control endpoint。</li>
+      <li>对每个 stage 根据 <code>spec.kind</code> 选 actor 类：
+          <code>actor_cls = GatewayActor if spec.kind == "gateway" else StageActor</code>，
+          然后 <code>actor_cls.options(num_cpus=0).remote()</code>。</li>
+      <li>用 <code>asyncio.gather</code> <strong>并行</strong>启动所有 stage。<br>
+          普通 stage：<code>actor.start_stage.remote(spec, routes, stage_specs)</code>；<br>
+          gateway stage：额外把 <code>ingress=graph.ingress</code> 关键字一起传过去。<br>
+          <code>stage_specs</code>（<strong>全量</strong> stage 字典）一并传给每个 stage，方便 stage 自己查下游 control endpoint。</li>
     </ul>
 
-    <h4>recv_input_chunk 做的事</h4>
+    <h4>shutdown 做的事</h4>
     <ul style="color:var(--ink-soft);font-size:14px;line-height:1.8">
-      <li>按 <code>chunk.modality</code> 从 <code>graph.ingress</code> 查 entry stage。</li>
-      <li><code>op = await self.relay.put_async(chunk.payload, request_id=chunk.session_id)</code>。</li>
-      <li>构造 <code>ControlPlaneDataEvent(session_id, relay_metadata=op.metadata, chunk_metadata={..., "modality": modality})</code>。</li>
-      <li><code>await self.control.send_to_stage(entry_stage, entry_spec.control.connect_endpoint, event)</code>。</li>
-      <li><code>await op.wait_for_completion()</code>（v1 是 no-op，但保留接口）。</li>
+      <li>对所有 stage actor 调 <code>stop_stage.remote()</code>。</li>
+      <li>清空 <code>stage_actors</code>。</li>
     </ul>
 
     <h3>4.3 · StageActor — Ray RPC lifecycle wrapper</h3>
-    <p>每个物理 stage 一个 Ray actor。RPC 表面已经收窄到只剩三个。</p>
-    <div class="code"><span class="kw">@ray.remote</span>(max_concurrency=<span class="num">128</span>)
-<span class="kw">class</span> <span class="ty">StageActor</span>:
+    <p>
+      每个物理 stage 一个 Ray actor。RPC 表面只剩 <code>start_stage</code> / <code>stop_stage</code> 两个。
+      实现拆成 <code>StageActorImpl</code>（普通类）+ <code>StageActor = ray.remote(...)(StageActorImpl)</code>
+      —— 这样 <code>GatewayActorImpl</code> 可以直接 <code>class GatewayActorImpl(StageActorImpl)</code> 继承公共 <code>stop_stage</code>、<code>self.runtime</code> 等结构。
+    </p>
+    <div class="code"><span class="kw">class</span> <span class="ty">StageActorImpl</span>:
+    <span class="cmt">"""Plain class form of the stage actor.
+    Inherit this to extend, then wrap with ray.remote(...).
+    """</span>
+
     <span class="kw">def</span> <span class="fn">__init__</span>(self):
         self.runtime: StageRuntime | <span class="kw">None</span> = <span class="kw">None</span>
 
@@ -833,14 +855,16 @@ flowchart TB
         routes: <span class="ty">tuple</span>[Route, ...],
         stage_specs: <span class="ty">dict</span>[<span class="ty">str</span>, StageSpec],
     ) -&gt; RpcAck: ...
+
     <span class="kw">@rpc_method</span>
-    <span class="kw">async def</span> <span class="fn">get_sink_outputs</span>(self) -&gt; <span class="ty">list</span>[WorkerOutput]: ...
-    <span class="kw">@rpc_method</span>
-    <span class="kw">async def</span> <span class="fn">stop_stage</span>(self) -&gt; <span class="kw">None</span>: ...</div>
+    <span class="kw">async def</span> <span class="fn">stop_stage</span>(self) -&gt; <span class="kw">None</span>: ...
+
+
+StageActor = ray.remote(max_concurrency=<span class="num">128</span>)(StageActorImpl)</div>
     <div class="callout indigo">
       <strong>注意。</strong>
       ① 没有 <code>set_routes</code> RPC 了 — routes 在 <code>start_stage</code> 时一次传完；<br>
-      ② 没有 <code>get_stage_info</code> RPC 了；<br>
+      ② 没有 stage-output 拉取 RPC 了 — sink 通过普通 Route 把结果回送到 gateway，gateway 自己 demux；<br>
       ③ 没有任何 <code>recv_data_event</code> / <code>recv_control_event</code> Ray RPC handler — stage 间通信只走 ZMQ。
     </div>
 
@@ -867,10 +891,7 @@ flowchart TB
             <td>output port → routes 表；下游 endpoint 通过 <code>stage_specs[dst].control.connect_endpoint</code> 查。</td></tr>
         <tr><td><span class="pill sage">send</span></td>
             <td><code>_send_loop()</code> · <code>_send_output()</code></td>
-            <td>从 <code>output_queue</code> 取，<code>relay.put_async</code> 后用 <code>control.send_to_stage</code> 发给下游。</td></tr>
-        <tr><td><span class="pill">debug</span></td>
-            <td><code>sink_outputs: list</code></td>
-            <td>无 route 时把 <code>WorkerOutput</code> 追加进来，供 <code>get_sink_outputs</code> 读出。</td></tr>
+            <td>从 <code>output_queue</code> 取，<code>relay.put_async</code> 后用 <code>control.send_to_stage</code> 发给下游。无 route 时丢弃（sink 通过普通 Route 回送到 gateway）。</td></tr>
       </tbody>
     </table>
 
@@ -901,9 +922,6 @@ flowchart TB
 
     <span class="kw">async def</span> <span class="fn">_send_output</span>(self, output: WorkerOutput) -&gt; <span class="kw">None</span>:
         routes = self.routes_by_port.get(output.port, [])
-        <span class="kw">if not</span> routes:
-            self.sink_outputs.append(output)
-            <span class="kw">return</span>
         <span class="kw">for</span> route <span class="kw">in</span> routes:
             op = <span class="kw">await</span> self.relay.put_async(output.payload, request_id=output.session_id)
             event = ControlPlaneDataEvent(
@@ -944,7 +962,79 @@ flowchart TB
       接 vLLM 就要不停地和它内部的 continuous batching 打架。queue-driven 的 <code>Worker.run</code> 让 vLLM、SGLang、自写 batcher 都能直接落到这一层。
     </div>
 
-    <h3>4.6 · 一个 StageActor 内部全貌</h3>
+    <h3>4.6 · Gateway — API 协议 + session demux 的特殊 stage</h3>
+    <p>
+      <strong>Gateway 是 graph 里一个普通的 stage</strong>（<code>spec.kind == "gateway"</code>），只是它的"worker"不是模型，
+      而是 <strong>session 多路解复用 + API 协议翻译</strong>。结构上和 <code>StageRuntime</code> 同构：
+      自己持 <code>StageControlPlane</code>（PULL bind + PUSH cache）、自己的 <code>LocalRelay</code>、自己的 recv loop。
+      区别在于 <code>_handle_event</code> 把收到的 payload 按 <code>session_id</code> 投递到
+      <code>session_outputs: dict[sid, asyncio.Queue]</code>，而不是 worker 的 <code>input_queue</code>。
+      sink stage 通过<strong>普通 Route</strong>（<code>sink → gateway</code>）把结果送过来——没有"egress"特殊通路。
+    </p>
+    <div class="code"><span class="kw">class</span> <span class="ty">GatewayRuntime</span>:
+    <span class="cmt">"""Stage at the graph boundary: protocol translation + session demux."""</span>
+
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, spec, stage_specs, *, ingress):
+        self.control = StageControlPlane(stage_id=spec.stage_id, control=spec.control)
+        self.relay = LocalRelay(owner_stage=spec.stage_id)
+        self.stage_specs = stage_specs
+        self.ingress = ingress
+        self.sessions: <span class="ty">set</span>[<span class="ty">str</span>] = <span class="ty">set</span>()
+        self.session_outputs: <span class="ty">dict</span>[<span class="ty">str</span>, asyncio.Queue[WorkerOutput | <span class="kw">None</span>]] = {}
+
+    <span class="kw">async def</span> <span class="fn">_handle_event</span>(self, event: ControlPlaneDataEvent) -&gt; <span class="kw">None</span>:
+        op = <span class="kw">await</span> self.relay.get_async(event.relay_metadata, request_id=event.session_id)
+        <span class="kw">await</span> op.wait_for_completion()
+        self.relay.cleanup(event.session_id)
+        output = WorkerOutput(session_id=event.session_id, port=<span class="str">"out"</span>,
+                              payload=op.payload, chunk_metadata=<span class="ty">dict</span>(event.chunk_metadata))
+        q = self.session_outputs.get(event.session_id)
+        <span class="kw">if</span> q <span class="kw">is not None</span>:
+            <span class="kw">await</span> q.put(output)
+
+    <span class="kw">async def</span> <span class="fn">send</span>(self, sid, modality, payload, meta=<span class="kw">None</span>):
+        entry_stage = self.ingress[modality]
+        entry_spec = self.stage_specs[entry_stage]
+        op = <span class="kw">await</span> self.relay.put_async(payload, request_id=sid)
+        event = ControlPlaneDataEvent(session_id=sid, relay_metadata=op.metadata,
+                                      chunk_metadata={**(meta <span class="kw">or</span> {}), <span class="str">"modality"</span>: modality})
+        <span class="kw">await</span> self.control.send_to_stage(entry_stage, entry_spec.control.connect_endpoint, event)
+        <span class="kw">await</span> op.wait_for_completion()
+
+    <span class="kw">async def</span> <span class="fn">recv</span>(self, sid, timeout=<span class="num">10.0</span>):
+        q = self.session_outputs.get(sid)
+        <span class="kw">return await</span> asyncio.wait_for(q.get(), timeout=timeout)
+
+
+<span class="kw">class</span> <span class="ty">GatewayActorImpl</span>(<span class="ty">StageActorImpl</span>):
+    <span class="cmt"># inherits stop_stage from StageActorImpl</span>
+    <span class="kw">@rpc_method</span>
+    <span class="kw">async def</span> <span class="fn">start_stage</span>(self, spec, routes, stage_specs, *, ingress=<span class="kw">None</span>):
+        self.runtime = GatewayRuntime(spec, stage_specs, ingress=ingress)
+        <span class="kw">await</span> self.runtime.start()
+        <span class="kw">return</span> RpcAck.success(...)
+
+    <span class="kw">@rpc_method</span>
+    <span class="kw">async def</span> <span class="fn">open_session</span>(self, sid: <span class="ty">str</span>) -&gt; <span class="kw">None</span>: ...
+    <span class="kw">@rpc_method</span>
+    <span class="kw">async def</span> <span class="fn">send</span>(self, sid, modality, payload, meta=<span class="kw">None</span>) -&gt; <span class="kw">None</span>: ...
+    <span class="kw">@rpc_method</span>
+    <span class="kw">async def</span> <span class="fn">recv</span>(self, sid, timeout=<span class="num">10.0</span>) -&gt; WorkerOutput | <span class="kw">None</span>: ...
+    <span class="kw">@rpc_method</span>
+    <span class="kw">async def</span> <span class="fn">close_session</span>(self, sid: <span class="ty">str</span>) -&gt; <span class="kw">None</span>: ...
+
+
+GatewayActor = ray.remote(max_concurrency=<span class="num">128</span>)(GatewayActorImpl)</div>
+
+    <div class="callout sage">
+      <strong>典型客户端调用。</strong>
+      <code>stream_actor.start.remote(graph)</code> → <code>gateway = await stream_actor.get_stage.remote("gateway")</code>
+      → <code>await gateway.open_session.remote(sid)</code> → 循环 <code>gateway.send.remote(sid, modality, payload, meta)</code>
+      / <code>gateway.recv.remote(sid, timeout)</code> → <code>gateway.close_session.remote(sid)</code>。
+      Gateway 内部按 <code>session_id</code> 维护一组 <code>asyncio.Queue</code>，所以多 session 并发 recv 不会串台。
+    </div>
+
+    <h3>4.7 · 一个 StageActor 内部全貌</h3>
     <div class="mermaid-wrap">
       <div class="m-title">图 4.1 · StageActor 进程内部组件 + 数据通路</div>
       <div class="m-sub">
@@ -966,7 +1056,6 @@ flowchart TB
       direction LR
       START["start_stage(spec, routes, stage_specs)"]:::rpc
       STOP["stop_stage()"]:::rpc
-      SINKS["get_sink_outputs()"]:::rpc
     end
 
     subgraph RUNTIME [StageRuntime · 本进程内]
@@ -980,7 +1069,6 @@ flowchart TB
       SO["_send_output()<br/>relay.put_async<br/>+ control.send_to_stage<br/>+ wait_for_completion"]:::loop
       RM[LocalRelay<br/>inline · shm<br/>tracked by request_id]:::relay
       RT[routes_by_port<br/>stage_specs]:::loop
-      SINK[(sink_outputs · debug)]:::store
     end
 
     subgraph WORKER [Worker]
@@ -990,7 +1078,6 @@ flowchart TB
 
     START --&gt; RUNTIME
     STOP --&gt; RUNTIME
-    SINKS --&gt; SINK
 
     CP --&gt; RL --&gt; HE
     HE --&gt; RM
@@ -999,8 +1086,7 @@ flowchart TB
     OQ --&gt; SL --&gt; SO
     SO --&gt; RM
     SO --&gt; CP
-    SO -.no route.- SINK
-    CP --&gt; DOWN[(downstream StageActor<br/>ZMQ PULL)]:::zmq
+    CP --&gt; DOWN[(downstream StageActor<br/>or gateway<br/>ZMQ PULL)]:::zmq
   end
       </div>
     </div>
@@ -1035,13 +1121,13 @@ flowchart TB
     <h3>5.2 · 边界数据</h3>
     <div class="grid-3">
       <div class="role-card indigo">
-        <h4>StreamRuntimeInputChunk</h4>
-        <p class="role-sub">API client → StreamActor</p>
+        <h4>gateway.send 参数</h4>
+        <p class="role-sub">API client → GatewayActor</p>
         <ul>
-          <li><code>session_id</code></li>
-          <li><code>modality</code>（决定 entry stage）</li>
-          <li><code>payload</code></li>
-          <li><code>chunk_metadata</code></li>
+          <li><code>sid: str</code>（session id）</li>
+          <li><code>modality: str</code>（决定 entry stage）</li>
+          <li><code>payload: Any</code></li>
+          <li><code>meta: dict | None</code></li>
         </ul>
       </div>
       <div class="role-card">
@@ -1067,8 +1153,10 @@ flowchart TB
 
     <h3>5.3 · Session 与 RPC Ack</h3>
     <p>
-      v4 起 session 状态退化成 <code>StreamRuntime.sessions: set[str]</code>。<code>open_session(session_id)</code> /
-      <code>close_session(session_id)</code> 只是往集合里加 / 移除一个 id，没有专门的 dataclass 包装；都返回 <code>RpcAck</code>。
+      v6 起 session 状态完全归 gateway：<code>GatewayRuntime.sessions: set[str]</code> +
+      <code>session_outputs: dict[sid, asyncio.Queue]</code>。<code>gateway.open_session(sid)</code> 创建空队列，
+      <code>gateway.close_session(sid)</code> 往队列里投 <code>None</code>（让等待中的 <code>recv</code> 醒过来）并删除。
+      StreamRuntime 本体没有 session 概念。
     </p>
     <div class="code"><span class="kw">@dataclass</span>(frozen=<span class="kw">True</span>)
 <span class="kw">class</span> <span class="ty">RpcAck</span>:
@@ -1137,11 +1225,11 @@ flowchart TB
       </div>
     </div>
 
-    <h3>6.3 · StageControlPlane / RuntimeControlPlane（上层）</h3>
+    <h3>6.3 · StageControlPlane（上层）</h3>
     <div class="grid-2">
       <div class="role-card">
         <h4>StageControlPlane</h4>
-        <p class="role-sub">每个 stage 各一份 · PULL bind + PUSH cache</p>
+        <p class="role-sub">每个 stage 各一份（包括 gateway）· PULL bind + PUSH cache</p>
         <ul>
           <li><code>__init__(stage_id, *, control: StageControlSpec)</code></li>
           <li><code>start()</code> → <code>recv()</code> 拉 <code>ControlPlaneDataEvent</code></li>
@@ -1151,13 +1239,12 @@ flowchart TB
         </ul>
       </div>
       <div class="role-card indigo">
-        <h4>RuntimeControlPlane</h4>
-        <p class="role-sub">StreamRuntime 一份 · 只 PUSH，没有 PULL</p>
+        <h4>没有 RuntimeControlPlane</h4>
+        <p class="role-sub">v6 删掉了</p>
         <ul>
-          <li>没有 recv 路径：API ingress 走 Ray RPC，不走 ZMQ</li>
-          <li><code>send_to_stage(stage_id, endpoint, event)</code></li>
-          <li><code>close()</code></li>
-          <li>只在 <code>recv_input_chunk</code> 里 PUSH 一次 entry event</li>
+          <li>之前 <code>StreamRuntime</code> 还有一个只 PUSH 的 control plane 用来推 entry event</li>
+          <li>现在 entry event 由 <strong>gateway stage</strong> 用自己的 <code>StageControlPlane.send_to_stage</code> 推</li>
+          <li>StreamRuntime 完全离开数据路径，不再持有任何 socket</li>
         </ul>
       </div>
     </div>
@@ -1345,8 +1432,7 @@ flowchart TB
 <span class="kw">class</span> <span class="ty">StageSpec</span>:
     stage_id: <span class="ty">str</span>
     control: StageControlSpec               <span class="cmt"># listen_host:port / connect_host:port</span>
-    kind: <span class="ty">str</span> = <span class="str">"fake"</span>                  <span class="cmt"># executor/model kind</span>
-    default_output_port: <span class="ty">str</span> = <span class="str">"out"</span>      <span class="cmt"># fallback executor output port</span>
+    kind: <span class="ty">str</span> = <span class="str">"fake"</span>                  <span class="cmt"># "gateway" picks GatewayActor; else StageActor</span>
     config: <span class="ty">dict</span>[<span class="ty">str</span>, <span class="ty">Any</span>] = field(default_factory=<span class="ty">dict</span>)
 
 
@@ -1371,16 +1457,18 @@ flowchart TB
 
 <span class="kw">@dataclass</span>(frozen=<span class="kw">True</span>)
 <span class="kw">class</span> <span class="ty">GraphSpec</span>:
-    stages: <span class="ty">dict</span>[<span class="ty">str</span>, StageSpec]
+    stages: <span class="ty">dict</span>[<span class="ty">str</span>, StageSpec]    <span class="cmt"># includes the gateway stage</span>
     edges: <span class="ty">dict</span>[<span class="ty">str</span>, EdgeSpec]
-    ingress: <span class="ty">dict</span>[<span class="ty">str</span>, <span class="ty">str</span>]            <span class="cmt"># modality -&gt; entry stage</span>
-    routes: <span class="ty">tuple</span>[Route, ...]</div>
+    ingress: <span class="ty">dict</span>[<span class="ty">str</span>, <span class="ty">str</span>]            <span class="cmt"># modality -&gt; entry stage_id</span>
+    routes: <span class="ty">tuple</span>[Route, ...]              <span class="cmt"># gateway is a normal destination</span></div>
 
     <h3>8.2 · 唯一 preset：<code>make_linear_graph</code></h3>
     <p>
-      v1 唯一 demo graph：<code>ingress → thinker → sink</code>，所有 modality 都打到 <code>ingress</code>。
+      v6 demo graph：<code>ingress → thinker → sink → gateway</code>，所有 modality 都打到 <code>ingress</code>。
+      Gateway 是<strong>图里的最后一个 stage</strong>（kind=<code>"gateway"</code>），既负责把客户端的 chunk 推到
+      <code>ingress</code>，也负责接 <code>sink</code> 通过普通 Route 回送的输出。
       Control endpoint 从 <code>control_port_base=19000</code> 起按 stage index 累加：
-      <code>tcp://127.0.0.1:19000 / 19001 / 19002</code>。
+      <code>tcp://127.0.0.1:19000 / 19001 / 19002 / 19003</code>。
     </p>
     <div class="mermaid-wrap">
       <div class="m-title">图 8.1 · make_linear_graph 默认形状</div>
@@ -1388,16 +1476,18 @@ flowchart TB
 flowchart LR
   classDef api fill:#DCE0E8,stroke:#4A5A78,color:#1F1E1C
   classDef st  fill:#FAF7F0,stroke:#CC785C,color:#1F1E1C
+  classDef gw  fill:#F0E4C9,stroke:#B8862E,color:#1F1E1C
   classDef sk  fill:#E0E8DC,stroke:#6E8B6A,color:#1F1E1C
 
   A[API server / client]:::api
-  SR[StreamActor → StreamRuntime]:::st
+  SR[StreamActor<br/>start / shutdown / get_stage]:::st
+  GW[gateway<br/>GatewayActor<br/><i>tcp://127.0.0.1:19003</i>]:::gw
   ING[ingress<br/><i>tcp://127.0.0.1:19000</i>]:::st
   THK[thinker<br/><i>tcp://127.0.0.1:19001</i>]:::st
-  SNK[sink<br/><i>tcp://127.0.0.1:19002</i>]:::sk
-  A --&gt;|recv_input_chunk| SR
-  SR ==&gt;|TCP PUSH| ING ==&gt;|edge-0| THK ==&gt;|edge-1| SNK
-  SNK --&gt;|sink_outputs| DBG[(debug list<br/>get_stage_outputs)]:::sk
+  SNK[sink<br/><i>tcp://127.0.0.1:19002</i>]:::st
+  A --&gt;|stream.start / get_stage| SR
+  A ==&gt;|gateway.send / recv| GW
+  GW ==&gt;|TCP PUSH| ING ==&gt;|edge-0| THK ==&gt;|edge-1| SNK ==&gt;|edge-2 · sink→gateway Route| GW
       </div>
     </div>
 
@@ -1422,7 +1512,7 @@ flowchart LR
     </div>
 
     <div class="mermaid-wrap">
-      <div class="m-title">图 9.1 · 一条 StreamRuntimeInputChunk 的完整生命周期</div>
+      <div class="m-title">图 9.1 · 一条 gateway.send / recv 的完整生命周期</div>
       <div class="m-sub">
         水平方向是 6 个 participant，垂直方向是时间。
         <strong>普通箭头 = Ray RPC；粗箭头（-)）= ZMQ TCP PUSH；relay 调用是同进程方法。</strong>
@@ -1432,40 +1522,44 @@ sequenceDiagram
     autonumber
     participant API as API client
     participant SA as StreamActor<br/>(Ray)
-    participant SR as StreamRuntime<br/>(local)
+    participant GW as gateway<br/>GatewayActor (Ray)
     participant ING as ingress<br/>StageActor (Ray)
     participant THK as thinker<br/>StageActor (Ray)
     participant SNK as sink<br/>StageActor (Ray)
 
     Note over API,SNK: Setup
-    API->>SA: start_graph(GraphSpec)<br/>(Ray RPC)
-    SA->>SR: self.runtime.start_graph(graph)
+    API->>SA: start(GraphSpec)<br/>(Ray RPC)
+    Note right of SA: StreamActorImpl.start →<br/>StreamRuntime.start_graph
     par parallel start_stage via asyncio.gather
-        SR->>ING: start_stage(spec, routes, stage_specs)<br/>(Ray RPC)
-        SR->>THK: start_stage(spec, routes, stage_specs)<br/>(Ray RPC)
-        SR->>SNK: start_stage(spec, (), stage_specs)<br/>(Ray RPC)
+        SA->>GW: start_stage(spec, (), stage_specs, ingress=...)<br/>(Ray RPC)
+        SA->>ING: start_stage(spec, routes, stage_specs)<br/>(Ray RPC)
+        SA->>THK: start_stage(spec, routes, stage_specs)<br/>(Ray RPC)
+        SA->>SNK: start_stage(spec, [sink→gateway], stage_specs)<br/>(Ray RPC)
     end
-    Note over ING,SNK: each StageActor builds its StageRuntime,<br/>StageControlPlane.start() binds TCP PULL,<br/>three asyncio loops start
+    Note over GW,SNK: each actor builds its runtime,<br/>StageControlPlane.start() binds TCP PULL,<br/>loops start (gateway: 1 recv loop;<br/>stages: 2 loops + Worker)
+
+    API->>SA: get_stage("gateway")
+    SA-->>API: GatewayActor handle
+    API->>GW: open_session(sid)<br/>(Ray RPC)
+    Note right of GW: session_outputs[sid] = asyncio.Queue()
 
     Note over API,SNK: One chunk
-    API->>SA: recv_input_chunk(StreamRuntimeInputChunk)<br/>(Ray RPC)
-    SA->>SR: self.runtime.recv_input_chunk(chunk)
-    Note right of SR: relay.put_async(payload, request_id=session_id)<br/>build ControlPlaneDataEvent(relay_metadata=op.metadata)<br/>endpoint = entry_spec.control.connect_endpoint
-    SR-)ING: RuntimeControlPlane.send_to_stage<br/>TCP PUSH ControlPlaneDataEvent
-    Note right of ING: _recv_loop:<br/>control.recv()<br/>relay.get_async + wait_for_completion<br/>relay.cleanup(session_id)<br/>input_queue.put(WorkerInput)
-    Note right of ING: Worker.run:<br/>executor.run([item])<br/>output_queue.put(WorkerOutput)
-    Note right of ING: _send_loop / _send_output:<br/>relay.put_async<br/>endpoint = stage_specs[dst].control.connect_endpoint<br/>control.send_to_stage<br/>wait_for_completion
-    ING-)THK: StageControlPlane.send_to_stage<br/>TCP PUSH ControlPlaneDataEvent
+    API->>GW: send(sid, modality, payload, meta)<br/>(Ray RPC)
+    Note right of GW: GatewayRuntime.send:<br/>entry = ingress[modality]<br/>relay.put_async(payload, request_id=sid)<br/>build ControlPlaneDataEvent
+    GW-)ING: StageControlPlane.send_to_stage<br/>TCP PUSH ControlPlaneDataEvent
+    Note right of ING: _recv_loop / _handle_event:<br/>relay.get_async + wait + cleanup<br/>input_queue.put(WorkerInput)
+    Note right of ING: Worker.run:<br/>output_queue.put(WorkerOutput)
+    Note right of ING: _send_loop / _send_output:<br/>relay.put_async · control.send_to_stage
+    ING-)THK: TCP PUSH ControlPlaneDataEvent
     Note right of THK: recv / compute / send 同上
-    THK-)SNK: StageControlPlane.send_to_stage<br/>TCP PUSH ControlPlaneDataEvent
-    Note right of SNK: recv / compute,<br/>no route → sink_outputs.append
+    THK-)SNK: TCP PUSH ControlPlaneDataEvent
+    Note right of SNK: recv / compute,<br/>sink→gateway is a normal Route
+    SNK-)GW: TCP PUSH ControlPlaneDataEvent
+    Note right of GW: GatewayRuntime._handle_event:<br/>relay.get_async + wait + cleanup<br/>session_outputs[sid].put(WorkerOutput)
 
-    API->>SA: get_stage_outputs("sink")
-    SA->>SR: self.runtime.get_stage_outputs("sink")
-    SR->>SNK: get_sink_outputs.remote()
-    SNK-->>SR: list[WorkerOutput]
-    SR-->>SA: list[WorkerOutput]
-    SA-->>API: list[WorkerOutput]
+    API->>GW: recv(sid, timeout)
+    GW-->>API: WorkerOutput
+    API->>GW: close_session(sid)
       </div>
     </div>
 
@@ -1474,31 +1568,31 @@ sequenceDiagram
       <div class="flow-step">
         <div class="num">1</div>
         <div class="body">
-          <h4>API client → StreamActor（Ray RPC）</h4>
-          <p>客户端通过 <code>actor.recv_input_chunk.remote(...)</code> 把 chunk 推过来。</p>
-          <div class="payload">await <code>runtime.recv_input_chunk.remote(StreamRuntimeInputChunk(session_id, modality, payload, chunk_metadata))</code></div>
+          <h4>API client → StreamActor（启动 graph）</h4>
+          <p>客户端先 <code>await stream_actor.start.remote(graph)</code> 启动 graph，再 <code>gateway = await stream_actor.get_stage.remote("gateway")</code> 拿到 gateway 的 actor handle。</p>
+          <div class="payload">ack = await <code>stream_actor.start.remote(graph)</code> · gateway = await <code>stream_actor.get_stage.remote("gateway")</code></div>
         </div>
       </div>
       <div class="flow-step">
         <div class="num">2</div>
         <div class="body">
-          <h4>StreamActor 直接 delegate 到 StreamRuntime</h4>
-          <p><code>return await self.runtime.recv_input_chunk(chunk)</code> — 一行。</p>
+          <h4>API client → GatewayActor.open_session</h4>
+          <p><code>await gateway.open_session.remote(sid)</code>：<code>GatewayRuntime</code> 在 <code>session_outputs</code> 里创建一个空 <code>asyncio.Queue</code>。</p>
         </div>
       </div>
       <div class="flow-step">
         <div class="num">3</div>
         <div class="body">
-          <h4>StreamRuntime: relay.put_async + 构造 event</h4>
-          <p>查 session（不存在则自动 open），按 modality 取 entry stage 的 <code>StageSpec</code>。</p>
-          <div class="payload"><code>op = await self.relay.put_async(chunk.payload, request_id=chunk.session_id)</code> · <code>ControlPlaneDataEvent(session_id, relay_metadata=op.metadata, chunk_metadata={..., "modality": modality})</code></div>
+          <h4>API client → GatewayActor.send</h4>
+          <p><code>await gateway.send.remote(sid, modality, payload, meta)</code>。Gateway 按 <code>modality</code> 查 entry stage。</p>
+          <div class="payload"><code>op = await self.relay.put_async(payload, request_id=sid)</code> · <code>ControlPlaneDataEvent(session_id=sid, relay_metadata=op.metadata, chunk_metadata={**meta, "modality": modality})</code></div>
         </div>
       </div>
       <div class="flow-step">
         <div class="num">4</div>
         <div class="body">
-          <h4>StreamRuntime: TCP PUSH 到 ingress</h4>
-          <p>用 <code>RuntimeControlPlane</code> PUSH 到 <code>entry_spec.control.connect_endpoint</code>；然后 <code>await op.wait_for_completion()</code>。<strong>这是中心 runtime 最后一次出现在数据路径上。</strong></p>
+          <h4>GatewayRuntime: TCP PUSH 到 ingress</h4>
+          <p>用 gateway 自己的 <code>StageControlPlane</code> PUSH 到 <code>entry_spec.control.connect_endpoint</code>；然后 <code>await op.wait_for_completion()</code>。<strong>StreamRuntime 不在路径上。</strong></p>
           <div class="payload">await <code>self.control.send_to_stage(entry_stage, entry_spec.control.connect_endpoint, event)</code></div>
         </div>
       </div>
@@ -1513,7 +1607,7 @@ sequenceDiagram
         <div class="num">6</div>
         <div class="body">
           <h4>ingress Worker: Worker.run</h4>
-          <p><code>await executor.run([item])</code> → <code>output_queue.put(WorkerOutput)</code>。</p>
+          <p><code>await input_queue.get()</code> → 模型计算 → <code>output_queue.put(WorkerOutput)</code>。</p>
         </div>
       </div>
       <div class="flow-step">
@@ -1529,22 +1623,23 @@ sequenceDiagram
       <div class="flow-step">
         <div class="num">8</div>
         <div class="body">
-          <h4>thinker stage 重复 5–7 步</h4>
-          <p>同样的 recv / compute / send；下游是 sink。</p>
+          <h4>thinker / sink 重复 5–7 步</h4>
+          <p>thinker 下游 = sink；sink 下游 = gateway（普通 Route）。</p>
         </div>
       </div>
       <div class="flow-step">
         <div class="num">9</div>
         <div class="body">
-          <h4>sink stage 没有 route</h4>
-          <p><code>_send_output</code> 看到 <code>routes_by_port[port]</code> 是空的，<strong>fallback</strong> 把 <code>WorkerOutput</code> append 到 <code>sink_outputs</code>。</p>
+          <h4>GatewayRuntime: _recv_loop / _handle_event</h4>
+          <p>Gateway 把 sink 推过来的 event 拆出 payload 包成 <code>WorkerOutput</code>，按 <code>session_id</code>
+          投递到 <code>session_outputs[sid]</code> 队列。</p>
         </div>
       </div>
       <div class="flow-step">
         <div class="num">10</div>
         <div class="body">
-          <h4>API 拉结果</h4>
-          <p>Demo 用 <code>get_stage_outputs("sink")</code>（Ray RPC，<code>StreamActor</code> → <code>StreamRuntime</code> → <code>StageActor.get_sink_outputs</code>）轮询。下一步换 terminal output channel。</p>
+          <h4>API client ← GatewayActor.recv</h4>
+          <p><code>output = await gateway.recv.remote(sid, timeout)</code>。客户端用完一个 session 后 <code>gateway.close_session.remote(sid)</code>；shutdown 时调 <code>stream_actor.shutdown.remote()</code>。</p>
         </div>
       </div>
     </div>
@@ -1588,21 +1683,21 @@ flowchart LR
           <td><code>_recv_loop / _handle_event</code></td>
           <td><code>Worker.run</code></td>
           <td>是 · <code>WorkerInput.payload</code> 已 relay.get_async 出来</td>
-          <td>executor 的输入</td>
+          <td>executor 的输入（普通 stage）</td>
         </tr>
         <tr>
           <td><code>output_queue</code></td>
           <td><code>Worker.run</code></td>
           <td><code>_send_loop</code></td>
           <td>是 · <code>WorkerOutput</code></td>
-          <td>跨 stage forwarding 的待发队列</td>
+          <td>跨 stage forwarding 的待发队列（普通 stage）</td>
         </tr>
         <tr>
-          <td><code>sink_outputs</code></td>
-          <td><code>_send_output</code>（无 route 时）</td>
-          <td><code>get_sink_outputs</code>（Ray RPC）</td>
-          <td>是</td>
-          <td>terminal stage 临时调试通道</td>
+          <td><code>session_outputs[sid]</code></td>
+          <td><code>GatewayRuntime._handle_event</code></td>
+          <td><code>GatewayRuntime.recv</code></td>
+          <td>是 · <code>WorkerOutput | None</code></td>
+          <td>gateway stage 专用：按 session_id 多路解复用回送给 API client</td>
         </tr>
       </tbody>
     </table>
@@ -1639,7 +1734,7 @@ flowchart LR
           <li>batch policy（每次 <code>run([item])</code> 单条）</li>
           <li>fan-in / join 等齐多上游</li>
           <li>per-edge payload projection</li>
-          <li>terminal output streaming channel（暂用 <code>get_sink_outputs</code> 轮询）</li>
+          <li>HTTP / WS / gRPC 协议适配（gateway 已经有结构，但实际协议层还没写）</li>
           <li>cuda_ipc / nixl / mooncake relay</li>
           <li>placement-aware config（手填 listen_host / connect_host）</li>
         </ul>
@@ -1647,16 +1742,18 @@ flowchart LR
       <div class="role-card sage">
         <h4>v1 已有</h4>
         <ul>
-          <li>Ray actor 启动 / 生命周期（StreamActor + StageActor）</li>
-          <li>StreamRuntime / StageRuntime 本地 runtime 拆层</li>
+          <li>Ray actor 启动 / 生命周期：<code>StreamActor</code>（3 RPC）+ <code>StageActor</code> + <code>GatewayActor</code></li>
+          <li>Impl + ray.remote 拆法：<code>StageActorImpl</code> / <code>StreamActorImpl</code> / <code>GatewayActorImpl(StageActorImpl)</code></li>
+          <li>StreamRuntime 瘦身（只 graph + stage_actors）/ StageRuntime / GatewayRuntime 拆层</li>
+          <li>Gateway 作为一个普通 stage：API 协议翻译 + <code>session_outputs</code> 多路解复用</li>
           <li>TCP control endpoint · <code>StageControlSpec</code></li>
-          <li><code>StageControlPlane</code> / <code>RuntimeControlPlane</code></li>
+          <li><code>StageControlPlane</code>（gateway 和普通 stage 都用同一个）</li>
           <li>PUSH/PULL <code>ControlPlaneDataEvent</code></li>
           <li>SGLang-style <code>Relay</code> ABC + <code>LocalRelay</code>（inline / shm）</li>
           <li><code>RelayMetadata</code> ABC + <code>LocalRelayMetadata</code></li>
-          <li>linear graph <code>ingress → thinker → sink</code></li>
-          <li>FakeWorker end-to-end smoke test</li>
-          <li>两条 loop（_recv / _send）+ Worker.run</li>
+          <li>linear graph <code>ingress → thinker → sink → gateway</code>（sink→gateway 是普通 Route）</li>
+          <li>FakeWorker end-to-end smoke test（<code>gateway.send</code> / <code>recv</code>）</li>
+          <li>两条 loop（_recv / _send）+ Worker.run（普通 stage）；1 条 recv loop（gateway）</li>
           <li><code>@rpc_method</code> 标注 + <code>list_rpc_methods</code> introspection</li>
         </ul>
       </div>
@@ -1664,8 +1761,9 @@ flowchart LR
 
     <div class="callout indigo">
       <strong>设计目标提醒。</strong>
-      stage-to-stage 数据路径上<strong>不</strong>经过中心 runtime，也<strong>不</strong>走 Ray object store。
-      唯一例外是 API ingress：StreamRuntime 把 chunk 转成 entry <code>ControlPlaneDataEvent</code> 推给 ingress stage。
+      stage-to-stage 数据路径上<strong>完全不</strong>经过中心 runtime，也<strong>不</strong>走 Ray object store。
+      API ingress / egress 由 gateway stage 承担 —— 它本身就是 graph 里的一个 stage，
+      用同一套 <code>StageControlPlane</code> + Route 接入图里，StreamRuntime 只负责启动它。
     </div>
   </div>
 </section>
@@ -1688,8 +1786,9 @@ flowchart LR
         对照 <code>third_party/vllm-omni</code> 和 <code>third_party/sglang-omni</code> 的 model runner 边界。</p></div></div>
       <div class="flow-step"><div class="num">2</div><div class="body"><h4>Fan-in / join stage</h4>
         <p>支持 encoder 输出汇聚到 thinker 等多输入 stage，等齐上游再 <code>run</code>。</p></div></div>
-      <div class="flow-step"><div class="num">3</div><div class="body"><h4>Terminal output channel</h4>
-        <p>替换当前 debug <code>get_sink_outputs()</code>，接真正的 streaming 输出通道。</p></div></div>
+      <div class="flow-step"><div class="num">3</div><div class="body"><h4>真实 API 协议接到 gateway</h4>
+        <p>当前 <code>GatewayActor.send</code> / <code>recv</code> 只是 Ray RPC。下一步在它前面接 HTTP / WS / gRPC server，
+        把请求 demux 成 <code>send</code> / 把 <code>recv</code> 出来的 <code>WorkerOutput</code> 转成 streaming chunk。</p></div></div>
       <div class="flow-step"><div class="num">4</div><div class="body"><h4>跨节点 payload relay</h4>
         <p>先 <code>nixl</code> / <code>mooncake</code>（cross-node），同机 GPU 再补 <code>cuda_ipc</code>。
         <code>RelayMetadata</code> ABC 已经预留好扩展点。</p></div></div>
@@ -1712,21 +1811,22 @@ uv run ruff check .</div>
     <p>这条 path 说明数据走完了：</p>
     <ul style="color:var(--ink-soft);font-size:14px;line-height:1.8">
       <li>Ray startup</li>
-      <li>StreamActor → StreamRuntime delegate</li>
-      <li>RuntimeControlPlane · TCP PUSH 一次</li>
-      <li>每个 StageActor 启动各自的 StageRuntime</li>
+      <li>StreamActor.start → StreamRuntime.start_graph（按 kind 选 GatewayActor / StageActor）</li>
+      <li><code>get_stage("gateway")</code> → Gateway 的 <code>open_session</code> / <code>send</code></li>
+      <li>每个 stage actor 启动各自的 runtime · StageControlPlane TCP bind</li>
       <li>StageControlPlane TCP PUSH / PULL</li>
       <li>LocalRelay <code>put_async</code> / <code>get_async</code> / <code>cleanup</code></li>
-      <li>两条 loop（_recv / _send）+ Worker.run</li>
-      <li>routing table</li>
+      <li>两条 loop（_recv / _send）+ Worker.run · routing table</li>
+      <li>sink → gateway 普通 Route · session_outputs 多路解复用</li>
+      <li>Gateway.recv 返回 → client 拿到结果</li>
     </ul>
 
     <h3 style="margin-top:28px">最终架构约束（一句话）</h3>
     <div class="callout">
       <code>Ray</code> 管启动 / lifecycle，<strong>不</strong>搬数据。<br>
-      <code>StageControlPlane</code> / <code>RuntimeControlPlane</code>（封装 TCP ZMQ）发 <code>ControlPlaneDataEvent</code> 通知。<br>
+      <code>StageControlPlane</code>（封装 TCP ZMQ）发 <code>ControlPlaneDataEvent</code> 通知。<br>
       <code>Relay</code> / <code>LocalRelay</code>（SGLang 风格）搬 payload 本体。<br>
-      <code>StageRuntime</code> 管路由和两条 loop + Worker.run。<br>
+      <code>StageRuntime</code> 管路由和两条 loop + Worker.run；<code>GatewayRuntime</code> 管 session demux + 协议翻译。<br>
       <code>Worker</code> 跑模型。
     </div>
   </div>
@@ -1734,7 +1834,7 @@ uv run ruff check .</div>
 
 <!-- footer -->
 <div class="footer wrap">
-  OmniStream · Ray + ZMQ + Relay prototype · v4 · 2026-05-22<br>
+  OmniStream · Ray + ZMQ + Relay prototype · v6 · 2026-05-23<br>
   本页根据 <code>~/code/omnistream</code> 最新源码和 <code>README.md</code> · <code>AGENTS.md</code> · <code>docs/TODO.md</code> 生成
 </div>
 
