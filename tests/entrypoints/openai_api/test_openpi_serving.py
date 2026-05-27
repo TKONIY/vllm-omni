@@ -1,5 +1,5 @@
 import asyncio
-import pickle
+import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
@@ -23,6 +23,20 @@ TEST_POLICY_SERVER_CONFIG = {
     "needs_session_id": True,
     "action_space": "joint_position",
 }
+
+
+def _json_default(obj):
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def _json_pack(obj):
+    return json.dumps(obj, default=_json_default).encode()
+
+
+def _json_unpack(data):
+    return json.loads(data.decode())
 
 
 def _engine_with_policy_config(policy_config=None):
@@ -218,8 +232,8 @@ def test_infer_keeps_session_state_but_uses_unique_engine_request_ids():
 
 
 def test_two_websocket_clients_without_session_id_do_not_conflict(monkeypatch):
-    monkeypatch.setattr(openpi_connection, "_pack", pickle.dumps)
-    monkeypatch.setattr(openpi_connection, "_unpack", pickle.loads)
+    monkeypatch.setattr(openpi_connection, "_pack", _json_pack)
+    monkeypatch.setattr(openpi_connection, "_unpack", _json_unpack)
 
     engine = ConcurrentRecordingEngine(expected_calls=2)
     serving = openpi_serving.ServingRealtimeRobotOpenPI(engine_client=engine)
@@ -233,11 +247,11 @@ def test_two_websocket_clients_without_session_id_do_not_conflict(monkeypatch):
     def run_client(prompt: str):
         with TestClient(app) as client:
             with client.websocket_connect("/v1/realtime/robot/openpi") as websocket:
-                metadata = pickle.loads(websocket.receive_bytes())
+                metadata = _json_unpack(websocket.receive_bytes())
                 assert metadata["needs_session_id"] is True
 
-                websocket.send_bytes(pickle.dumps({"prompt": prompt}))
-                actions = pickle.loads(websocket.receive_bytes())
+                websocket.send_bytes(_json_pack({"prompt": prompt}))
+                actions = _json_unpack(websocket.receive_bytes())
                 np.testing.assert_array_equal(
                     np.asarray(actions, dtype=np.float32),
                     np.asarray([0.0], dtype=np.float32),
