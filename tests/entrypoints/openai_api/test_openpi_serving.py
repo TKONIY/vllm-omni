@@ -1,11 +1,17 @@
 import asyncio
+import pickle
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from fastapi import FastAPI, WebSocket
 from omegaconf import OmegaConf
+from starlette.testclient import TestClient
 
-from vllm_omni.entrypoints.openai.realtime.robot import openpi_serving
+from vllm_omni.entrypoints.openpi import connection as openpi_connection
+from vllm_omni.entrypoints.openpi import serving as openpi_serving
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -22,6 +28,63 @@ TEST_POLICY_SERVER_CONFIG = {
 def _engine_with_policy_config(policy_config=None):
     od_config = SimpleNamespace(model_config={"policy_server_config": policy_config or TEST_POLICY_SERVER_CONFIG})
     return SimpleNamespace(get_diffusion_od_config=lambda: od_config)
+
+
+class RecordingEngine:
+    def __init__(self):
+        self.od_config = SimpleNamespace(model_config={"policy_server_config": TEST_POLICY_SERVER_CONFIG})
+        self.generate_calls = []
+
+    def get_diffusion_od_config(self):
+        return self.od_config
+
+    def generate(self, *, prompt, request_id, sampling_params_list):
+        async def _generate():
+            self.generate_calls.append(
+                {
+                    "prompt": prompt,
+                    "request_id": request_id,
+                    "sampling_params_list": sampling_params_list,
+                }
+            )
+            yield SimpleNamespace(multimodal_output={"actions": [0.0]})
+
+        return _generate()
+
+
+class ConcurrentRecordingEngine(RecordingEngine):
+    def __init__(self, *, expected_calls: int):
+        super().__init__()
+        self.expected_calls = expected_calls
+        self.condition = threading.Condition()
+        self.saw_overlap = False
+
+    def _wait_for_expected_calls(self):
+        with self.condition:
+            completed = self.condition.wait_for(
+                lambda: len(self.generate_calls) >= self.expected_calls,
+                timeout=5.0,
+            )
+            self.saw_overlap = self.saw_overlap or completed
+
+    def generate(self, *, prompt, request_id, sampling_params_list):
+        async def _generate():
+            with self.condition:
+                self.generate_calls.append(
+                    {
+                        "prompt": prompt,
+                        "request_id": request_id,
+                        "sampling_params_list": sampling_params_list,
+                    }
+                )
+                if len(self.generate_calls) >= self.expected_calls:
+                    self.saw_overlap = True
+                    self.condition.notify_all()
+
+            await asyncio.to_thread(self._wait_for_expected_calls)
+            yield SimpleNamespace(multimodal_output={"actions": [0.0]})
+
+        return _generate()
 
 
 def test_policy_server_config_reads_diffusion_model_config():
@@ -104,19 +167,99 @@ def test_policy_server_config_reads_engine_model_config():
     assert serving.policy_server_config.to_dict() == policy_config
 
 
-def test_build_request_forwards_connection_session_state():
+def test_build_request_uses_unique_engine_request_id_per_inference():
     serving = openpi_serving.ServingRealtimeRobotOpenPI(engine_client=_engine_with_policy_config())
 
-    request = serving._build_request(
+    request_a = serving._build_request(
         {"prompt": "pick up the object"},
         session_id="session-a",
         reset=True,
     )
+    request_b = serving._build_request(
+        {"prompt": "pick up the object"},
+        session_id="session-a",
+        reset=False,
+    )
 
-    assert request.sampling_params.extra_args["reset"] is True
-    assert request.sampling_params.extra_args["session_id"] == "session-a"
-    assert request.sampling_params.extra_args["robot_obs"]["prompt"] == "pick up the object"
-    assert request.request_ids == ["robot-session-a"]
+    assert request_a.sampling_params.extra_args["reset"] is True
+    assert request_b.sampling_params.extra_args["reset"] is False
+    assert request_a.sampling_params.extra_args["session_id"] == "session-a"
+    assert request_b.sampling_params.extra_args["session_id"] == "session-a"
+    assert request_a.sampling_params.extra_args["robot_obs"]["prompt"] == "pick up the object"
+    assert request_b.sampling_params.extra_args["robot_obs"]["prompt"] == "pick up the object"
+
+    assert request_a.request_ids == ["robot-session-a-0"]
+    assert request_b.request_ids == ["robot-session-a-1"]
+    assert request_a.request_ids[0] != request_b.request_ids[0]
+
+
+def test_infer_keeps_session_state_but_uses_unique_engine_request_ids():
+    engine = RecordingEngine()
+    serving = openpi_serving.ServingRealtimeRobotOpenPI(engine_client=engine)
+
+    async def run_requests():
+        await serving.infer({"prompt": "pick up the object"}, session_id="session-a", reset=True)
+        await serving.infer({"prompt": "pick up the object"}, session_id="session-a", reset=False)
+
+    asyncio.run(run_requests())
+
+    assert [call["request_id"] for call in engine.generate_calls] == [
+        "robot-session-a-0",
+        "robot-session-a-1",
+    ]
+    assert engine.generate_calls[0]["request_id"] != engine.generate_calls[1]["request_id"]
+
+    sampling_params_a = engine.generate_calls[0]["sampling_params_list"][0]
+    sampling_params_b = engine.generate_calls[1]["sampling_params_list"][0]
+    assert sampling_params_a.extra_args["session_id"] == "session-a"
+    assert sampling_params_b.extra_args["session_id"] == "session-a"
+    assert sampling_params_a.extra_args["reset"] is True
+    assert sampling_params_b.extra_args["reset"] is False
+
+
+def test_two_websocket_clients_without_session_id_do_not_conflict(monkeypatch):
+    monkeypatch.setattr(openpi_connection, "_pack", pickle.dumps)
+    monkeypatch.setattr(openpi_connection, "_unpack", pickle.loads)
+
+    engine = ConcurrentRecordingEngine(expected_calls=2)
+    serving = openpi_serving.ServingRealtimeRobotOpenPI(engine_client=engine)
+    app = FastAPI()
+
+    @app.websocket("/v1/realtime/robot/openpi")
+    async def openpi_endpoint(websocket: WebSocket):
+        connection = openpi_connection.RobotRealtimeConnection(websocket, serving)
+        await connection.handle_connection()
+
+    def run_client(prompt: str):
+        with TestClient(app) as client:
+            with client.websocket_connect("/v1/realtime/robot/openpi") as websocket:
+                metadata = pickle.loads(websocket.receive_bytes())
+                assert metadata["needs_session_id"] is True
+
+                websocket.send_bytes(pickle.dumps({"prompt": prompt}))
+                actions = pickle.loads(websocket.receive_bytes())
+                np.testing.assert_array_equal(
+                    np.asarray(actions, dtype=np.float32),
+                    np.asarray([0.0], dtype=np.float32),
+                )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(run_client, "first client"),
+            executor.submit(run_client, "second client"),
+        ]
+        for future in futures:
+            future.result(timeout=10.0)
+
+    request_ids = [call["request_id"] for call in engine.generate_calls]
+    assert len(request_ids) == 2
+    assert len(set(request_ids)) == 2
+    assert all(request_id.startswith("robot-default-") for request_id in request_ids)
+    assert engine.saw_overlap is True
+
+    sampling_params = [call["sampling_params_list"][0] for call in engine.generate_calls]
+    assert [params.extra_args["session_id"] for params in sampling_params] == ["default", "default"]
+    assert [params.extra_args["reset"] for params in sampling_params] == [True, True]
 
 
 def test_infer_extracts_actions_from_generic_multimodal_output():
@@ -135,7 +278,7 @@ def test_infer_extracts_actions_from_generic_multimodal_output():
 
     np.testing.assert_allclose(actions, np.array([[1.0, 2.0, 3.0]], dtype=np.float32))
     assert engine_client.generate_kwargs["prompt"] == "pick up"
-    assert engine_client.generate_kwargs["request_id"] == "robot-session-a"
+    assert engine_client.generate_kwargs["request_id"] == "robot-session-a-0"
 
 
 def test_infer_preserves_dict_actions_from_multimodal_output():
@@ -165,3 +308,17 @@ def test_infer_preserves_dict_actions_from_multimodal_output():
     np.testing.assert_allclose(actions["right_arm"], np.array([[3.0, 4.0]], dtype=np.float32))
     assert actions["left_arm"].dtype == np.float32
     assert actions["right_arm"].dtype == np.float32
+
+
+def test_extract_actions_does_not_iterate_result_object():
+    class IterableResult:
+        multimodal_output = {"actions": [[1.0, 2.0, 3.0]]}
+
+        def __iter__(self):
+            raise AssertionError("result object should not be iterated")
+
+    serving = openpi_serving.ServingRealtimeRobotOpenPI(engine_client=_engine_with_policy_config())
+
+    actions = serving._extract_actions(IterableResult())
+
+    np.testing.assert_allclose(actions, np.array([[1.0, 2.0, 3.0]], dtype=np.float32))

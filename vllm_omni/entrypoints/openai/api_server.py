@@ -116,7 +116,7 @@ from vllm_omni.entrypoints.openai.protocol.videos import (
     VideoListResponse,
     VideoResponse,
 )
-from vllm_omni.entrypoints.openai.realtime.robot.openpi_serving import ServingRealtimeRobotOpenPI
+from vllm_omni.entrypoints.openpi.serving import ServingRealtimeRobotOpenPI
 from vllm_omni.entrypoints.openai.realtime_connection import RealtimeConnection
 from vllm_omni.entrypoints.openai.serving_audio_generate import OmniOpenAIServingAudioGenerate
 from vllm_omni.entrypoints.openai.serving_chat import OmniOpenAIServingChat
@@ -1416,7 +1416,7 @@ async def realtime_websocket(websocket: WebSocket):
 @router.websocket("/v1/realtime/robot/openpi")
 async def realtime_robot_openpi(websocket: WebSocket):
     """WebSocket endpoint for robot policy inference via OpenPI messages."""
-    from vllm_omni.entrypoints.openai.realtime.robot.openpi_connection import (
+    from vllm_omni.entrypoints.openpi.connection import (
         RobotRealtimeConnection,
     )
 

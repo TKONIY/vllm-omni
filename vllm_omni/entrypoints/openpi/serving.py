@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from itertools import count
 from typing import Any
 
 import numpy as np
@@ -74,6 +75,7 @@ class ServingRealtimeRobotOpenPI:
         self.engine_client = engine_client
         self.model_name = model_name
         self.policy_server_config = self._get_policy_server_config(engine_client)
+        self._request_counter = count()
 
     @classmethod
     def create_policy_server(
@@ -136,6 +138,9 @@ class ServingRealtimeRobotOpenPI:
 
         return self._extract_actions(result)
 
+    def _next_request_id(self, session_id: str) -> str:
+        return f"robot-{session_id}-{next(self._request_counter)}"
+
     def _build_request(self, obs: dict, *, session_id: str, reset: bool) -> Any:
         """Build engine request from raw robot obs.
 
@@ -156,20 +161,16 @@ class ServingRealtimeRobotOpenPI:
         return OmniDiffusionRequest(
             prompts=[prompt],
             sampling_params=sampling_params,
-            request_ids=[f"robot-{session_id}"],
+            request_ids=[self._next_request_id(session_id)],
         )
 
     def _extract_actions(self, result: Any) -> ActionOutput:
         """Extract actions from engine result."""
-        if hasattr(result, "__iter__"):
-            result = list(result)
-            if result:
-                result = result[0]
-
-        if not hasattr(result, "multimodal_output") or result.multimodal_output is None:
+        multimodal_output = getattr(result, "multimodal_output", None)
+        if not isinstance(multimodal_output, Mapping):
             raise RuntimeError("Missing multimodal_output in robot policy result")
 
-        actions = result.multimodal_output.get("actions")
+        actions = multimodal_output.get("actions")
         if actions is None:
             raise RuntimeError("Missing multimodal_output['actions'] in robot policy result")
         if isinstance(actions, Mapping):

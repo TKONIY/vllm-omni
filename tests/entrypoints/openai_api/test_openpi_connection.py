@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from vllm_omni.entrypoints.openai.realtime.robot import openpi_connection
-from vllm_omni.entrypoints.openai.realtime.robot.openpi_serving import PolicyServerConfig
+from vllm_omni.entrypoints.openpi import connection as openpi_connection
+from vllm_omni.entrypoints.openpi.serving import PolicyServerConfig
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 

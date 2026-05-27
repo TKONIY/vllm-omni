@@ -18,7 +18,7 @@ from fastapi import WebSocket
 from starlette.websockets import WebSocketDisconnect
 from vllm.logger import init_logger
 
-from vllm_omni.entrypoints.openai.realtime.robot.openpi_serving import (
+from vllm_omni.entrypoints.openpi.serving import (
     ServingRealtimeRobotOpenPI,
 )
 
