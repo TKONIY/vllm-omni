@@ -54,7 +54,7 @@ class PolicyServerConfig:
         if isinstance(raw_config, cls):
             return raw_config
         if not isinstance(raw_config, Mapping):
-            raise TypeError("policy_server_config must be a dict.")
+            raise ValueError("Robot OpenPI serving requires policy_server_config.")
         return cls(_to_builtin_container(raw_config))
 
     def to_dict(self) -> dict[str, Any]:
@@ -129,7 +129,7 @@ class ServingRealtimeRobotOpenPI:
         # final output, matching other non-streaming OpenAI serving paths.
         async for output in self.engine_client.generate(
             prompt=request.prompts[0],
-            request_id=request.request_ids[0],
+            request_id=request.request_id,
             sampling_params_list=[request.sampling_params],
         ):
             result = output
@@ -161,7 +161,7 @@ class ServingRealtimeRobotOpenPI:
         return OmniDiffusionRequest(
             prompts=[prompt],
             sampling_params=sampling_params,
-            request_ids=[self._next_request_id(session_id)],
+            request_id=self._next_request_id(session_id),
         )
 
     def _extract_actions(self, result: Any) -> ActionOutput:

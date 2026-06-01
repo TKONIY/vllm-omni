@@ -202,9 +202,9 @@ def test_build_request_uses_unique_engine_request_id_per_inference():
     assert request_a.sampling_params.extra_args["robot_obs"]["prompt"] == "pick up the object"
     assert request_b.sampling_params.extra_args["robot_obs"]["prompt"] == "pick up the object"
 
-    assert request_a.request_ids == ["robot-session-a-0"]
-    assert request_b.request_ids == ["robot-session-a-1"]
-    assert request_a.request_ids[0] != request_b.request_ids[0]
+    assert request_a.request_id == "robot-session-a-0"
+    assert request_b.request_id == "robot-session-a-1"
+    assert request_a.request_id != request_b.request_id
 
 
 def test_infer_keeps_session_state_but_uses_unique_engine_request_ids():
