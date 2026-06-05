@@ -1,0 +1,71 @@
+{
+  "accuracy": {
+    "mode": "shape_finite_only",
+    "passed": true
+  },
+  "artifacts": {
+    "actions": "/tmp/dreamzero_profile/output_gpu1_2/tp1_cfg2_baseline_gpu1_2_actions.npz",
+    "output_video": "/tmp/dreamzero_profile/output_gpu1_2/tp1_cfg2_baseline_gpu1_2.mp4"
+  },
+  "latency_s": {
+    "all_requests": {
+      "count": 2,
+      "max": 4.581865495012607,
+      "mean": 4.307305977010401,
+      "min": 4.0327464590081945,
+      "p50": 4.307305977010401,
+      "p95": 4.554409543212387
+    },
+    "decode_video": 0.40557790399179794,
+    "first_request": 4.581865495012607,
+    "model_generate_total": 8.614611954020802,
+    "model_plus_decode_and_write_total": 9.101095557009103,
+    "model_plus_decode_total": 9.0201898580126,
+    "steady_state": {
+      "count": 1,
+      "max": 4.0327464590081945,
+      "mean": 4.0327464590081945,
+      "min": 4.0327464590081945,
+      "p50": 4.0327464590081945,
+      "p95": 4.0327464590081945
+    },
+    "write_artifacts": 0.0809056989965029
+  },
+  "requests": {
+    "count": 2,
+    "items": [
+      {
+        "action_count": 24,
+        "action_shape": [
+          24,
+          8
+        ],
+        "index": 0,
+        "label": "initial",
+        "latency_s": 4.581865495012607,
+        "video_latent_frames": 3
+      },
+      {
+        "action_count": 24,
+        "action_shape": [
+          24,
+          8
+        ],
+        "index": 1,
+        "label": "chunk_0",
+        "latency_s": 4.0327464590081945,
+        "video_latent_frames": 2
+      }
+    ]
+  },
+  "throughput": {
+    "model_action_hz": 5.571928283733823,
+    "model_plus_decode_video_fps": 1.884660995788128,
+    "model_request_hz": 0.2321636784889093,
+    "model_video_fps": 1.973391267155729,
+    "steady_state_request_hz": 0.24796996542300306
+  },
+  "video": {
+    "decoded_frames": 17
+  }
+}

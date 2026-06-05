@@ -1,0 +1,371 @@
+{
+  "accuracy": {
+    "tp1_cfg2_vs_tp1_cfg1": {
+      "atol": 0.001,
+      "chunks": [
+        {
+          "index": 0,
+          "max_abs_error": 0.0,
+          "passed": true,
+          "rmse": 0.0,
+          "shape": [
+            24,
+            8
+          ]
+        },
+        {
+          "index": 1,
+          "max_abs_error": 0.0,
+          "passed": true,
+          "rmse": 0.0,
+          "shape": [
+            24,
+            8
+          ]
+        }
+      ],
+      "mode": "reference_actions",
+      "passed": true
+    },
+    "tp2_cfg1_vs_tp1_cfg1": {
+      "atol": 0.001,
+      "chunks": [
+        {
+          "index": 0,
+          "max_abs_error": 0.06496685743331909,
+          "passed": false,
+          "rmse": 0.01822154987243373,
+          "shape": [
+            24,
+            8
+          ]
+        },
+        {
+          "index": 1,
+          "max_abs_error": 0.008212149143218994,
+          "passed": false,
+          "rmse": 0.0022399814154687807,
+          "shape": [
+            24,
+            8
+          ]
+        }
+      ],
+      "mode": "reference_actions",
+      "passed": false
+    },
+    "tp2_cfg1_vs_tp1_cfg2": {
+      "atol": 0.001,
+      "chunks": [
+        {
+          "index": 0,
+          "max_abs_error": 0.06496685743331909,
+          "passed": false,
+          "rmse": 0.01822154987243373,
+          "shape": [
+            24,
+            8
+          ]
+        },
+        {
+          "index": 1,
+          "max_abs_error": 0.008212149143218994,
+          "passed": false,
+          "rmse": 0.0022399814154687807,
+          "shape": [
+            24,
+            8
+          ]
+        }
+      ],
+      "mode": "reference_actions",
+      "passed": false
+    }
+  },
+  "methodology": {
+    "normalization": "Buckets are normalized to the profiled chunk request wall time. GPU communication wins overlaps; remaining GPU intervals are compute; residual wall time is CPU wait/launch gap.",
+    "trace_latency_note": "Torch profiler is diagnostic. Baseline latency/FPS comes from non-profiler runs."
+  },
+  "tp1_cfg2": {
+    "baseline": {
+      "accuracy": {
+        "mode": "shape_finite_only",
+        "passed": true
+      },
+      "artifacts": {
+        "actions": "/tmp/dreamzero_profile/output_gpu1_2/tp1_cfg2_baseline_gpu1_2_actions.npz",
+        "output_video": "/tmp/dreamzero_profile/output_gpu1_2/tp1_cfg2_baseline_gpu1_2.mp4"
+      },
+      "latency_s": {
+        "all_requests": {
+          "count": 2,
+          "max": 4.581865495012607,
+          "mean": 4.307305977010401,
+          "min": 4.0327464590081945,
+          "p50": 4.307305977010401,
+          "p95": 4.554409543212387
+        },
+        "decode_video": 0.40557790399179794,
+        "first_request": 4.581865495012607,
+        "model_generate_total": 8.614611954020802,
+        "model_plus_decode_and_write_total": 9.101095557009103,
+        "model_plus_decode_total": 9.0201898580126,
+        "steady_state": {
+          "count": 1,
+          "max": 4.0327464590081945,
+          "mean": 4.0327464590081945,
+          "min": 4.0327464590081945,
+          "p50": 4.0327464590081945,
+          "p95": 4.0327464590081945
+        },
+        "write_artifacts": 0.0809056989965029
+      },
+      "requests": {
+        "count": 2,
+        "items": [
+          {
+            "action_count": 24,
+            "action_shape": [
+              24,
+              8
+            ],
+            "index": 0,
+            "label": "initial",
+            "latency_s": 4.581865495012607,
+            "video_latent_frames": 3
+          },
+          {
+            "action_count": 24,
+            "action_shape": [
+              24,
+              8
+            ],
+            "index": 1,
+            "label": "chunk_0",
+            "latency_s": 4.0327464590081945,
+            "video_latent_frames": 2
+          }
+        ]
+      },
+      "throughput": {
+        "model_action_hz": 5.571928283733823,
+        "model_plus_decode_video_fps": 1.884660995788128,
+        "model_request_hz": 0.2321636784889093,
+        "model_video_fps": 1.973391267155729,
+        "steady_state_request_hz": 0.24796996542300306
+      },
+      "video": {
+        "decoded_frames": 17
+      }
+    },
+    "critical_rank": {
+      "communication_ms": 230.8110654296875,
+      "compute_ms": 3663.46459765625,
+      "cpu_wait_ms": 263.5743369140625,
+      "gpu_idle_inside_span_ms": 182.5745634765625,
+      "gpu_span_ms": 4076.8502265625,
+      "outside_gpu_span_ms": 80.9997734375,
+      "path": "/tmp/dreamzero_profile/tp1_cfg2_gpu1_2/20260605-150614_stage_0_rep_0_diffusion_1780671974/trace_rank1.json",
+      "percent": {
+        "communication": 5.551211934766466,
+        "compute": 88.10959023669083,
+        "cpu_wait": 6.339197828542696
+      },
+      "profiled_latency_ms": 4157.849999999999,
+      "raw_comm_event_total_ms": 230.811065,
+      "raw_gpu_event_total_ms": 3894.2760370001906,
+      "wall_ms": 4157.85
+    },
+    "profiled_latency_ms": 4157.849999999999,
+    "rank_average": {
+      "communication_ms": 115.63106738281249,
+      "compute_ms": 3767.553484375,
+      "cpu_wait_ms": 274.6654482421875,
+      "percent": {
+        "communication": 2.7810302772541693,
+        "compute": 90.61302077696405,
+        "cpu_wait": 6.605948945781774
+      },
+      "wall_ms": 4157.85
+    },
+    "ranks": [
+      {
+        "communication_ms": 0.4510693359375,
+        "compute_ms": 3871.64237109375,
+        "cpu_wait_ms": 285.7565595703125,
+        "gpu_idle_inside_span_ms": 196.1941181640625,
+        "gpu_span_ms": 4068.28755859375,
+        "outside_gpu_span_ms": 89.56244140625,
+        "path": "/tmp/dreamzero_profile/tp1_cfg2_gpu1_2/20260605-150614_stage_0_rep_0_diffusion_1780671974/trace_rank0.json",
+        "percent": {
+          "communication": 0.010848619741873804,
+          "compute": 93.11645131723726,
+          "cpu_wait": 6.872700063020852
+        },
+        "profiled_latency_ms": 4157.849999999999,
+        "raw_comm_event_total_ms": 0.451069,
+        "raw_gpu_event_total_ms": 3872.093537000096,
+        "wall_ms": 4157.85
+      },
+      {
+        "communication_ms": 230.8110654296875,
+        "compute_ms": 3663.46459765625,
+        "cpu_wait_ms": 263.5743369140625,
+        "gpu_idle_inside_span_ms": 182.5745634765625,
+        "gpu_span_ms": 4076.8502265625,
+        "outside_gpu_span_ms": 80.9997734375,
+        "path": "/tmp/dreamzero_profile/tp1_cfg2_gpu1_2/20260605-150614_stage_0_rep_0_diffusion_1780671974/trace_rank1.json",
+        "percent": {
+          "communication": 5.551211934766466,
+          "compute": 88.10959023669083,
+          "cpu_wait": 6.339197828542696
+        },
+        "profiled_latency_ms": 4157.849999999999,
+        "raw_comm_event_total_ms": 230.811065,
+        "raw_gpu_event_total_ms": 3894.2760370001906,
+        "wall_ms": 4157.85
+      }
+    ]
+  },
+  "tp2_cfg1": {
+    "baseline": {
+      "accuracy": {
+        "mode": "shape_finite_only",
+        "passed": true
+      },
+      "artifacts": {
+        "actions": "/tmp/dreamzero_profile/output_gpu1_2/tp2_cfg1_baseline_gpu1_2_actions.npz",
+        "output_video": "/tmp/dreamzero_profile/output_gpu1_2/tp2_cfg1_baseline_gpu1_2.mp4"
+      },
+      "latency_s": {
+        "all_requests": {
+          "count": 2,
+          "max": 7.652138991019456,
+          "mean": 7.627905082510551,
+          "min": 7.603671174001647,
+          "p50": 7.627905082510551,
+          "p95": 7.649715600168565
+        },
+        "decode_video": 0.40553377399919555,
+        "first_request": 7.652138991019456,
+        "model_generate_total": 15.255810165021103,
+        "model_plus_decode_and_write_total": 15.937121905008098,
+        "model_plus_decode_total": 15.661343939020298,
+        "steady_state": {
+          "count": 1,
+          "max": 7.603671174001647,
+          "mean": 7.603671174001647,
+          "min": 7.603671174001647,
+          "p50": 7.603671174001647,
+          "p95": 7.603671174001647
+        },
+        "write_artifacts": 0.2757779659877997
+      },
+      "requests": {
+        "count": 2,
+        "items": [
+          {
+            "action_count": 24,
+            "action_shape": [
+              24,
+              8
+            ],
+            "index": 0,
+            "label": "initial",
+            "latency_s": 7.652138991019456,
+            "video_latent_frames": 3
+          },
+          {
+            "action_count": 24,
+            "action_shape": [
+              24,
+              8
+            ],
+            "index": 1,
+            "label": "chunk_0",
+            "latency_s": 7.603671174001647,
+            "video_latent_frames": 2
+          }
+        ]
+      },
+      "throughput": {
+        "model_action_hz": 3.1463422447439457,
+        "model_plus_decode_video_fps": 1.0854751716194952,
+        "model_request_hz": 0.13109759353099773,
+        "model_video_fps": 1.1143295450134807,
+        "steady_state_request_hz": 0.13151541894909716
+      },
+      "video": {
+        "decoded_frames": 17
+      }
+    },
+    "critical_rank": {
+      "communication_ms": 2326.4460537109376,
+      "compute_ms": 4211.184224609375,
+      "cpu_wait_ms": 404.8107656766381,
+      "gpu_idle_inside_span_ms": 335.2947744140625,
+      "gpu_span_ms": 6872.925052734375,
+      "outside_gpu_span_ms": 69.51599126257561,
+      "path": "/tmp/dreamzero_profile/tp2_cfg1_gpu1_2/20260605-150251_stage_0_rep_0_diffusion_1780671771/trace_rank1.json",
+      "percent": {
+        "communication": 33.51049060362693,
+        "compute": 60.65855219974446,
+        "cpu_wait": 5.830957196628603
+      },
+      "profiled_latency_ms": 6942.441043996951,
+      "raw_comm_event_total_ms": 2326.4461379999925,
+      "raw_gpu_event_total_ms": 6537.628533000291,
+      "wall_ms": 6942.441043996951
+    },
+    "profiled_latency_ms": 6942.441043996951,
+    "rank_average": {
+      "communication_ms": 2260.728480957031,
+      "compute_ms": 4267.141810058594,
+      "cpu_wait_ms": 414.5707529813256,
+      "percent": {
+        "communication": 32.5638844698848,
+        "compute": 61.46457395916013,
+        "cpu_wait": 5.971541570955077
+      },
+      "wall_ms": 6942.441043996951
+    },
+    "ranks": [
+      {
+        "communication_ms": 2195.010908203125,
+        "compute_ms": 4323.099395507813,
+        "cpu_wait_ms": 424.3307402860131,
+        "gpu_idle_inside_span_ms": 337.2887587890625,
+        "gpu_span_ms": 6855.3990625,
+        "outside_gpu_span_ms": 87.04198149695061,
+        "path": "/tmp/dreamzero_profile/tp2_cfg1_gpu1_2/20260605-150251_stage_0_rep_0_diffusion_1780671771/trace_rank0.json",
+        "percent": {
+          "communication": 31.617278336142675,
+          "compute": 62.27059571857577,
+          "cpu_wait": 6.112125945281552
+        },
+        "profiled_latency_ms": 6942.441043996951,
+        "raw_comm_event_total_ms": 2195.011057999975,
+        "raw_gpu_event_total_ms": 6518.1095309991615,
+        "wall_ms": 6942.441043996951
+      },
+      {
+        "communication_ms": 2326.4460537109376,
+        "compute_ms": 4211.184224609375,
+        "cpu_wait_ms": 404.8107656766381,
+        "gpu_idle_inside_span_ms": 335.2947744140625,
+        "gpu_span_ms": 6872.925052734375,
+        "outside_gpu_span_ms": 69.51599126257561,
+        "path": "/tmp/dreamzero_profile/tp2_cfg1_gpu1_2/20260605-150251_stage_0_rep_0_diffusion_1780671771/trace_rank1.json",
+        "percent": {
+          "communication": 33.51049060362693,
+          "compute": 60.65855219974446,
+          "cpu_wait": 5.830957196628603
+        },
+        "profiled_latency_ms": 6942.441043996951,
+        "raw_comm_event_total_ms": 2326.4461379999925,
+        "raw_gpu_event_total_ms": 6537.628533000291,
+        "wall_ms": 6942.441043996951
+      }
+    ]
+  }
+}
